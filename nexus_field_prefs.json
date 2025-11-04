@@ -1,0 +1,87 @@
+{
+  "mod_info": {
+    "mod_id": "important",
+    "name": "important",
+    "summary": "important",
+    "author": "important",
+    "version": "important",
+    "updated_time": "important",
+    "created_time": "important",
+    "picture_url": "important",
+    "contains_adult_content": "important",
+    "status": "important",
+    "available": "important",
+    "category_id": "important",
+
+    "uploaded_by": "maybe",
+    "mod_downloads": "maybe",
+    "mod_unique_downloads": "maybe",
+    "endorsement_count": "maybe",
+    "user.name": "maybe",
+    "created_timestamp": "maybe",
+    "updated_timestamp": "maybe",
+
+    "domain_name": "not",
+    "game_id": "not",
+    "uploaded_users_profile_url": "important",
+    "user.member_id": "important",
+    "user.member_group_id": "not",
+    "allow_rating": "not",
+    "uid": "not",
+    "description": "important",
+    "endorsement": "not",
+    "endorsement.version": "not",
+    "endorsement.endorse_status": "not",
+    "endorsement.timestamp": "not"
+  },
+  "files": {
+    "files": "not",
+    "files[]": "not",
+
+    "files[].file_id": "important",
+    "files[].name": "important",
+    "files[].version": "important",
+    "files[].category_id": "important",
+    "files[].category_name": "important",
+    "files[].is_primary": "important",
+    "files[].file_name": "important",
+    "files[].uploaded_time": "important",
+    "files[].size_in_bytes": "important",
+
+    "file_updates": "important",
+    "file_updates[]": "important",
+    "file_updates[].new_file_id": "important",
+    "file_updates[].old_file_id": "important",
+
+    "files[].mod_version": "maybe",
+    "files[].description": "maybe",
+    "file_updates[].new_file_name": "maybe",
+    "file_updates[].old_file_name": "maybe",
+    "file_updates[].uploaded_time": "maybe",
+    "files[].size": "maybe",
+
+    "files[].id[]": "not",
+    "files[].id": "not",
+    "files[].uid": "not",
+    "files[].uploaded_timestamp": "not",
+    "files[].size_kb": "not",
+    "files[].external_virus_scan_url": "not",
+    "files[].content_preview_link": "not",
+    "files[].changelog_html": "not"
+  },
+  "changelogs": {
+    "changelogs[]": "important",
+    "changelogs[].version": "important",
+    "changelogs[].changelog": "important",
+    "changelogs[].uploaded_time": "maybe"
+  },
+  "description": {
+    "description": "important",
+    "content": "important",
+    "body.status": "maybe",
+    "error": "not",
+    "message": "not",
+    "body": "not",
+    "body.error": "not"
+  }
+}

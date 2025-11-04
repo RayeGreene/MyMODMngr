@@ -1,0 +1,15 @@
+Windows Registry Editor Version 5.00
+
+[HKEY_CURRENT_USER\Software\Classes\nxm]
+@="URL:nxm Protocol"
+"URL Protocol"=""
+
+[HKEY_CURRENT_USER\Software\Classes\nxm\DefaultIcon]
+@="\"C:\\Users\\rouna\\AppData\\Local\\Programs\\Python\\Python311\\python.exe\",1"
+
+[HKEY_CURRENT_USER\Software\Classes\nxm\shell]
+
+[HKEY_CURRENT_USER\Software\Classes\nxm\shell\open]
+
+[HKEY_CURRENT_USER\Software\Classes\nxm\shell\open\command]
+@="\"C:\\Users\\rouna\\AppData\\Local\\Programs\\Python\\Python311\\python.exe\" \"C:\\Users\\rouna\\OneDrive\\Documents\\vs_code_projects\\Project_ModManager_Rivals\\scripts\\nxm_handler.py\" \"%1\""

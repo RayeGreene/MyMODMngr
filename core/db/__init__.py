@@ -1,0 +1,61 @@
+from .db import (
+    get_connection,
+    init_schema,
+    run_migrations,
+    make_version_key,
+    next_local_download_id,
+    replace_local_downloads,
+    fetch_pak_version_status,
+    delete_local_downloads,
+    update_local_download_active_paks,
+    upsert_mod_info,
+    replace_mod_files,
+    replace_mod_changelogs,
+    upsert_api_cache,
+    upsert_mod_pak,
+    bulk_upsert_pak_assets,
+    upsert_pak_assets_json,
+    rebuild_conflicts,
+)
+from . import queries as _queries
+
+# Re-export query helpers
+from .queries import (
+    get_mod,
+    get_latest_file,
+    get_latest_file_by_version,
+    list_local_without_remote,
+    search_mods,
+    mod_with_local_and_latest,
+    list_mod_files,
+    get_changelogs,
+)
+
+__all__ = [
+    'get_connection',
+    'init_schema',
+    'run_migrations',
+    'make_version_key',
+    'next_local_download_id',
+    'replace_local_downloads',
+    'fetch_pak_version_status',
+    'delete_local_downloads',
+    'update_local_download_active_paks',
+    'upsert_mod_info',
+    'replace_mod_files',
+    'replace_mod_changelogs',
+    'upsert_api_cache',
+    'upsert_mod_pak',
+    'bulk_upsert_pak_assets',
+    'upsert_pak_assets_json',
+    'rebuild_conflicts',
+    # queries
+    'get_mod',
+    'get_latest_file',
+    'get_latest_file_by_version',
+    'list_local_without_remote',
+    'search_mods',
+    'mod_with_local_and_latest',
+    'list_mod_files',
+    'get_changelogs',
+]

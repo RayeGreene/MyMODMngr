@@ -1,0 +1,4569 @@
+from __future__ import annotations
+
+# Minimal FastAPI server wiring the SQLite backend to a TS/Tauri frontend.
+# Endpoints:
+# - GET /health
+# - GET /api/conflicts?limit=20
+# - POST /api/mods/add { localPath, name?, modId? }
+# - POST /api/refresh/conflicts
+
+import contextlib
+import io
+import json
+import logging
+import os
+import re
+import shutil
+import sys as _sys
+import tempfile
+import threading
+import time
+import traceback
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Set, Tuple, Union
+
+from fastapi import Body, FastAPI, File, HTTPException, Response, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+# Ensure project root on path for local runs
+_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROOT) not in _sys.path:
+	_sys.path.insert(0, str(_ROOT))
+
+from core.assets.zip_to_asset_paths import extract_pak_asset_map_from_folder
+from core.api.dependencies import get_db, verify_required_dns_hosts
+from core.api.services.handoffs import (
+	delete_handoff,
+	get_handoff_or_404,
+	list_handoffs,
+	register_handoff,
+	serialize_handoff,
+	snapshot_metadata,
+)
+from core.db import (
+	bulk_upsert_pak_assets,
+	delete_local_downloads,
+	get_changelogs,
+	get_latest_file,
+	get_latest_file_by_version,
+	get_mod,
+	init_schema,
+	list_mod_files,
+	make_version_key,
+	next_local_download_id,
+	mod_with_local_and_latest,
+	rebuild_conflicts,
+	fetch_pak_version_status,
+	replace_mod_changelogs,
+	replace_mod_files,
+	upsert_api_cache,
+	upsert_mod_info,
+	upsert_mod_pak,
+	upsert_pak_assets_json,
+	update_local_download_active_paks,
+)
+from core.ingestion.scan_active_mods import main as scan_active_main
+from core.nexus import DEFAULT_GAME, collect_all_for_mod, get_api_key, get_mod_file_download_link
+from core.nexus.nxm import NXMParseError, NXMRequest, parse_nxm_uri
+from core.utils.archive import build_entry_lookup, extract_archive, extract_member, list_entries, resolve_entry
+from core.utils.download_paths import normalize_download_path
+from core.utils.pak_files import collapse_pak_bundle
+from core.utils.mod_filename import parse_mod_filename
+from core.utils.nexus_metadata import derive_changelogs_from_files, extract_description_text
+from core.config.settings import SETTINGS, configure, save_settings, load_settings
+
+from field_prefs import filter_aggregate_payload, load_prefs
+
+# Global cache for Nexus preferences
+_NEXUS_PREFS_CACHE = None
+
+app = FastAPI(title="Mod Manager Backend", version="0.1.0")
+
+logger = logging.getLogger("modmanager.api")
+
+
+# Reload settings from disk on startup (in case of external changes)
+SETTINGS = load_settings()
+logger.info("=" * 70)
+logger.info("FastAPI Backend - Database Configuration")
+logger.info("=" * 70)
+logger.info(f"Data Directory: {SETTINGS.data_dir}")
+logger.info(f"Database Path: {SETTINGS.data_dir / 'mods.db'}")
+logger.info(f"Database Exists: {(SETTINGS.data_dir / 'mods.db').exists()}")
+logger.info("=" * 70)
+
+UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1 MiB chunks for uploads
+verify_required_dns_hosts()
+
+_SETTINGS_TASK_LOCK = threading.Lock()
+_SETTINGS_TASK_JOBS: Dict[str, Dict[str, Any]] = {}
+_SETTINGS_TASK_MAX_JOBS = 25
+
+
+def _get_current_settings():
+	"""Get the current global SETTINGS object from settings module."""
+	from core.config.settings import SETTINGS as CURRENT_SETTINGS
+	return CURRENT_SETTINGS
+
+
+def _seed_env_from_settings() -> None:
+	# Import SETTINGS directly from module to get the latest global value
+	current = _get_current_settings()
+	
+	mapping = {
+		"MARVEL_RIVALS_ROOT": current.marvel_rivals_root,
+		"MARVEL_RIVALS_LOCAL_DOWNLOADS_ROOT": current.marvel_rivals_local_downloads_root,
+		"NEXUS_API_KEY": current.nexus_api_key,
+		"AES_KEY_HEX": current.aes_key_hex,
+		"REPAK_BIN": current.repak_bin,
+		"RETOC_CLI": current.retoc_cli,
+		"SEVEN_ZIP_BIN": current.seven_zip_bin,
+		"MOD_MANAGER_DATA_DIR": current.data_dir,
+	}
+	for key, value in mapping.items():
+		if value is None or value == "":
+			os.environ.pop(key, None)
+		else:
+			os.environ[key] = str(value)
+
+
+_seed_env_from_settings()
+
+# Allow all origins in dev; Tauri embeds UI so this is safe for local usage.
+app.add_middleware(
+	CORSMiddleware,
+	allow_origins=["*"],
+	allow_credentials=True,
+	allow_methods=["*"],
+	allow_headers=["*"],
+)
+
+try:  # pragma: no cover - optional dependency
+	import multipart  # type: ignore
+	_HAS_MULTIPART = True
+except Exception:  # pragma: no cover - fallback when optional dep missing
+	_HAS_MULTIPART = False
+
+_MEMBER_ID_RE = re.compile(r"(\d+)(?:\D*$)")
+
+_ARCHIVE_UE_EXTS: set[str] = {".pak", ".utoc", ".ucas", ".sig"}
+_KNOWN_CATEGORIES: set[str] = {
+	"main",
+	"miscellaneous",
+	"audio",
+	"visuals",
+	"models",
+	"model",  # singular
+	"textures",
+	"texture",  # singular
+	"material",  # added
+	"mesh",  # added
+	"effects",
+	"ui",
+	"utilities",
+	"tools",
+	"cheats",
+	"savegames",
+	"patches",
+	"gameplay",
+	"uimods",
+	"fixes",
+}
+
+_CANON_CHAR_NAMES: Optional[Set[str]] = None
+
+
+def _create_settings_task_job(task: SettingsTaskName) -> Dict[str, Any]:
+	job_id = uuid.uuid4().hex
+	now = datetime.utcnow().isoformat() + "Z"
+	job: Dict[str, Any] = {
+		"id": job_id,
+		"task": task,
+		"status": "pending",
+		"ok": None,
+		"exit_code": None,
+		"error": None,
+		"started_at": None,
+		"finished_at": None,
+		"duration_ms": None,
+		"created_at": now,
+		"updated_at": now,
+		"output_chunks": [],
+	}
+	with _SETTINGS_TASK_LOCK:
+		_SETTINGS_TASK_JOBS[job_id] = job
+		if len(_SETTINGS_TASK_JOBS) > _SETTINGS_TASK_MAX_JOBS:
+			overflow = len(_SETTINGS_TASK_JOBS) - _SETTINGS_TASK_MAX_JOBS
+			if overflow > 0:
+				sorted_jobs = sorted(
+					_SETTINGS_TASK_JOBS.items(),
+					key=lambda item: item[1].get("created_at") or "",
+				)
+				for remove_id, _ in sorted_jobs[:overflow]:
+					_SETTINGS_TASK_JOBS.pop(remove_id, None)
+		snapshot = {
+			**{k: v for k, v in job.items() if k != "output_chunks"},
+			"output": "".join(job.get("output_chunks", [])),
+		}
+	return snapshot
+
+
+def _append_job_output(job_id: str, chunk: str) -> None:
+	if not chunk:
+		return
+	with _SETTINGS_TASK_LOCK:
+		job = _SETTINGS_TASK_JOBS.get(job_id)
+		if not job:
+			return
+		chunks = job.setdefault("output_chunks", [])
+		chunks.append(chunk)
+		job["updated_at"] = datetime.utcnow().isoformat() + "Z"
+
+
+def _update_job(job_id: str, **updates: Any) -> None:
+	with _SETTINGS_TASK_LOCK:
+		job = _SETTINGS_TASK_JOBS.get(job_id)
+		if not job:
+			return
+		if "output" in updates:
+			output_value = updates.pop("output")
+			job["output_chunks"] = [output_value]
+		job.update(updates)
+		job["updated_at"] = datetime.utcnow().isoformat() + "Z"
+
+
+def _job_snapshot(job_id: str) -> Dict[str, Any]:
+	with _SETTINGS_TASK_LOCK:
+		job = _SETTINGS_TASK_JOBS.get(job_id)
+		if not job:
+			raise KeyError(job_id)
+		snapshot = {k: v for k, v in job.items() if k != "output_chunks"}
+		snapshot["output"] = "".join(job.get("output_chunks", []))
+		return snapshot
+
+
+def _list_job_snapshots() -> List[Dict[str, Any]]:
+	with _SETTINGS_TASK_LOCK:
+		jobs = list(_SETTINGS_TASK_JOBS.values())
+	return [
+		{
+			**{k: v for k, v in job.items() if k != "output_chunks"},
+			"output": "".join(job.get("output_chunks", [])),
+		}
+		for job in sorted(jobs, key=lambda item: item.get("created_at") or "", reverse=True)
+	]
+
+
+def _execute_settings_task_async(job_id: str, task: SettingsTaskName) -> None:
+	started_at = datetime.utcnow().isoformat() + "Z"
+	_update_job(job_id, status="running", started_at=started_at, ok=None, exit_code=None)
+
+	def on_output(chunk: str) -> None:
+		_append_job_output(job_id, chunk)
+
+	try:
+		result = _run_settings_task(task, on_output=on_output)
+	except Exception as exc:  # pragma: no cover - defensive guard
+		traceback.print_exc()
+		_update_job(
+			job_id,
+			status="failed",
+			ok=False,
+			exit_code=1,
+			error=str(exc),
+			finished_at=datetime.utcnow().isoformat() + "Z",
+			duration_ms=None,
+		)
+		return
+
+	# Special handling after bootstrap rebuild: force schema cache reset
+	# to ensure all future connections see the rebuilt data
+	if task == "bootstrap_rebuild" and result.get("ok"):
+		from core.api.dependencies import reset_schema_cache
+		reset_schema_cache()
+		print("Schema cache reset after bootstrap - all future connections will see fresh data")
+
+	status = "succeeded" if result.get("ok") else "failed"
+	_update_job(
+		job_id,
+		status=status,
+		ok=result.get("ok"),
+		exit_code=result.get("exit_code"),
+		error=result.get("error"),
+		finished_at=result.get("finished_at"),
+		duration_ms=result.get("duration_ms"),
+		output=result.get("output", ""),
+	)
+
+class SettingsUpdatePayload(BaseModel):
+
+	data_dir: Optional[str] = None
+	marvel_rivals_root: Optional[str] = None
+	marvel_rivals_local_downloads_root: Optional[str] = None
+	nexus_api_key: Optional[str] = None
+	aes_key_hex: Optional[str] = None
+	allow_direct_api_downloads: Optional[bool] = None
+	repak_bin: Optional[str] = None
+	retoc_cli: Optional[str] = None
+	seven_zip_bin: Optional[str] = None
+
+	class Config:
+		extra = "forbid"
+
+
+SettingsTaskName = Literal[
+	"ingest_download_assets",
+	"scan_active_mods",
+	"sync_nexus",
+	"rebuild_tags",
+	"rebuild_conflicts",
+	"bootstrap_rebuild",
+]
+
+
+class SettingsTaskRequest(BaseModel):
+
+	task: SettingsTaskName
+
+
+def _serialize_path(value: Optional[Path]) -> Optional[str]:
+	if value is None:
+		return None
+	try:
+		return str(Path(value).expanduser().resolve())
+	except Exception:
+		return str(value)
+
+
+def _to_path(value: Union[str, Path, None]) -> Optional[Path]:
+	if value in (None, ""):
+		return None
+	if isinstance(value, Path):
+		return value
+	try:
+		return Path(str(value))
+	except Exception:
+		return None
+
+
+def _serialize_validation(result: Dict[str, Any]) -> Dict[str, Any]:
+	serialized: Dict[str, Any] = {}
+	for key, value in result.items():
+		if isinstance(value, dict):
+			serialized[key] = {
+				inner_key: (str(inner_value) if isinstance(inner_value, Path) else inner_value)
+				for inner_key, inner_value in value.items()
+			}
+		else:
+			serialized[key] = value
+	return serialized
+
+
+def _validate_directory_path(path: Union[str, Path, None], *, required: bool) -> Dict[str, Any]:
+	resolved = _to_path(path)
+	optional = not required
+	if resolved is None:
+		return {
+			"ok": not required,
+			"path": None,
+			"exists": False,
+			"reason": "not_configured",
+			"optional": optional,
+			"message": "Not configured" + (" (optional)" if optional else ""),
+		}
+	resolved = resolved.expanduser().resolve()
+	if not resolved.exists():
+		return {
+			"ok": False,
+			"path": str(resolved),
+			"exists": False,
+			"reason": "missing",
+			"optional": optional,
+			"message": f"Directory not found: {resolved}",
+		}
+	if not resolved.is_dir():
+		return {
+			"ok": False,
+			"path": str(resolved),
+			"exists": True,
+			"reason": "not_directory",
+			"optional": optional,
+			"message": f"Path is not a directory: {resolved}",
+		}
+	writable = os.access(str(resolved), os.W_OK)
+	return {
+		"ok": writable or optional,
+		"path": str(resolved),
+		"exists": True,
+		"reason": None if writable else "not_writable",
+		"optional": optional,
+		"message": "Ready" if writable else f"Directory is read-only: {resolved}",
+	}
+
+
+def _validate_executable_path(path: Union[str, Path, None], *, label: str, required: bool) -> Dict[str, Any]:
+	resolved = _to_path(path)
+	optional = not required
+	if resolved is None:
+		return {
+			"ok": not required,
+			"path": None,
+			"exists": False,
+			"reason": "not_configured",
+			"optional": optional,
+			"message": f"{label} not configured" + (" (optional)" if optional else ""),
+		}
+	resolved = resolved.expanduser().resolve()
+	if not resolved.exists():
+		return {
+			"ok": False,
+			"path": str(resolved),
+			"exists": False,
+			"reason": "missing",
+			"optional": optional,
+			"message": f"File not found: {resolved}",
+		}
+	if not resolved.is_file():
+		return {
+			"ok": False,
+			"path": str(resolved),
+			"exists": True,
+			"reason": "not_file",
+			"optional": optional,
+			"message": f"Path is not a file: {resolved}",
+		}
+	suffix = resolved.suffix.lower()
+	if os.name == "nt" and suffix != ".exe":
+		# allow optional exe enforcement; warn if not .exe on Windows
+		return {
+			"ok": False,
+			"path": str(resolved),
+			"exists": True,
+			"reason": "unexpected_extension",
+			"optional": optional,
+			"message": f"Expected a .exe file for {label} on Windows: {resolved}",
+		}
+	executable = os.access(str(resolved), os.X_OK) if os.name != "nt" else True
+	return {
+		"ok": executable or optional,
+		"path": str(resolved),
+		"exists": True,
+		"reason": None if executable or os.name == "nt" else "not_executable",
+		"optional": optional,
+		"message": "Ready" if executable or os.name == "nt" else f"File is not executable: {resolved}",
+	}
+
+
+def _collect_settings_validation(settings) -> Dict[str, Any]:
+	validation = {
+		"data_dir": _validate_directory_path(settings.data_dir, required=True),
+		"marvel_rivals_root": _validate_directory_path(settings.marvel_rivals_root, required=True),
+		"marvel_rivals_local_downloads_root": _validate_directory_path(settings.marvel_rivals_local_downloads_root, required=True),
+		"repak_bin": _validate_executable_path(settings.repak_bin, label="RePak CLI", required=False),
+		"retoc_cli": _validate_executable_path(settings.retoc_cli, label="ReToc CLI", required=False),
+		"seven_zip_bin": _validate_executable_path(settings.seven_zip_bin, label="7-Zip", required=False),
+	}
+	return _serialize_validation(validation)
+
+
+def _serialize_settings(settings, *, validation: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+	return {
+		"backend_host": settings.backend_host,
+		"backend_port": settings.backend_port,
+		"data_dir": _serialize_path(settings.data_dir),
+		"marvel_rivals_root": _serialize_path(settings.marvel_rivals_root),
+		"marvel_rivals_local_downloads_root": _serialize_path(settings.marvel_rivals_local_downloads_root),
+		"nexus_api_key": settings.nexus_api_key,
+		"aes_key_hex": settings.aes_key_hex,
+		"allow_direct_api_downloads": bool(settings.allow_direct_api_downloads),
+		"repak_bin": _serialize_path(settings.repak_bin),
+		"retoc_cli": _serialize_path(settings.retoc_cli),
+		"seven_zip_bin": _serialize_path(settings.seven_zip_bin),
+		"validation": validation or _collect_settings_validation(settings),
+	}
+
+
+def _normalize_optional_str(value: Optional[str]) -> Optional[str]:
+	if value is None:
+		return None
+	trimmed = value.strip()
+	return trimmed or None
+
+
+def _apply_settings_update(payload: SettingsUpdatePayload) -> Dict[str, Any]:
+	overrides: Dict[str, Any] = {}
+	if payload.data_dir is not None:
+		value = payload.data_dir.strip()
+		if value:
+			overrides["data_dir"] = value
+	if payload.marvel_rivals_root is not None:
+		overrides["marvel_rivals_root"] = _normalize_optional_str(payload.marvel_rivals_root)
+	if payload.marvel_rivals_local_downloads_root is not None:
+		overrides["marvel_rivals_local_downloads_root"] = _normalize_optional_str(payload.marvel_rivals_local_downloads_root)
+	if payload.nexus_api_key is not None:
+		overrides["nexus_api_key"] = payload.nexus_api_key.strip()
+	if payload.aes_key_hex is not None:
+		overrides["aes_key_hex"] = payload.aes_key_hex.strip()
+	if payload.allow_direct_api_downloads is not None:
+		overrides["allow_direct_api_downloads"] = bool(payload.allow_direct_api_downloads)
+	if payload.repak_bin is not None:
+		overrides["repak_bin"] = _normalize_optional_str(payload.repak_bin)
+	if payload.retoc_cli is not None:
+		overrides["retoc_cli"] = _normalize_optional_str(payload.retoc_cli)
+	if payload.seven_zip_bin is not None:
+		overrides["seven_zip_bin"] = _normalize_optional_str(payload.seven_zip_bin)
+	if not overrides:
+		current = _get_current_settings()
+		return _serialize_settings(current)
+	updated = configure(**overrides)
+	_seed_env_from_settings()
+	validation = _collect_settings_validation(updated)
+	
+	# Don't block saving settings even if validation fails
+	# Just return the validation results so frontend can show warnings
+	return _serialize_settings(updated, validation=validation)
+
+
+def _task_ingest_download_assets() -> int:
+	from scripts import ingest_download_assets as ingest_mod
+
+	args = ["--extract"]
+	return int(ingest_mod.main(args) or 0)
+
+
+def _get_scan_active_args() -> list:
+	"""Build arguments for scan_active_main with game-root from settings."""
+	from core.config.settings import SETTINGS, load_settings
+	
+	# Reload settings to ensure we have the latest saved configuration
+	current_settings = load_settings()
+	
+	args = []
+	if current_settings.marvel_rivals_root:
+		args.extend(["--game-root", str(current_settings.marvel_rivals_root)])
+	else:
+		print(f"[WARNING] marvel_rivals_root is not configured in settings")
+		print(f"[WARNING] Current SETTINGS: {current_settings}")
+	
+	return args
+
+
+def _task_scan_active_mods() -> int:
+	return int(scan_active_main(_get_scan_active_args()) or 0)
+
+
+def _task_sync_nexus() -> int:
+	from core.db.db import get_connection, init_schema
+	from scripts.sync_nexus_to_db import iter_mod_ids_from_db, sync_mods
+
+	conn = get_connection()
+	try:
+		init_schema(conn)
+		mod_ids = list(iter_mod_ids_from_db(conn))
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+	if not mod_ids:
+		print("No Nexus-linked mods found; nothing to sync.")
+		return 0
+	sync_mods(mod_ids)
+	print(f"Synced {len(mod_ids)} mod(s) from Nexus API.")
+	return 0
+
+
+def _task_rebuild_tags() -> int:
+	from scripts import rebuild_tags as rebuild
+
+	return int(rebuild.main([]) or 0)
+
+
+def _task_rebuild_conflicts() -> int:
+	from core.db.db import get_connection, init_schema, run_migrations
+
+	conn = get_connection()
+	results: Dict[str, int] = {}
+	try:
+		init_schema(conn)
+		run_migrations(conn)
+		results = rebuild_conflicts(conn, active_only=None)
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+	if results:
+		for table_name, count in sorted(results.items()):
+			print(f"{table_name}: {count}")
+	else:
+		print("Rebuild conflicts completed with no reported changes.")
+	return 0
+
+
+def _task_bootstrap_rebuild() -> int:
+	"""Run full database rebuild including tags, conflicts, and all metadata.
+	
+	Forces a complete rebuild of:
+	- local_downloads table (from downloads directory scan)
+	- Nexus API metadata sync (mods, files, changelogs)
+	- pak_assets ingestion (extraction and tagging)
+	- asset_tags and pak_tags_json (character/category detection)
+	- conflict detection tables
+	- active pak snapshot
+	"""
+	import sqlite3
+	from pathlib import Path
+	from scripts import rebuild_sqlite as rebuild
+	from core.api.dependencies import reset_schema_cache
+	from core.db.db import _data_root, DB_FILENAME
+
+	# Determine the database path that the API uses
+	db_path = str(_data_root() / DB_FILENAME)
+	
+	print("=" * 70)
+	print("BOOTSTRAP REBUILD - Starting comprehensive database rebuild")
+	print("This will rebuild ALL tables: downloads, tags, conflicts, etc.")
+	print(f"Database location: {db_path}")
+	print("=" * 70)
+	
+	# CRITICAL: Pass --db parameter to ensure rebuild writes to the SAME database
+	# that the API reads from. Without this, rebuild writes to project root but
+	# API reads from data_dir!
+	rebuild_args = ["--db", db_path, "--log-level", "INFO"]
+	exit_code = int(rebuild.main(rebuild_args) or 0)
+	
+	if exit_code == 0:
+		print("\n" + "=" * 70)
+		print("BOOTSTRAP REBUILD - Database rebuild completed successfully")
+		print("=" * 70)
+		
+		# Count what we rebuilt
+		db_path = str(_data_root() / DB_FILENAME)
+		try:
+			conn = sqlite3.connect(db_path)
+			cur = conn.cursor()
+			
+			downloads_count = cur.execute("SELECT COUNT(*) FROM local_downloads").fetchone()[0]
+			print(f"✓ local_downloads: {downloads_count} entries")
+			
+			# DIAGNOSTIC: Check if contents field is populated
+			null_contents = cur.execute("SELECT COUNT(*) FROM local_downloads WHERE contents IS NULL OR contents = ''").fetchone()[0]
+			if null_contents > 0:
+				print(f"⚠ WARNING: {null_contents} downloads have NULL/empty contents field!")
+			
+			# DIAGNOSTIC: Show sample of contents
+			sample = cur.execute("SELECT id, name, contents FROM local_downloads LIMIT 3").fetchall()
+			for dl_id, dl_name, dl_contents in sample:
+				contents_preview = dl_contents[:100] if dl_contents else "NULL"
+				print(f"  Sample [{dl_id}] {dl_name}: contents={contents_preview}...")
+			
+			mods_count = cur.execute("SELECT COUNT(*) FROM mods").fetchone()[0]
+			print(f"✓ mods: {mods_count} entries")
+			
+			assets_count = cur.execute("SELECT COUNT(*) FROM pak_assets").fetchone()[0]
+			print(f"✓ pak_assets: {assets_count} entries")
+			
+			tags_count = cur.execute("SELECT COUNT(*) FROM asset_tags").fetchone()[0]
+			print(f"✓ asset_tags: {tags_count} entries")
+			
+			conflicts_count = cur.execute("SELECT COUNT(*) FROM v_asset_conflicts").fetchone()[0]
+			print(f"✓ v_asset_conflicts: {conflicts_count} entries")
+			
+			conn.close()
+			print("=" * 70)
+		except Exception as e:
+			print(f"Warning: Could not count rebuilt entries: {e}")
+		
+		print("\nResetting schema cache to ensure fresh connections...")
+		reset_schema_cache()
+		
+		# CRITICAL FIX: Force COMPLETE WAL checkpoint to merge all data into main DB file
+		# This ensures ALL future connections (even those opened before checkpoint) see new data
+		print("Forcing COMPLETE SQLite WAL checkpoint to merge all transactions...")
+		import gc
+		import time
+		
+		# Give Python a moment to close any lingering connections
+		gc.collect()
+		time.sleep(0.2)
+		
+		try:
+			# Open a fresh connection for checkpoint
+			conn = sqlite3.connect(db_path)
+			
+			# First, try to force close any other connections (best effort)
+			try:
+				# Set a short busy timeout to avoid blocking
+				conn.execute("PRAGMA busy_timeout = 5000;")
+			except Exception:
+				pass
+			
+			# TRUNCATE mode: Most aggressive checkpoint that forces WAL to be completely
+			# written to main DB and truncates WAL file. This ensures all readers,
+			# even those with stale connections, will be forced to read from main DB.
+			result = conn.execute("PRAGMA wal_checkpoint(TRUNCATE);").fetchone()
+			
+			# result is (busy, log, checkpointed):
+			# - busy: number of frames not checkpointed due to locks
+			# - log: total frames in WAL 
+			# - checkpointed: frames checkpointed
+			busy, log_frames, checkpointed = result if result else (0, 0, 0)
+			
+			if busy > 0:
+				print(f"⚠ Warning: {busy} WAL frames could not be checkpointed (DB busy)")
+				print("  Some connections may still be reading. Retrying...")
+				time.sleep(0.5)
+				result = conn.execute("PRAGMA wal_checkpoint(TRUNCATE);").fetchone()
+				busy, log_frames, checkpointed = result if result else (0, 0, 0)
+			
+			if busy == 0:
+				print(f"✓ WAL checkpoint completed successfully")
+				print(f"  - Checkpointed {checkpointed} frames from WAL")
+				print(f"  - Total WAL frames: {log_frames}")
+				
+				# CRITICAL: Force a new read transaction to pick up checkpointed data
+				# This ensures the connection advances its read mark to see latest data
+				print("  - Forcing read transaction cycle to refresh snapshot...")
+				conn.execute("BEGIN;")
+				conn.execute("SELECT 1;")
+				conn.execute("COMMIT;")
+				
+				print("  All database connections will now see the rebuilt data")
+			else:
+				print(f"⚠ Warning: Still {busy} frames not checkpointed")
+				print("  Backend may need restart to ensure all connections see new data")
+			
+			conn.close()
+			
+			# CRITICAL FIX: Delete WAL and SHM files to force all connections to see main DB
+			# This is the nuclear option but ensures no stale reads after bootstrap
+			print("  - Removing WAL files to force fresh reads...")
+			wal_file = Path(db_path).with_suffix(".db-wal")
+			shm_file = Path(db_path).with_suffix(".db-shm")
+			try:
+				if wal_file.exists():
+					wal_file.unlink()
+					print(f"  - Deleted {wal_file.name}")
+				if shm_file.exists():
+					shm_file.unlink()
+					print(f"  - Deleted {shm_file.name}")
+			except Exception as exc:
+				print(f"  ⚠ Warning: Could not delete WAL files: {exc}")
+		except Exception as e:
+			print(f"⚠ Warning: WAL checkpoint failed: {e}")
+			print("  You may need to restart the backend to see all changes")
+		
+		# Give the file system a moment to settle after checkpoint
+		import time
+		time.sleep(0.5)
+		
+		print("\n" + "=" * 70)
+		print("BOOTSTRAP REBUILD - All operations completed")
+		print("Database is ready for immediate use (no restart required)")
+		print("=" * 70)
+	else:
+		print(f"\n✗ Bootstrap rebuild failed with exit code {exit_code}")
+	
+	return exit_code
+
+
+def _run_settings_task(
+	task: SettingsTaskName,
+	*,
+	on_output: Optional[Callable[[str], None]] = None,
+) -> Dict[str, Any]:
+	_seed_env_from_settings()
+	started_at = datetime.utcnow().isoformat() + "Z"
+	start_time = time.perf_counter()
+
+	class _StreamingBuffer(io.StringIO):
+		def __init__(self, callback: Optional[Callable[[str], None]]) -> None:
+			super().__init__()
+			self._callback = callback
+
+		def write(self, s: str) -> int:  # pragma: no cover - passthrough
+			written = super().write(s)
+			if s and self._callback is not None:
+				self._callback(s)
+			return written
+
+	buffer: io.StringIO = _StreamingBuffer(on_output)
+	ok = True
+	output_error: Optional[str] = None
+	exit_code = 0
+
+	class _TaskLogHandler(logging.Handler):
+		"""Capture logging records emitted during maintenance tasks."""
+
+		def __init__(self, stream: io.TextIOBase) -> None:
+			super().__init__(level=logging.INFO)
+			self._stream = stream
+			self.setFormatter(
+				logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+			)
+
+		def emit(self, record: logging.LogRecord) -> None:  # pragma: no cover - glue code
+			try:
+				msg = self.format(record)
+			except Exception:
+				msg = record.getMessage()
+			self._stream.write(msg)
+			if not msg.endswith("\n"):
+				self._stream.write("\n")
+
+	log_handler = _TaskLogHandler(buffer)
+	root_logger = logging.getLogger()
+	previous_level = root_logger.level
+	root_logger.addHandler(log_handler)
+	try:
+		if previous_level == logging.NOTSET or previous_level > logging.INFO:
+			root_logger.setLevel(logging.INFO)
+	except Exception:
+		# Best-effort; never let logging adjustments interrupt the task runner
+		pass
+
+	buffer.write(f"Starting maintenance task '{task}'...\n")
+
+	def runner() -> int:
+		if task == "ingest_download_assets":
+			return _task_ingest_download_assets()
+		if task == "scan_active_mods":
+			return _task_scan_active_mods()
+		if task == "sync_nexus":
+			return _task_sync_nexus()
+		if task == "rebuild_tags":
+			return _task_rebuild_tags()
+		if task == "rebuild_conflicts":
+			return _task_rebuild_conflicts()
+		if task == "bootstrap_rebuild":
+			return _task_bootstrap_rebuild()
+		raise HTTPException(status_code=400, detail=f"Unknown task: {task}")
+
+	try:
+		with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
+			exit_code = runner()
+	except HTTPException:
+		raise
+	except SystemExit as exc:
+		exit_code = int(exc.code or 0)
+	except Exception as exc:
+		ok = False
+		if exit_code == 0:
+			exit_code = 1
+		output_error = str(exc)
+		buffer.write("\n")
+		buffer.write(traceback.format_exc())
+	else:
+		ok = exit_code == 0
+
+	finally:
+		buffer.write(f"Task '{task}' finished with exit code {exit_code}.\n")
+		task_duration = int((time.perf_counter() - start_time) * 1000)
+		buffer.write(f"Duration: {task_duration / 1000:.2f}s\n")
+		root_logger.removeHandler(log_handler)
+		try:
+			root_logger.setLevel(previous_level)
+		except Exception:
+			pass
+
+	finished_at = datetime.utcnow().isoformat() + "Z"
+	duration_ms = int((time.perf_counter() - start_time) * 1000)
+	return {
+		"ok": ok and exit_code == 0,
+		"task": task,
+		"exit_code": int(exit_code),
+		"error": output_error,
+		"output": buffer.getvalue(),
+		"started_at": started_at,
+		"finished_at": finished_at,
+		"duration_ms": duration_ms,
+	}
+
+def _extract_member_id(value: Any) -> Optional[int]:
+	"""Best-effort parsing for Nexus member identifiers from diverse inputs."""
+	if value is None:
+		return None
+	if isinstance(value, bool):
+		return None
+	if isinstance(value, int):
+		return value
+	if isinstance(value, float):
+		if value.is_integer():
+			return int(value)
+		return None
+	if isinstance(value, str):
+		s = value.strip()
+		if not s:
+			return None
+		if s.isdigit():
+			try:
+				return int(s)
+			except ValueError:
+				return None
+		match = _MEMBER_ID_RE.search(s)
+		if match:
+			try:
+				return int(match.group(1))
+			except (TypeError, ValueError):
+				return None
+	return None
+
+
+def _author_avatar_url(member_id: Optional[int], profile_url: Optional[str]) -> Optional[str]:
+	"""Derive a usable avatar URL for Nexus authors when possible."""
+	resolved = member_id
+	if resolved is None and profile_url:
+		resolved = _extract_member_id(profile_url)
+	if resolved is None:
+		return None
+	return f"https://avatars.nexusmods.com/{resolved}/100"
+
+
+class DuplicateDownloadError(Exception):
+	"""Raised when an ingest matches an existing local download."""
+
+	def __init__(
+		self,
+		download_id: int,
+		*,
+		existing_name: Optional[str] = None,
+		existing_version: Optional[str] = None,
+		existing_path: Optional[str] = None,
+		candidate_name: Optional[str] = None,
+		candidate_version: Optional[str] = None,
+	) -> None:
+		super().__init__(f"duplicate download detected (id={download_id})")
+		self.download_id = download_id
+		self.existing_name = existing_name
+		self.existing_version = existing_version
+		self.existing_path = existing_path
+		self.candidate_name = candidate_name
+		self.candidate_version = candidate_version
+
+
+def _normalize_download_name(value: Optional[str]) -> str:
+	return str(value or "").strip().lower()
+
+
+def _normalize_download_version(value: Optional[str]) -> str:
+	return str(value or "").strip().lower()
+
+
+def _normalize_contents_for_compare(values: Iterable[Any]) -> List[str]:
+	items: Set[str] = set()
+	for raw in values:
+		if not isinstance(raw, str):
+			continue
+		normalized = raw.replace("\\", "/").strip().lower()
+		if normalized:
+			items.add(normalized)
+	return sorted(items)
+
+
+def _duplicate_detail_from_error(error: DuplicateDownloadError) -> Dict[str, Any]:
+	name_hint = error.candidate_name or error.existing_name
+	version_hint = error.candidate_version or error.existing_version
+	if name_hint and version_hint:
+		message = f"Mod '{name_hint}' version '{version_hint}' already exists"
+	elif name_hint:
+		message = f"Mod '{name_hint}' already exists"
+	else:
+		message = "Mod already exists"
+	detail: Dict[str, Any] = {
+		"error": "duplicate_download",
+		"message": message,
+		"existing_download_id": error.download_id,
+	}
+	if error.existing_name:
+		detail["existing_name"] = error.existing_name
+	if error.existing_version:
+		detail["existing_version"] = error.existing_version
+	if error.existing_path:
+		detail["existing_path"] = error.existing_path
+	if error.candidate_name and error.candidate_name != error.existing_name:
+		detail["requested_name"] = error.candidate_name
+	if error.candidate_version and error.candidate_version != error.existing_version:
+		detail["requested_version"] = error.candidate_version
+	return detail
+
+
+def _ingest_resolved_download(
+	path: Path,
+	*,
+	name: str,
+	mod_id: Optional[int],
+	version: str,
+	source_url: Optional[str] = None,
+	metadata_snapshot: Optional[Dict[str, Any]] = None,
+	filtered_metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+	"""Ingest a resolved local archive/pak into ``local_downloads`` and related tables."""
+
+	def _find_duplicate_download(
+		cur,
+		candidate_name: str,
+		candidate_version: str,
+		candidate_contents: Iterable[str],
+	) -> Optional[Tuple[int, Optional[str], Optional[str], Optional[str]]]:
+		name_key = _normalize_download_name(candidate_name)
+		version_key = _normalize_download_version(candidate_version)
+		contents_key = _normalize_contents_for_compare(candidate_contents)
+		rows = cur.execute(
+			"""
+			SELECT id, name, version, contents, path
+			FROM local_downloads
+			WHERE LOWER(name) = LOWER(?)
+			""",
+			(candidate_name,),
+		).fetchall()
+		for existing_id, existing_name, existing_version, existing_contents_json, existing_path in rows:
+			existing_version_key = _normalize_download_version(existing_version)
+			if existing_version_key != version_key:
+				continue
+			existing_contents: Iterable[Any]
+			try:
+				existing_contents = json.loads(existing_contents_json) if existing_contents_json else []
+			except Exception:
+				existing_contents = []
+			existing_contents_key = _normalize_contents_for_compare(existing_contents)
+			if existing_contents_key == contents_key:
+				return existing_id, existing_name, existing_version, existing_path
+		return None
+
+	path = path.resolve()
+	normalized_path = normalize_download_path(path)
+	repo_root = _ROOT
+	current = _get_current_settings()
+	repak_path = current.repak_bin
+	if repak_path is None:
+		repak_candidate = repo_root / ("repak.exe" if os.name == "nt" else "repak")
+		if repak_candidate.exists():
+			repak_path = repak_candidate
+	use_repak = str(repak_path) if repak_path else None
+	aes_key = current.aes_key_hex or None
+
+	suffix = path.suffix.lower()
+	is_archive = suffix in {".zip", ".rar", ".7z"}
+	is_pak = suffix == ".pak"
+	contents: List[str] = []
+	pak_map: Dict[str, List[str]] = {}
+	ingest_prep_error: Optional[Exception] = None
+
+	if is_archive:
+		try:
+			contents, pak_map = _extract_archive_assets(path, repak_bin=use_repak, aes_key=aes_key)
+		except Exception as exc:
+			ingest_prep_error = exc
+	elif is_pak:
+		contents = [path.name]
+		try:
+			pak_map = _extract_assets_from_pak(str(path), repak_bin=use_repak, aes_key=aes_key)
+		except Exception as exc:
+			ingest_prep_error = exc
+	else:
+		try:
+			if path.is_dir():
+				contents = [p.name for p in path.iterdir() if p.is_file()]
+			else:
+				contents = [path.name]
+		except Exception:
+			contents = [path.name]
+
+	if not contents:
+		contents = [path.name]
+
+	contents = collapse_pak_bundle(contents)
+	if not contents:
+		fallback = collapse_pak_bundle([path.name])
+		contents = fallback or [path.name]
+
+	conn = get_db()
+	try:
+		cur = conn.cursor()
+		duplicate = _find_duplicate_download(cur, name, version, contents)
+		if duplicate is not None:
+			existing_id, existing_name, existing_version, existing_path = duplicate
+			raise DuplicateDownloadError(
+				existing_id,
+				existing_name=existing_name,
+				existing_version=existing_version,
+				existing_path=existing_path,
+				candidate_name=name,
+				candidate_version=version,
+			)
+
+		local_download_id = next_local_download_id(conn)
+		cur.execute(
+			"""
+			INSERT INTO local_downloads(path, id, name, mod_id, version, contents, active_paks)
+			VALUES(?, ?, ?, ?, ?, ?, ?)
+			""",
+			(
+				normalized_path,
+				local_download_id,
+				name,
+				mod_id,
+				version,
+				json.dumps(contents, ensure_ascii=False),
+				json.dumps([], ensure_ascii=False),
+			),
+		)
+		conn.commit()
+
+		if ingest_prep_error is not None:
+			result = {
+				"ok": True,
+				"inserted": 1,
+				"name": name,
+				"mod_id": mod_id,
+				"version": version,
+				"path": normalized_path,
+				"contents": contents,
+				"ingest_warning": f"Asset extraction failed: {ingest_prep_error}",
+				"download_id": local_download_id,
+			}
+			if source_url:
+				result["source_url"] = source_url
+			return result
+
+		metadata_mod_id_hint: Optional[int] = mod_id
+		resolved_mod_id: Optional[int] = None
+		if mod_id is not None:
+			row = cur.execute("SELECT 1 FROM mods WHERE mod_id = ?", (mod_id,)).fetchone()
+			if row:
+				resolved_mod_id = mod_id
+
+		source_zip = path.name
+		io_store_flag: Optional[int]
+		try:
+			io_store_flag = 1 if any(k.lower().endswith(".utoc") for k in pak_map.keys()) else 0
+		except Exception:
+			io_store_flag = None
+
+		total_paks = 0
+		total_assets = 0
+		for pak_name, assets in pak_map.items():
+			total_paks += 1
+			total_assets += len(assets)
+			upsert_mod_pak(
+				conn,
+				pak_name=pak_name,
+				mod_id=resolved_mod_id,
+				source_zip=source_zip,
+				local_download_id=local_download_id,
+				io_store=bool(io_store_flag) if io_store_flag is not None else None,
+			)
+			bulk_upsert_pak_assets(conn, pak_name, assets, replace=True)
+			upsert_pak_assets_json(conn, pak_name, assets, mod_id=resolved_mod_id)
+
+		try:
+			from scripts import build_asset_tags as _bat  # type: ignore
+			from scripts import build_pak_tags as _bpt  # type: ignore
+			_bat.main([])
+			_bpt.main([])
+		except Exception:
+			pass
+
+		metadata_info = _sync_mod_metadata(
+			conn,
+			metadata_mod_id_hint,
+			name,
+			pre_fetched=metadata_snapshot,
+			filtered_payload=filtered_metadata,
+		)
+		synced_mod_id = metadata_info.get("synced_mod_id")
+		if synced_mod_id and resolved_mod_id != synced_mod_id:
+			resolved_mod_id = int(synced_mod_id)
+			try:
+				cur.execute("UPDATE local_downloads SET mod_id = ? WHERE id = ?", (resolved_mod_id, local_download_id))
+				conn.commit()
+			except Exception:
+				metadata_info.setdefault("metadata_warning", "Failed to link discovered mod ID to local download")
+			if "metadata_warning" not in metadata_info:
+				try:
+					io_bool = bool(io_store_flag) if io_store_flag is not None else None
+					for pak_name, assets in pak_map.items():
+						upsert_mod_pak(
+							conn,
+							pak_name=pak_name,
+							mod_id=resolved_mod_id,
+							source_zip=source_zip,
+							local_download_id=local_download_id,
+							io_store=io_bool,
+						)
+						upsert_pak_assets_json(conn, pak_name, assets, mod_id=resolved_mod_id)
+				except Exception:
+					metadata_info.setdefault(
+						"metadata_warning",
+						"Metadata linked, but updating pak records with new mod ID failed",
+					)
+
+		if resolved_mod_id is None and metadata_mod_id_hint is not None:
+			resolved_mod_id = metadata_mod_id_hint
+
+		# Refresh conflict tables after finalizing mod IDs so new installs register
+		try:
+			rebuild_conflicts(conn, active_only=None)
+		except Exception:
+			pass
+
+		res = {
+			"ok": True,
+			"inserted": 1,
+			"name": name,
+			"mod_id": resolved_mod_id,
+			"version": version,
+			"path": normalized_path,
+			"contents": contents,
+			"ingested_paks": total_paks,
+			"ingested_assets": total_assets,
+			"download_id": local_download_id,
+		}
+		if source_url:
+			res["source_url"] = source_url
+		res.update(metadata_info)
+		return res
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+def _load_canonical_names() -> set[str]:
+	global _CANON_CHAR_NAMES
+	if _CANON_CHAR_NAMES is not None:
+		return _CANON_CHAR_NAMES
+	try:
+		cid_path = _ROOT / "character_ids.json"
+		canon: set[str] = set()
+		if cid_path.exists():
+			import json as _json
+			data = _json.loads(cid_path.read_text(encoding="utf-8"))
+			# character_ids.json is a list of single-entry dicts
+			if isinstance(data, list):
+				for item in data:
+					if isinstance(item, dict):
+						for _k, v in item.items():
+							if isinstance(v, str):
+								canon.add(v.strip().lower())
+		_CANON_CHAR_NAMES = canon
+		return canon
+	except Exception:
+		_CANON_CHAR_NAMES = set()
+		return _CANON_CHAR_NAMES
+
+_SEP_RE = re.compile(r"[\s_\-\+]+")
+def _normalize(s: str) -> tuple[str, str]:
+	"""Return (spaced, compact) lowercase normalized variants for matching.
+	spaced replaces separators with single spaces; compact removes spaces entirely.
+	"""
+	try:
+		spaced = _SEP_RE.sub(" ", s.lower()).strip()
+		compact = spaced.replace(" ", "")
+		return spaced, compact
+	except Exception:
+		ls = str(s).lower()
+		return ls, ls.replace(" ", "")
+
+
+def _canonicalize_tokens(raw_tokens: set[str]) -> list[str]:
+	"""Keep only known categories and character tokens present in character_ids.json.
+	Map any variant to its canonical token using normalization against the canonical set.
+	Unknown non-category tokens are dropped.
+	"""
+	canon = _load_canonical_names()
+	if not canon:
+		# If canon not available, return categories only plus the raw tokens as-is (best-effort)
+		return sorted(raw_tokens)
+	# Build normalized lookup for canon tokens
+	canon_by_compact: dict[str, str] = {}
+	for c in canon:
+		_, cc = _normalize(c)
+		if cc:
+			canon_by_compact[cc] = c
+	final: set[str] = set()
+	for t in list(raw_tokens):
+		lt = str(t).strip().lower()
+		if not lt:
+			continue
+		# preserve known categories directly
+		if lt in _KNOWN_CATEGORIES:
+			final.add(lt)
+			continue
+		# try map to canonical character token
+		_, cc = _normalize(lt)
+		canon_tok = canon_by_compact.get(cc)
+		if canon_tok:
+			final.add(canon_tok)
+			continue
+		# drop anything that isn't canonical
+		continue
+	return sorted(final)
+
+
+@app.get("/health")
+def health() -> Dict[str, Any]:
+	try:
+		conn = get_db()
+		cur = conn.cursor()
+		mods = cur.execute("SELECT COUNT(*) FROM mods").fetchone()[0]
+		paks = cur.execute("SELECT COUNT(*) FROM mod_paks").fetchone()[0]
+		assets = cur.execute("SELECT COUNT(*) FROM pak_assets").fetchone()[0]
+		return {"ok": True, "mods": mods, "paks": paks, "assets": assets}
+	except Exception as e:
+		return {"ok": False, "error": str(e)}
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+
+@app.get("/api/bootstrap/status")
+def get_bootstrap_status() -> Dict[str, Any]:
+	"""Check if database and settings exist and need bootstrapping.
+	
+	IMPORTANT: This endpoint checks if the database file exists BEFORE
+	calling get_db() to avoid inadvertently creating an empty database.
+	
+	Bootstrap is needed when:
+	1. Database doesn't exist OR settings.json doesn't exist
+	2. OR database is empty (no downloads and no mods)
+	"""
+	from core.db.db import _data_root, DB_FILENAME
+	from core.config.settings import _settings_file_path
+	
+	# Check if database file exists BEFORE calling get_db()
+	# to avoid creating it when we're just checking status
+	expected_db_path = _data_root() / DB_FILENAME
+	db_exists = expected_db_path.exists()
+	
+	# Check if settings.json exists
+	settings_path = _settings_file_path()
+	settings_exists = settings_path.exists()
+	
+	downloads_count = 0
+	mods_count = 0
+	migrations_count = 0
+	db_path = str(expected_db_path)
+	
+	# Only query the database if it exists
+	if db_exists:
+		conn = get_db()
+		try:
+			cur = conn.cursor()
+			try:
+				row = cur.execute("SELECT COUNT(*) FROM local_downloads;").fetchone()
+				downloads_count = int(row[0] or 0) if row else 0
+			except Exception:
+				downloads_count = 0
+			try:
+				row = cur.execute("SELECT COUNT(*) FROM mods;").fetchone()
+				mods_count = int(row[0] or 0) if row else 0
+			except Exception:
+				mods_count = 0
+			try:
+				row = cur.execute("SELECT COUNT(*) FROM schema_migrations;").fetchone()
+				migrations_count = int(row[0] or 0) if row else 0
+			except Exception:
+				migrations_count = 0
+		finally:
+			try:
+				conn.close()
+			except Exception:
+				pass
+
+	# Bootstrap needed if:
+	# 1. Database doesn't exist OR settings doesn't exist
+	# 2. OR database is empty (no downloads and no mods)
+	needs_bootstrap = (not db_exists) or (not settings_exists) or (downloads_count == 0 and mods_count == 0)
+	
+	import logging
+	logger = logging.getLogger("modmanager.api.bootstrap")
+	logger.info(f"[Bootstrap Status] db_exists={db_exists}, settings_exists={settings_exists}, downloads={downloads_count}, mods={mods_count}, needs_bootstrap={needs_bootstrap}")
+	
+	return {
+		"db_exists": bool(db_exists),
+		"settings_exists": bool(settings_exists),
+		"db_path": db_path,
+		"settings_path": str(settings_path),
+		"downloads_count": int(downloads_count),
+		"mods_count": int(mods_count),
+		"schema_migrations": int(migrations_count),
+		"needs_bootstrap": bool(needs_bootstrap),
+	}
+
+
+@app.post("/api/debug/log")
+def debug_log(body: Dict[str, Any]) -> Dict[str, str]:
+	"""Frontend debug logging endpoint - logs to backend.log"""
+	import logging
+	logger = logging.getLogger("modmanager.frontend")
+	
+	message = body.get("message", "")
+	data = body.get("data", {})
+	level = body.get("level", "INFO").upper()
+	
+	log_msg = f"[FRONTEND] {message}"
+	if data:
+		log_msg += f" | Data: {json.dumps(data)}"
+	
+	if level == "ERROR":
+		logger.error(log_msg)
+	elif level == "WARN":
+		logger.warning(log_msg)
+	else:
+		logger.info(log_msg)
+	
+	return {"status": "logged"}
+
+
+@app.get("/api/settings")
+def get_settings_route() -> Dict[str, Any]:
+	# Get the latest global value
+	current = _get_current_settings()
+	return _serialize_settings(current)
+
+
+@app.put("/api/settings")
+def update_settings_route(payload: SettingsUpdatePayload) -> Dict[str, Any]:
+	try:
+		return _apply_settings_update(payload)
+	except HTTPException:
+		raise
+	except Exception as exc:
+		raise HTTPException(status_code=400, detail=f"Failed to update settings: {exc}") from exc
+
+
+@app.post("/api/settings/run-task")
+def run_settings_task_route(payload: SettingsTaskRequest) -> Dict[str, Any]:
+	job_snapshot = _create_settings_task_job(payload.task)
+	thread = threading.Thread(
+		target=_execute_settings_task_async,
+		args=(job_snapshot["id"], payload.task),
+		daemon=True,
+	)
+	thread.start()
+	return job_snapshot
+
+
+@app.get("/api/settings/tasks/{job_id}")
+def get_settings_task_job(job_id: str) -> Dict[str, Any]:
+	try:
+		return _job_snapshot(job_id)
+	except KeyError as exc:
+		raise HTTPException(status_code=404, detail=f"Unknown task job: {job_id}") from exc
+
+
+@app.get("/api/settings/tasks")
+def list_settings_task_jobs() -> List[Dict[str, Any]]:
+	return _list_job_snapshots()
+
+
+@app.post("/api/settings/validate-path")
+def validate_path(payload: Dict[str, Any]) -> Dict[str, Any]:
+	"""
+	Validate a single path field.
+	Expects: { "field": "data_dir"|"marvel_rivals_root"|..., "value": "C:\\path\\to\\dir" }
+	Returns: { "ok": bool, "message": str, "exists": bool, "reason": str|None }
+	"""
+	field = payload.get("field", "")
+	value = payload.get("value", "")
+	
+	# Define field types
+	directory_fields = {"data_dir", "marvel_rivals_root", "marvel_rivals_local_downloads_root"}
+	executable_fields = {
+		"repak_bin": "RePak CLI",
+		"retoc_cli": "ReToc CLI", 
+		"seven_zip_bin": "7-Zip"
+	}
+	
+	if field in directory_fields:
+		result = _validate_directory_path(value, required=True)
+	elif field in executable_fields:
+		label = executable_fields[field]
+		result = _validate_executable_path(value, label=label, required=False)
+	else:
+		return {"ok": False, "message": f"Unknown field: {field}", "exists": False, "reason": "invalid_field"}
+	
+	return result
+
+
+@app.get("/api/nxm/protocol/status")
+def get_nxm_protocol_status() -> Dict[str, Any]:
+	"""Check if nxm:// protocol is registered on the system."""
+	from core.utils.nxm_protocol import get_nxm_status
+	try:
+		return get_nxm_status()
+	except Exception as e:
+		return {
+			"registered": False,
+			"error": str(e)
+		}
+
+
+@app.post("/api/nxm/protocol/register")
+def register_nxm_protocol(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+	"""Register nxm:// protocol to launch the Tauri app.
+	
+	Expects: { "tauri_path": "C:\\path\\to\\Mod Manager.exe" }
+	"""
+	from pathlib import Path
+	from core.utils.nxm_protocol import register_nxm_windows
+	
+	tauri_path = payload.get("tauri_path")
+	if not tauri_path:
+		raise HTTPException(status_code=400, detail="tauri_path is required")
+	
+	exe_path = Path(tauri_path)
+	if not exe_path.exists():
+		raise HTTPException(status_code=400, detail=f"Tauri executable not found at {tauri_path}")
+	
+	result = register_nxm_windows(exe_path)
+	if not result.get("ok"):
+		raise HTTPException(status_code=500, detail=result.get("error", "Registration failed"))
+	
+	return result
+
+
+@app.post("/api/nxm/protocol/unregister")
+def unregister_nxm_protocol() -> Dict[str, Any]:
+	"""Unregister nxm:// protocol from the system."""
+	from core.utils.nxm_protocol import unregister_nxm_windows
+	
+	result = unregister_nxm_windows()
+	if not result.get("ok"):
+		raise HTTPException(status_code=500, detail=result.get("error", "Unregistration failed"))
+	
+	return result
+
+
+def _shape_conflicts_from_view(
+	conn,
+	view_sql: str,
+	limit: int,
+	*,
+	active_only: bool = False,
+) -> List[Dict[str, Any]]:
+	cur = conn.cursor()
+	rows = cur.execute(view_sql, (limit,)).fetchall()
+	results: List[Dict[str, Any]] = []
+	pak_meta_cache: Dict[str, Tuple[Optional[str], Optional[int]]] = {}
+	for asset_path, pak_count, mod_count, conflict_paks_json in rows:
+		cat_row = cur.execute("SELECT category FROM asset_tags WHERE asset_path=?", (asset_path,)).fetchone()
+		category = cat_row[0] if cat_row else None
+		try:
+			paks = json.loads(conflict_paks_json)
+		except Exception:
+			paks = []
+		participants: List[Dict[str, Any]] = []
+		winner_mod_id = None
+		for p in paks:
+			pak_name = p.get("pak_name")
+			mod_id = p.get("mod_id")
+			source_zip = p.get("source_zip")
+			local_download_id: Optional[int] = None
+			local_download_id_val = p.get("local_download_id")
+			if isinstance(local_download_id_val, (int, float)) and not isinstance(local_download_id_val, bool):
+				local_download_id = int(local_download_id_val)
+			elif isinstance(local_download_id_val, str) and local_download_id_val.strip():
+				try:
+					local_download_id = int(local_download_id_val.strip())
+				except Exception:
+					local_download_id = None
+			tag_row = (
+				cur.execute("SELECT tags_json FROM pak_tags_json WHERE pak_name=?", (pak_name,)).fetchone()
+				if pak_name
+				else None
+			)
+			merged_tag = None
+			if tag_row and tag_row[0]:
+				try:
+					tj = json.loads(tag_row[0])
+					if isinstance(tj, list) and tj:
+						merged_tag = tj[0]
+				except Exception:
+					merged_tag = None
+			mod = (
+				cur.execute("SELECT name, picture_url FROM mods WHERE mod_id=?", (mod_id,)).fetchone()
+				if mod_id is not None
+				else None
+			)
+			mod_name = mod[0] if mod and mod[0] else None
+			icon = mod[1] if mod else None
+			local_name: Optional[str] = None
+			if pak_name:
+				cached = pak_meta_cache.get(pak_name)
+				if cached is None:
+					row = cur.execute(
+						"""
+						SELECT ld.name, ld.id
+						FROM mod_paks mp
+						JOIN local_downloads ld ON ld.id = mp.local_download_id
+						WHERE mp.pak_name = ?
+						LIMIT 1
+						""",
+						(pak_name,),
+					).fetchone()
+					cached = (
+						(row[0] if row and row[0] else None, int(row[1]) if row and row[1] is not None else None)
+						if row
+						else (None, None)
+					)
+					pak_meta_cache[pak_name] = cached
+				local_name, local_download_id_db = cached
+				if local_download_id is None:
+					local_download_id = local_download_id_db
+			if not mod_name:
+				candidate_name = local_name or source_zip
+				if isinstance(candidate_name, str) and candidate_name.strip():
+					mod_name = candidate_name.strip()
+				elif isinstance(pak_name, str) and pak_name.strip():
+					mod_name = pak_name.strip()
+				else:
+					mod_name = "Unknown Mod"
+			participants.append(
+				{
+					"pak_name": pak_name,
+					"merged_tag": merged_tag,
+					"mods": [
+						{
+							"mod_id": mod_id,
+							"mod_name": mod_name,
+							"pak_file": pak_name,
+							"icon": icon,
+							"is_current": bool(active_only),
+							"local_download_id": local_download_id,
+						}
+					],
+				}
+			)
+			if winner_mod_id is None:
+				winner_mod_id = mod_id
+		results.append(
+			{
+				"asset_path": asset_path,
+				"category": category,
+				"conflicting_mod_count": mod_count,
+				"total_paks": pak_count,
+				"winner_mod_id": winner_mod_id,
+				"participants": participants,
+			}
+		)
+	return results
+
+
+@app.get("/api/conflicts")
+def get_conflicts(limit: int = 10) -> List[Dict[str, Any]]:
+	conn = get_db()
+	try:
+		return _shape_conflicts_from_view(
+			conn,
+		"""
+		SELECT asset_path, pak_count, mod_count, conflict_paks_json
+		FROM v_asset_conflicts_all
+		LIMIT ?
+		""",
+		limit,
+		active_only=False,
+	)
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+
+@app.get("/api/conflicts/active")
+def get_conflicts_active(limit: int = 10) -> List[Dict[str, Any]]:
+	conn = get_db()
+	try:
+		return _shape_conflicts_from_view(
+			conn,
+		"""
+		SELECT asset_path, pak_count, mod_count, conflict_paks_json
+		FROM v_asset_conflicts_active
+		LIMIT ?
+		""",
+		limit,
+		active_only=True,
+	)
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+
+@app.post("/api/mods/add")
+def add_mod(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+		"""Register a local mod archive or pak in local_downloads; minimal ingestion.
+		Body: { localPath: str, name?: str, modId?: int, version?: str }
+		"""
+		local_path_val = payload.get("localPath")
+		if not local_path_val or not isinstance(local_path_val, str):
+			raise HTTPException(status_code=400, detail="localPath is required")
+		local_path = local_path_val.strip()
+		if not local_path:
+			raise HTTPException(status_code=400, detail="localPath is required")
+		source_url_val = payload.get("sourceUrl")
+		if isinstance(source_url_val, str) and source_url_val.strip():
+			source_url: Optional[str] = source_url_val.strip()
+		else:
+			source_url = None
+		if _looks_like_url(local_path):
+			source_url = source_url or local_path
+			path = _download_remote_archive(local_path)
+		else:
+			candidate = Path(local_path).expanduser()
+			if not candidate.exists():
+				alt = (_downloads_root_from_env() / local_path).expanduser()
+				if alt.exists():
+					candidate = alt
+			if not candidate.exists():
+				raise HTTPException(status_code=400, detail="localPath not found")
+			path = candidate
+		derived_name, derived_mod_id, derived_version = parse_mod_filename(path.name)
+		provided_name_val = payload.get("name")
+		if isinstance(provided_name_val, str) and provided_name_val.strip():
+			name = provided_name_val.strip()
+		else:
+			name = derived_name or path.stem
+		mod_id_val = payload.get("modId")
+		try:
+			mod_id_int: Optional[int] = int(mod_id_val) if mod_id_val is not None else None
+		except Exception:
+			mod_id_int = None
+		if mod_id_int is None:
+			mod_id_int = derived_mod_id
+		version_val = payload.get("version")
+		if isinstance(version_val, str) and version_val.strip():
+			version = version_val.strip()
+		elif derived_version:
+			version = derived_version
+		else:
+			version = ""
+		try:
+			return _ingest_resolved_download(
+				path,
+				name=name,
+				mod_id=mod_id_int,
+				version=version,
+				source_url=source_url,
+			)
+		except DuplicateDownloadError as exc:
+			raise HTTPException(status_code=409, detail=_duplicate_detail_from_error(exc))
+
+@app.post("/api/nxm/handoff")
+def submit_nxm_handoff(payload: Optional[Dict[str, Any]] = Body(default=None)) -> Dict[str, Any]:
+	nxm_value: Optional[str] = None
+	if payload is not None:
+		nxm_value = payload.get("nxm")
+	if not isinstance(nxm_value, str) or not nxm_value.strip():
+		raise HTTPException(status_code=400, detail="nxm field is required")
+	try:
+		nxm_request = parse_nxm_uri(nxm_value)
+	except NXMParseError as exc:
+		raise HTTPException(status_code=400, detail=str(exc))
+	metadata = snapshot_metadata(nxm_request)
+	record = register_handoff(nxm_request, metadata=metadata)
+	logger.info(
+		"[nxm_handoff] received id=%s game=%s mod_id=%s file_id=%s",
+		record["id"],
+		nxm_request.game_domain,
+		nxm_request.mod_id,
+		nxm_request.file_id,
+	)
+	return {"ok": True, "handoff": serialize_handoff(record)}
+
+
+@app.get("/api/nxm/handoff/{handoff_id}")
+def get_nxm_handoff(handoff_id: str) -> Dict[str, Any]:
+	if not handoff_id:
+		raise HTTPException(status_code=400, detail="handoff_id is required")
+	record = get_handoff_or_404(handoff_id)
+	return {"ok": True, "handoff": serialize_handoff(record)}
+
+
+@app.get("/api/nxm/handoffs")
+def list_nxm_handoffs() -> Dict[str, Any]:
+	ordered = sorted(
+		list_handoffs(),
+		key=lambda rec: rec.get("created_at") or 0,
+		reverse=True,
+	)
+	return {
+		"ok": True,
+		"handoffs": [serialize_handoff(rec, include_metadata=True) for rec in ordered],
+	}
+
+
+@app.delete("/api/nxm/handoff/{handoff_id}")
+def delete_nxm_handoff(handoff_id: str) -> Dict[str, Any]:
+	if not handoff_id:
+		raise HTTPException(status_code=400, detail="handoff_id is required")
+	record = delete_handoff(handoff_id)
+	return {"ok": True, "handoff": serialize_handoff(record, include_metadata=True)}
+
+
+def _normalize_game_domain(domain: Optional[str]) -> str:
+	if not domain:
+		return DEFAULT_GAME
+	normalized = str(domain).strip().lower()
+	if not normalized:
+		return DEFAULT_GAME
+	if normalized != DEFAULT_GAME:
+		raise HTTPException(status_code=400, detail=f"Unsupported game domain for nxm handoff: {normalized}")
+	return normalized
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+	if isinstance(value, bool):
+		return None
+	if isinstance(value, int):
+		return value
+	if isinstance(value, float) and value.is_integer():
+		return int(value)
+	if isinstance(value, str):
+		try:
+			return int(value.strip())
+		except (TypeError, ValueError):
+			return None
+	return None
+
+
+def _collect_nexus_metadata_for_record(record: Dict[str, Any]) -> tuple[str, Dict[str, Any], Dict[str, Any]]:
+	metadata = record.setdefault("metadata", {})
+	cached = metadata.get("collect_all")
+	cached_ts = metadata.get("collect_all_timestamp")
+	now = time.time()
+	if isinstance(cached, dict) and isinstance(cached_ts, (int, float)) and now - cached_ts < 300:
+		filtered = metadata.get("collect_all_filtered")
+		if not isinstance(filtered, dict):
+			prefs = _load_nexus_prefs_cached()
+			filtered = filter_aggregate_payload(cached, prefs)
+			metadata["collect_all_filtered"] = filtered
+		request_data = record.get("request", {})
+		game_domain = _normalize_game_domain(request_data.get("game"))
+		return game_domain, cached, filtered
+	key = get_api_key()
+	if not key:
+		raise HTTPException(status_code=400, detail="NEXUS_API_KEY not configured; cannot contact Nexus")
+	request_data = record.get("request", {})
+	mod_id = request_data.get("mod_id")
+	if not isinstance(mod_id, int):
+		raise HTTPException(status_code=400, detail="nxm handoff missing mod id")
+	game_domain = _normalize_game_domain(request_data.get("game"))
+	payload = collect_all_for_mod(key, game_domain, mod_id)
+	prefs = _load_nexus_prefs_cached()
+	filtered = filter_aggregate_payload(payload, prefs)
+	metadata["collect_all"] = payload
+	metadata["collect_all_timestamp"] = now
+	metadata["collect_all_filtered"] = filtered
+	return game_domain, payload, filtered
+
+
+def _summarize_mod_files(files_payload: Any) -> List[Dict[str, Any]]:
+	entries: List[Dict[str, Any]] = []
+	if isinstance(files_payload, dict):
+		candidate = files_payload.get("files")
+		if isinstance(candidate, list):
+			iterable = candidate
+		else:
+			iterable = []
+	elif isinstance(files_payload, list):
+		iterable = files_payload
+	else:
+		iterable = []
+	for item in iterable:
+		if not isinstance(item, dict):
+			continue
+		file_id = item.get("file_id")
+		if file_id is None and isinstance(item.get("id"), (list, tuple)):
+			try:
+				file_id = int(item["id"][0])
+			except Exception:
+				file_id = None
+		file_id = _coerce_int(file_id)
+		if file_id is None:
+			continue
+		size_bytes = item.get("size_in_bytes")
+		if size_bytes is None:
+			size_val = item.get("size") or item.get("size_kb")
+			size_bytes = None
+			if isinstance(size_val, (int, float)):
+				size_bytes = int(size_val * 1024) if size_val and not isinstance(size_val, bool) else int(size_val)
+		uploaded_ts = _coerce_int(item.get("uploaded_timestamp"))
+		entries.append(
+			{
+				"file_id": file_id,
+				"name": item.get("name"),
+				"version": item.get("version") or item.get("mod_version"),
+				"category_id": item.get("category_id"),
+				"category_name": item.get("category_name"),
+				"is_primary": bool(item.get("is_primary")),
+				"size_in_bytes": size_bytes,
+				"file_name": item.get("file_name"),
+				"uploaded_timestamp": uploaded_ts,
+				"uploaded_time": item.get("uploaded_time"),
+				"mod_version": item.get("mod_version"),
+			}
+		)
+	return entries
+
+
+def _select_file_entry(entries: List[Dict[str, Any]], requested_file_id: Optional[int]) -> Optional[Dict[str, Any]]:
+	if requested_file_id is not None:
+		for entry in entries:
+			if entry.get("file_id") == requested_file_id:
+				return entry
+	if not entries:
+		return None
+	primaries = [e for e in entries if e.get("is_primary")]
+	if primaries:
+		primaries.sort(key=lambda e: e.get("uploaded_timestamp") or 0, reverse=True)
+		return primaries[0]
+	main_entries = [
+		e
+		for e in entries
+		if (isinstance(e.get("category_name"), str) and e["category_name"].strip().lower() == "main")
+		or (isinstance(e.get("category_id"), int) and e["category_id"] == 1)
+	]
+	if main_entries:
+		main_entries.sort(key=lambda e: e.get("uploaded_timestamp") or 0, reverse=True)
+		return main_entries[0]
+	entries_sorted = sorted(entries, key=lambda e: e.get("uploaded_timestamp") or 0, reverse=True)
+	return entries_sorted[0]
+
+
+@app.get("/api/nxm/handoff/{handoff_id}/preview")
+def preview_nxm_handoff(handoff_id: str) -> Dict[str, Any]:
+	if not handoff_id:
+		raise HTTPException(status_code=400, detail="handoff_id is required")
+	record = get_handoff_or_404(handoff_id)
+	game_domain, raw_metadata, filtered_metadata = _collect_nexus_metadata_for_record(record)
+	files_summary = _summarize_mod_files(raw_metadata.get("files"))
+	req = record.get("request", {})
+	requested_file_id = _coerce_int(req.get("file_id"))
+	selected_entry = _select_file_entry(files_summary, requested_file_id)
+	mod_info = filtered_metadata.get("mod_info") if isinstance(filtered_metadata, dict) else None
+	response: Dict[str, Any] = {
+		"ok": True,
+		"handoff": serialize_handoff(record),
+		"game": game_domain,
+		"mod_info": mod_info,
+		"files": files_summary,
+	}
+	if selected_entry is not None:
+		response["selected_file_id"] = selected_entry.get("file_id")
+		response["selected_file"] = selected_entry
+	return response
+
+
+
+@app.post("/api/mods/{mod_id}/check-update")
+def check_mod_update(mod_id: int) -> Dict[str, Any]:
+	"""Refresh Nexus metadata for a mod and report whether updates are available."""
+	conn = get_db()
+	try:
+		metadata_info = _sync_mod_metadata(conn, mod_id, None)
+		rows = fetch_pak_version_status(conn, mod_id=mod_id, only_needs_update=False)
+		pending: List[Dict[str, Any]] = []
+		checked_downloads: Set[int] = set()
+		for entry in rows:
+			needs_update = bool(entry.get("needs_update"))
+			local_download_id = entry.get("local_download_id")
+			if isinstance(local_download_id, int):
+				checked_downloads.add(local_download_id)
+			if not needs_update:
+				continue
+			pending.append(
+				{
+					"pak_name": entry.get("pak_name"),
+					"local_download_id": local_download_id,
+					"local_version": entry.get("local_version"),
+					"reference_version": entry.get("reference_version"),
+					"version_status": entry.get("version_status"),
+					"display_version": entry.get("display_version"),
+				}
+			)
+		result: Dict[str, Any] = {
+			"ok": True,
+			"mod_id": mod_id,
+			"needs_update": bool(pending),
+			"pending": pending,
+			"checked_download_ids": sorted(checked_downloads),
+		}
+		if "metadata_warning" in metadata_info:
+			result["metadata_warning"] = metadata_info["metadata_warning"]
+		synced = metadata_info.get("synced_mod_id")
+		if synced is not None:
+			result["synced_mod_id"] = synced
+		return result
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+
+@app.post("/api/nxm/handoff/{handoff_id}/ingest")
+def ingest_nxm_handoff(handoff_id: str, payload: Optional[Dict[str, Any]] = Body(default=None)) -> Dict[str, Any]:
+	if not handoff_id:
+		raise HTTPException(status_code=400, detail="handoff_id is required")
+	record = get_handoff_or_404(handoff_id)
+	options = payload or {}
+	requested_file_id = options.get("file_id")
+	if requested_file_id is not None:
+		requested_file_id = _coerce_int(requested_file_id)
+	if options.get("desired_paks") is not None and not isinstance(options.get("desired_paks"), list):
+		raise HTTPException(status_code=400, detail="desired_paks must be an array of strings when provided")
+	deactivate_existing_opt = options.get("deactivate_existing")
+	if deactivate_existing_opt is None:
+		deactivate_existing = True
+	elif isinstance(deactivate_existing_opt, bool):
+		deactivate_existing = deactivate_existing_opt
+	elif isinstance(deactivate_existing_opt, (int, float)):
+		deactivate_existing = bool(deactivate_existing_opt)
+	else:
+		raise HTTPException(status_code=400, detail="deactivate_existing must be a boolean when provided")
+	auto_activate = bool(options.get("activate", True))
+	game_domain, raw_metadata, filtered_metadata = _collect_nexus_metadata_for_record(record)
+	files_summary = _summarize_mod_files(raw_metadata.get("files"))
+	if requested_file_id is None:
+		req = record.get("request", {})
+		req_file_id = _coerce_int(req.get("file_id"))
+		requested_file_id = req_file_id
+	selected_entry = _select_file_entry(files_summary, requested_file_id)
+	if not selected_entry:
+		raise HTTPException(status_code=404, detail="Unable to resolve target file from Nexus metadata")
+	file_id = selected_entry["file_id"]
+	req_data = record.get("request", {})
+	mod_id = req_data.get("mod_id")
+	if not isinstance(mod_id, int):
+		raise HTTPException(status_code=400, detail="nxm handoff missing mod id")
+	logger.info(
+		"[nxm_handoff] resolving mod_id=%s file_id=%s handoff=%s via nxm redirect", mod_id, file_id, record.get("id")
+	)
+	download_path, resolved_url = _download_archive_via_nxm(record, game_domain, file_id)
+	logger.info(
+		"[nxm_handoff] download complete path=%s mod_id=%s file_id=%s", download_path, mod_id, file_id
+	)
+	version = selected_entry.get("version") or selected_entry.get("mod_version") or ""
+	remote_name = selected_entry.get("file_name") or selected_entry.get("name") or download_path.name
+	try:
+		ingest_result = _ingest_resolved_download(
+			download_path,
+			name=remote_name,
+			mod_id=mod_id,
+			version=version,
+			source_url=resolved_url,
+			metadata_snapshot=raw_metadata,
+			filtered_metadata=filtered_metadata,
+		)
+	except DuplicateDownloadError as exc:
+		raise HTTPException(status_code=409, detail=_duplicate_detail_from_error(exc))
+	new_download_id = ingest_result.get("download_id")
+	if not isinstance(new_download_id, int):
+		raise HTTPException(status_code=500, detail="Ingestion completed but download id missing")
+	conn = get_db()
+	try:
+		cur = conn.cursor()
+		ctx = _snapshot_local_downloads(cur, mod_id)
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+	mod_name = ctx.get("mod_name")
+	if not mod_name:
+		if isinstance(filtered_metadata, dict):
+			info = filtered_metadata.get("mod_info")
+			if isinstance(info, dict):
+				name_val = info.get("name")
+				if isinstance(name_val, str) and name_val.strip():
+					mod_name = name_val.strip()
+	contents = ingest_result.get("contents") or []
+	if not isinstance(contents, list):
+		contents = []
+	contents_lookup = {str(c).lower(): str(c) for c in contents if isinstance(c, str)}
+
+	def _normalize_list(values: Iterable[Any]) -> List[str]:
+		resolved: List[str] = []
+		for v in values:
+			if isinstance(v, str) and v.strip():
+				key = v.strip()
+				match = contents_lookup.get(key.lower())
+				if match:
+					resolved.append(match)
+		return resolved
+
+	desired_active: List[str] = []
+	if isinstance(options.get("desired_paks"), list) and options["desired_paks"]:
+		desired_active = _normalize_list(options["desired_paks"])
+	if not desired_active and ctx.get("active_union"):
+		desired_active = _normalize_list(ctx["active_union"])
+	if not desired_active:
+		desired_active = [v for v in contents if isinstance(v, str) and v.lower().endswith(".pak")]
+	if not desired_active and contents:
+		desired_active = [contents[0]]
+
+	activation_warning: Optional[str] = None
+	activated_snapshot: Optional[List[str]] = None
+	if auto_activate and desired_active:
+		try:
+			result = set_active_paks(new_download_id, {"active_paks": desired_active})
+			activated_snapshot = result.get("active_paks") if isinstance(result, dict) else desired_active
+		except HTTPException as e:
+			activation_warning = str(e.detail)
+		except Exception as e:
+			activation_warning = str(e)
+
+	deactivated_ids: List[int] = []
+	deactivation_warnings: List[str] = []
+	if deactivate_existing:
+		for old_id in ctx.get("active_download_ids", []):
+			if int(old_id) == new_download_id:
+				continue
+			try:
+				set_active_paks(int(old_id), {"active_paks": []})
+				deactivated_ids.append(int(old_id))
+			except HTTPException as e:
+				deactivation_warnings.append(f"{old_id}: {e.detail}")
+			except Exception as e:
+				deactivation_warnings.append(f"{old_id}: {e}")
+
+	delete_handoff(handoff_id)
+	response: Dict[str, Any] = {
+		"ok": True,
+		"handoff": serialize_handoff(record),
+		"mod_id": mod_id,
+		"mod_name": mod_name,
+		"file_id": file_id,
+		"download_id": new_download_id,
+		"download": ingest_result,
+		"selected_file": selected_entry,
+		"activated_paks": activated_snapshot or [],
+		"activation_warning": activation_warning,
+		"deactivated_download_ids": deactivated_ids,
+		"deactivation_warnings": deactivation_warnings,
+		"deactivated_existing": deactivate_existing,
+		"desired_active_paks": desired_active,
+		"needs_refresh": True,
+		"handoff_consumed": True,
+	}
+	return response
+
+
+def _extract_download_uri(payload: Any) -> Optional[str]:
+	if isinstance(payload, dict):
+		for key in ("URI", "uri", "url", "URL", "download_url"):
+			val = payload.get(key)
+			if isinstance(val, str) and val.strip():
+				return val.strip()
+		for key in ("download_links", "links", "mirrors", "download_link"):
+			val = payload.get(key)
+			if isinstance(val, list):
+				for item in val:
+					uri = _extract_download_uri(item)
+					if uri:
+						return uri
+	elif isinstance(payload, list):
+		for item in payload:
+			uri = _extract_download_uri(item)
+			if uri:
+				return uri
+	return None
+
+
+def _snapshot_local_downloads(cur, mod_id: int) -> Dict[str, Any]:
+	rows = cur.execute(
+		"""
+		SELECT id, name, version, contents, active_paks, path, created_at
+		FROM local_downloads
+		WHERE mod_id = ?
+		ORDER BY created_at ASC
+		""",
+		(mod_id,),
+	).fetchall()
+	mod_row = cur.execute("SELECT name FROM mods WHERE mod_id = ?", (mod_id,)).fetchone()
+	mod_name = mod_row[0] if mod_row else None
+	active_union: set[str] = set()
+	active_download_ids: List[int] = []
+	local_versions_summary: List[Dict[str, Any]] = []
+	local_version_strings: set[str] = set()
+	best_local_key: Optional[str] = None
+	for dl_id, name, version, contents_json, active_json, path_value, created_at in rows:
+		try:
+			contents = json.loads(contents_json) if contents_json else []
+			if not isinstance(contents, list):
+				contents = []
+		except Exception:
+			contents = []
+		try:
+			active_paks = json.loads(active_json) if active_json else []
+			if not isinstance(active_paks, list):
+				active_paks = []
+		except Exception:
+			active_paks = []
+		if active_paks:
+			active_download_ids.append(int(dl_id))
+			for p in active_paks:
+				if isinstance(p, str) and p.strip():
+					active_union.add(p.strip())
+		version_str = (version or "").strip()
+		local_version_strings.add(version_str)
+		vkey = make_version_key(version_str)[0]
+		if vkey and (best_local_key is None or vkey > best_local_key):
+			best_local_key = vkey
+		local_versions_summary.append(
+			{
+				"download_id": dl_id,
+				"name": name,
+				"version": version_str,
+				"created_at": created_at,
+				"active_paks": active_paks,
+				"contents": contents,
+				"path": path_value,
+			}
+		)
+	return {
+		"found": bool(rows),
+		"mod_name": mod_name,
+		"active_union": active_union,
+		"active_download_ids": active_download_ids,
+		"local_versions_summary": local_versions_summary,
+		"local_version_strings": local_version_strings,
+		"best_local_key": best_local_key,
+	}
+
+
+def _complete_update_from_handoff(
+	handoff_id: str,
+	*,
+	mod_id: int,
+	mod_name: Optional[str],
+	requested_file_id: Optional[int],
+	auto_activate: bool,
+	desired_paks_opt: Optional[List[Any]],
+	preflight_metadata: Dict[str, Any],
+	fallback_latest_version: str,
+	fallback_file_id: int,
+	fallback_uploaded_at: Any,
+) -> Dict[str, Any]:
+	ingest_options: Dict[str, Any] = {"activate": auto_activate}
+	if requested_file_id is not None:
+		ingest_options["file_id"] = requested_file_id
+	if desired_paks_opt is not None:
+		ingest_options["desired_paks"] = desired_paks_opt
+	ingest_response = ingest_nxm_handoff(handoff_id, ingest_options)
+	new_download_id = ingest_response.get("download_id")
+	if not isinstance(new_download_id, int):
+		raise HTTPException(status_code=500, detail="Ingestion completed but download id missing")
+	try:
+		conn = get_db()
+		cur = conn.cursor()
+		post_ctx = _snapshot_local_downloads(cur, mod_id)
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+	mod_name_resolved = post_ctx.get("mod_name") or ingest_response.get("mod_name") or mod_name
+	local_versions_summary = post_ctx.get("local_versions_summary") or []
+	download_payload = ingest_response.get("download") or {}
+	selected_file = ingest_response.get("selected_file") or {}
+	version_resolved = (
+		selected_file.get("version")
+		or selected_file.get("mod_version")
+		or download_payload.get("version")
+		or fallback_latest_version
+	)
+	uploaded_at_resolved = (
+		selected_file.get("uploaded_time")
+		or selected_file.get("uploaded_timestamp")
+		or fallback_uploaded_at
+	)
+	file_id_resolved = selected_file.get("file_id") or fallback_file_id
+	desired_active_paks = ingest_response.get("desired_active_paks")
+	if not isinstance(desired_active_paks, list) or not desired_active_paks:
+		desired_active_paks = []
+		if isinstance(desired_paks_opt, list):
+			desired_active_paks = [str(v) for v in desired_paks_opt if isinstance(v, str) and v.strip()]
+	response: Dict[str, Any] = {
+		"ok": True,
+		"mod_id": mod_id,
+		"mod_name": mod_name_resolved,
+		"latest_version": version_resolved,
+		"latest_file_id": file_id_resolved,
+		"latest_uploaded_at": uploaded_at_resolved,
+		"download_id": new_download_id,
+		"download": download_payload,
+		"activated_paks": ingest_response.get("activated_paks") or [],
+		"activation_warning": ingest_response.get("activation_warning"),
+		"deactivated_download_ids": ingest_response.get("deactivated_download_ids") or [],
+		"deactivation_warnings": ingest_response.get("deactivation_warnings") or [],
+		"preflight_metadata": preflight_metadata,
+		"local_versions": local_versions_summary,
+		"desired_active_paks": desired_active_paks,
+		"needs_refresh": True,
+		"handoff_consumed": ingest_response.get("handoff_consumed", True),
+	}
+	handoff_serialized = ingest_response.get("handoff")
+	if handoff_serialized:
+		response["handoff"] = handoff_serialized
+	if selected_file:
+		response["selected_file"] = selected_file
+	logger.info(
+		"[update_mod] success via nxm handoff mod_id=%s download_id=%s activated=%d",
+		mod_id,
+		new_download_id,
+		len(response.get("activated_paks") or []),
+	)
+	return response
+
+
+@app.post("/api/mods/{mod_id}/update")
+def update_mod(mod_id: int, payload: Optional[Dict[str, Any]] = Body(default=None)) -> Dict[str, Any]:
+	"""Download the latest Nexus file for a mod, ingest it, and activate it while deactivating older versions."""
+	options = payload or {}
+	logger.info("[update_mod] request mod_id=%s payload_keys=%s", mod_id, list(options.keys()))
+	requested_file_id = options.get("file_id")
+	if requested_file_id is not None:
+		try:
+			requested_file_id = int(requested_file_id)
+		except Exception:
+			logger.warning("[update_mod] invalid file_id mod_id=%s value=%r", mod_id, requested_file_id)
+			raise HTTPException(status_code=400, detail="file_id must be numeric")
+	auto_activate = bool(options.get("activate", True))
+	desired_paks_opt = options.get("desired_paks")
+	if desired_paks_opt is not None and not isinstance(desired_paks_opt, list):
+		logger.warning("[update_mod] desired_paks not array mod_id=%s type=%s", mod_id, type(desired_paks_opt).__name__)
+		raise HTTPException(status_code=400, detail="desired_paks must be an array of strings")
+	handoff_id_raw = options.get("handoff_id")
+	handoff_id: Optional[str] = None
+	if handoff_id_raw is not None:
+		if isinstance(handoff_id_raw, str) and handoff_id_raw.strip():
+			handoff_id = handoff_id_raw.strip()
+		else:
+			logger.warning("[update_mod] invalid handoff_id mod_id=%s value=%r", mod_id, handoff_id_raw)
+			raise HTTPException(status_code=400, detail="handoff_id must be a non-empty string when provided")
+
+	conn = get_db()
+	try:
+		cur = conn.cursor()
+		ctx = _snapshot_local_downloads(cur, mod_id)
+		if not ctx["found"]:
+			logger.error("[update_mod] no local downloads mod_id=%s", mod_id)
+			raise HTTPException(status_code=404, detail="No local downloads registered for this mod")
+		logger.info("[update_mod] found %d local downloads for mod_id=%s", len(ctx["local_versions_summary"]), mod_id)
+		mod_name = ctx["mod_name"]
+		active_union = ctx["active_union"]
+		active_download_ids = ctx["active_download_ids"]
+		local_versions_summary = ctx["local_versions_summary"]
+		local_version_strings = ctx["local_version_strings"]
+		best_local_key = ctx["best_local_key"]
+
+		related_versions = sorted([s for s in local_version_strings if s])
+		preflight_metadata = _sync_mod_metadata(conn, mod_id, mod_name)
+		latest = get_latest_file_by_version(conn, mod_id)
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+	if not latest or latest.get("file_id") is None:
+		logger.error("[update_mod] no remote files mod_id=%s latest=%r", mod_id, latest)
+		raise HTTPException(status_code=404, detail="No remote files available for this mod")
+	latest_file_id = int(requested_file_id or latest.get("file_id"))
+	latest_version = (latest.get("file_version") or "").strip()
+	latest_uploaded_at = latest.get("uploaded_at") or latest.get("latest_uploaded_at")
+	latest_version_key = latest.get("version_key") or latest.get("latest_version_key")
+	if not latest_version:
+		logger.error("[update_mod] missing latest version mod_id=%s latest=%r", mod_id, latest)
+		raise HTTPException(status_code=400, detail="Latest Nexus file is missing a version string")
+	if not latest_version_key:
+		latest_version_key = make_version_key(latest_version)[0]
+
+	already_installed = False
+	if latest_version.lower() in (s.lower() for s in local_version_strings if s):
+		already_installed = True
+	if latest_version_key and best_local_key and latest_version_key <= best_local_key:
+		already_installed = True
+
+	if already_installed and not options.get("force", False):
+		logger.info(
+			"[update_mod] already on latest mod_id=%s latest=%s local_versions=%s",
+			mod_id,
+			latest_version,
+			related_versions,
+		)
+		return {
+			"ok": True,
+			"already_latest": True,
+			"mod_id": mod_id,
+			"mod_name": mod_name,
+			"latest_version": latest_version,
+			"latest_file_id": latest_file_id,
+			"latest_uploaded_at": latest_uploaded_at,
+			"preflight_metadata": preflight_metadata,
+			"local_versions": local_versions_summary,
+		}
+
+	allow_direct_api = _allow_direct_api_downloads()
+
+	if handoff_id:
+		return _complete_update_from_handoff(
+			handoff_id,
+			mod_id=mod_id,
+			mod_name=mod_name,
+			requested_file_id=requested_file_id,
+			auto_activate=auto_activate,
+			desired_paks_opt=desired_paks_opt,
+			preflight_metadata=preflight_metadata,
+			fallback_latest_version=latest_version,
+			fallback_file_id=latest_file_id,
+			fallback_uploaded_at=latest_uploaded_at,
+		)
+
+	if not allow_direct_api:
+		detail = _nxm_required_detail(
+			mod_id,
+			latest_file_id,
+			mod_name=mod_name,
+			latest_version=latest_version,
+			uploaded_at=latest_uploaded_at,
+		)
+		raise HTTPException(status_code=428, detail=detail)
+
+	api_key = get_api_key()
+	if not api_key:
+		logger.error("[update_mod] missing API key for direct download mod_id=%s", mod_id)
+		raise HTTPException(
+			status_code=400,
+			detail=(
+				"NEXUS_API_KEY not configured; direct Nexus API downloads are disabled. "
+				"Configure a Nexus API key or trigger an nxm handoff via 'Mod Manager Download'."
+			),
+		)
+	status, download_payload = get_mod_file_download_link(api_key, DEFAULT_GAME, mod_id, latest_file_id)
+	logger.info("[update_mod] download link status=%s mod_id=%s file_id=%s", status, mod_id, latest_file_id)
+	if status != 200:
+		error_detail = download_payload if isinstance(download_payload, dict) else {"detail": download_payload}
+		detail_msg = None
+		if isinstance(error_detail, dict):
+			body = error_detail.get("body") if isinstance(error_detail.get("body"), (dict, str)) else None
+			if isinstance(body, dict):
+				body_msg = body.get("message") or body.get("detail")
+				if isinstance(body_msg, str):
+					detail_msg = body_msg.strip()
+			elif isinstance(body, str):
+				detail_msg = body.strip()
+		if not detail_msg and isinstance(error_detail, dict):
+			msg = error_detail.get("message") or error_detail.get("detail")
+			if isinstance(msg, str):
+				detail_msg = msg.strip()
+		tail_msg = detail_msg or f"Failed to obtain download link (status {status})"
+		if status == 403:
+			detail = _nxm_required_detail(
+				mod_id,
+				latest_file_id,
+				mod_name=mod_name,
+				latest_version=latest_version,
+				uploaded_at=latest_uploaded_at,
+			)
+			if detail_msg:
+				detail["message"] = (
+					f"{detail_msg} Use 'Mod Manager Download' on Nexus Mods to continue without a premium API key."
+				)
+			raise HTTPException(status_code=428, detail=detail)
+		logger.error(
+			"[update_mod] download link failure mod_id=%s status=%s file_id=%s payload=%r",
+			mod_id,
+			status,
+			latest_file_id,
+			error_detail,
+		)
+		raise HTTPException(status_code=status or 502, detail=tail_msg)
+	download_url = _extract_download_uri(download_payload)
+	if not download_url:
+		logger.error(
+			"[update_mod] missing download URL mod_id=%s file_id=%s payload=%r",
+			mod_id,
+			latest_file_id,
+			download_payload,
+		)
+		raise HTTPException(status_code=502, detail="Nexus download link missing from API response")
+
+	logger.info("[update_mod] downloading mod_id=%s file_id=%s", mod_id, latest_file_id)
+	download_path = _download_remote_archive(download_url, force=True)
+	logger.info("[update_mod] download complete mod_id=%s path=%s", mod_id, download_path)
+	remote_file_name = latest.get("file_name") or Path(download_path).name
+	safe_remote_name = _safe_filename(remote_file_name) or download_path.name
+	if safe_remote_name:
+		target_path = download_path.with_name(safe_remote_name)
+		if target_path.exists() and target_path != download_path:
+			stem = target_path.stem
+			suffix = target_path.suffix
+			counter = 1
+			while target_path.exists():
+				target_path = target_path.with_name(f"{stem}-{counter}{suffix}")
+				counter += 1
+		if target_path != download_path:
+			try:
+				download_path.rename(target_path)
+				download_path = target_path
+			except Exception:
+				pass
+		else:
+			target_path = download_path
+			download_path = target_path
+
+	try:
+		ingest_result = _ingest_resolved_download(
+			download_path,
+			name=safe_remote_name,
+			mod_id=mod_id,
+			version=latest_version,
+			source_url=download_url,
+		)
+	except DuplicateDownloadError as exc:
+		raise HTTPException(status_code=409, detail=_duplicate_detail_from_error(exc))
+	new_download_id = ingest_result.get("download_id")
+	if not isinstance(new_download_id, int):
+		raise HTTPException(status_code=500, detail="Ingestion completed but download id missing")
+	contents = ingest_result.get("contents") or []
+	if not isinstance(contents, list):
+		contents = []
+	contents_lookup = {str(c).lower(): str(c) for c in contents if isinstance(c, str)}
+
+	def _normalize_list(values: Iterable[Any]) -> List[str]:
+		out: List[str] = []
+		for v in values:
+			if isinstance(v, str) and v.strip():
+				key = v.strip()
+				match = contents_lookup.get(key.lower())
+				if match:
+					out.append(match)
+		return out
+
+	desired_active: List[str] = []
+	if isinstance(desired_paks_opt, list) and desired_paks_opt:
+		desired_active = _normalize_list(desired_paks_opt)
+	if not desired_active and active_union:
+		desired_active = _normalize_list(active_union)
+	if not desired_active:
+		desired_active = [v for v in contents if isinstance(v, str) and v.lower().endswith(".pak")]
+	if not desired_active and contents:
+		desired_active = [contents[0]]
+
+	activation_warning: Optional[str] = None
+	activated_snapshot: Optional[List[str]] = None
+	if auto_activate and desired_active:
+		try:
+			result = set_active_paks(new_download_id, {"active_paks": desired_active})
+			activated_snapshot = result.get("active_paks") if isinstance(result, dict) else desired_active
+		except HTTPException as e:
+			activation_warning = str(e.detail)
+		except Exception as e:  # pragma: no cover - safety net
+			activation_warning = str(e)
+
+	deactivated_ids: List[int] = []
+	deactivation_warnings: List[str] = []
+	for old_id in active_download_ids:
+		if int(old_id) == new_download_id:
+			continue
+		try:
+			set_active_paks(int(old_id), {"active_paks": []})
+			deactivated_ids.append(int(old_id))
+		except HTTPException as e:
+			deactivation_warnings.append(f"{old_id}: {e.detail}")
+		except Exception as e:  # pragma: no cover - safety net
+			deactivation_warnings.append(f"{old_id}: {e}")
+
+	response: Dict[str, Any] = {
+		"ok": True,
+		"mod_id": mod_id,
+		"mod_name": mod_name,
+		"latest_version": latest_version,
+		"latest_file_id": latest_file_id,
+		"latest_uploaded_at": latest_uploaded_at,
+		"download_id": new_download_id,
+		"download": ingest_result,
+		"activated_paks": activated_snapshot or [],
+		"activation_warning": activation_warning,
+		"deactivated_download_ids": deactivated_ids,
+		"deactivation_warnings": deactivation_warnings,
+		"preflight_metadata": preflight_metadata,
+		"local_versions": local_versions_summary,
+		"desired_active_paks": desired_active,
+		"needs_refresh": True,
+	}
+	logger.info(
+		"[update_mod] success mod_id=%s download_id=%s activated=%d deactivated=%d activation_warning=%s deactivation_warnings=%d",
+		mod_id,
+		new_download_id,
+		len(response.get("activated_paks", []) or []),
+		len(deactivated_ids),
+		bool(activation_warning),
+		len(deactivation_warnings),
+	)
+	return response
+
+
+if _HAS_MULTIPART:
+	@app.post("/api/mods/upload")
+	async def upload_mod_file(file: UploadFile = File(...)) -> Dict[str, Any]:
+		"""Accept an uploaded mod archive/pak and store it under the downloads root.
+		Returns the absolute path that can be supplied to /api/mods/add.
+		"""
+		if not file or not file.filename:
+			raise HTTPException(status_code=400, detail="Uploaded file is missing a filename")
+		downloads_root = _downloads_root_from_env()
+		_ensure_dir(downloads_root)
+		safe_name = _safe_filename(file.filename)
+		if not safe_name:
+			safe_name = "mod"
+		dest_path = _unique_destination(downloads_root, safe_name)
+		if dest_path.exists():
+			try:
+				relative_existing = str(dest_path.relative_to(downloads_root))
+			except ValueError:
+				relative_existing = dest_path.name
+			return {
+				"ok": True,
+				"already_existed": True,
+				"path": str(dest_path.resolve()),
+				"filename": dest_path.name,
+				"size": dest_path.stat().st_size if dest_path.exists() else 0,
+				"relative_path": relative_existing,
+				"downloads_root": str(downloads_root),
+			}
+		size = 0
+		try:
+			with dest_path.open("wb") as out:
+				while True:
+					chunk = await file.read(UPLOAD_CHUNK_SIZE)
+					if not chunk:
+						break
+					out.write(chunk)
+					size += len(chunk)
+		except Exception as e:
+			if dest_path.exists():
+				try:
+					dest_path.unlink()
+				except Exception:
+					pass
+			raise HTTPException(status_code=500, detail=f"Failed to save upload: {e}")
+		finally:
+			try:
+				await file.close()
+			except Exception:
+				pass
+		if size == 0 and dest_path.exists():
+			try:
+				dest_path.unlink()
+			except Exception:
+				pass
+			raise HTTPException(status_code=400, detail="Uploaded file was empty")
+		try:
+			relative = str(dest_path.relative_to(downloads_root))
+		except ValueError:
+			relative = dest_path.name
+		return {
+			"ok": True,
+			"path": str(dest_path.resolve()),
+			"filename": dest_path.name,
+			"size": size,
+			"relative_path": relative,
+			"downloads_root": str(downloads_root),
+		}
+else:
+	@app.post("/api/mods/upload")
+	async def upload_mod_file() -> Dict[str, Any]:
+		"""Fallback upload endpoint when python-multipart is unavailable."""
+		raise HTTPException(
+			status_code=503,
+			detail="File upload support requires the optional dependency 'python-multipart'. Install it with 'pip install python-multipart' or provide a local path/URL directly to /api/mods/add.",
+		)
+
+
+@app.post("/api/refresh/conflicts")
+def refresh_conflicts() -> Dict[str, Any]:
+	"""Rebuild conflict materialization tables.
+	
+	Gracefully handles empty/new databases by ensuring schema is ready first.
+	"""
+	conn = get_db()
+	try:
+		init_schema(conn)
+		
+		# Check if we have any pak_assets data to work with
+		cursor = conn.cursor()
+		pak_count = cursor.execute("SELECT COUNT(*) FROM pak_assets").fetchone()[0]
+		
+		if pak_count == 0:
+			logger.info("No pak_assets data yet - skipping conflict rebuild")
+			return {
+				"ok": True,
+				"results": {},
+				"message": "No data to process yet - database needs bootstrapping"
+			}
+		
+		res = rebuild_conflicts(conn, active_only=None)
+		return {"ok": True, "results": res}
+	except Exception as e:
+		logger.error(f"Error refreshing conflicts: {e}")
+		return {
+			"ok": False,
+			"error": str(e),
+			"message": "Failed to refresh conflicts - database may need bootstrapping"
+		}
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+
+# Optional: run with uvicorn if executed directly
+if __name__ == "__main__":
+	import uvicorn
+	uvicorn.run("core.api.server:app", host="127.0.0.1", port=8000, reload=True)
+
+
+# Helpers for .pak ingestion without zip wrapper
+def _extract_assets_from_pak(
+	pak_path: str,
+	*,
+	repak_bin: Optional[str] = None,
+	aes_key: Optional[str] = None,
+) -> Dict[str, List[str]]:
+	pak = Path(pak_path)
+	if not pak.exists():
+		raise FileNotFoundError(f"pak not found: {pak_path}")
+	tmpdir_obj = tempfile.TemporaryDirectory(prefix="single_pak_")
+	tmpdir = Path(tmpdir_obj.name)
+	try:
+		shadow = tmpdir / pak.name
+		shutil.copy2(pak, shadow)
+		# copy sibling IoStore companions if present so folder scan can pick them up
+		for ext in (".utoc", ".ucas", ".utac"):
+			sibling = pak.with_suffix(ext)
+			if sibling.exists():
+				try:
+					shutil.copy2(sibling, tmpdir / sibling.name)
+				except Exception:
+					continue
+		pak_map = extract_pak_asset_map_from_folder(str(tmpdir), repak_bin=repak_bin, aes_key=aes_key)
+		if not pak_map:
+			raise RuntimeError("Failed to enumerate assets from pak")
+		filtered: Dict[str, List[str]] = {}
+		stem = pak.name
+		alt_stem = pak.stem
+		for key, assets in pak_map.items():
+			if key == stem or key == alt_stem or key.startswith(alt_stem):
+				filtered[key] = assets
+		if not filtered:
+			filtered = pak_map
+		return filtered
+	finally:
+		tmpdir_obj.cleanup()
+
+
+# Mods endpoints
+@app.get("/api/mods")
+def list_mods(limit: int = 100) -> List[Dict[str, Any]]:
+	conn = get_db()
+	cur = conn.cursor()
+	rows = cur.execute(
+		"""
+		SELECT m.mod_id,
+			   m.name,
+			   m.author,
+			   m.version,
+			   m.picture_url,
+			   COALESCE(vc.active_conflicting_assets, 0) AS active_conflicting_assets,
+			   COALESCE(vc.active_opposing_mods, 0) AS active_opposing_mods
+		FROM mods m
+		LEFT JOIN v_mod_conflicts_active vc ON vc.mod_id = m.mod_id
+		ORDER BY m.name COLLATE NOCASE
+		LIMIT ?
+		""",
+		(limit,),
+	).fetchall()
+	out: List[Dict[str, Any]] = []
+	for r in rows:
+		out.append(
+			{
+				"mod_id": r[0],
+				"name": r[1],
+				"author": r[2],
+				"version": r[3],
+				"icon": r[4],
+				"active_conflicting_assets": r[5],
+				"active_opposing_mods": r[6],
+			}
+		)
+	try:
+		return out
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+
+@app.get("/api/pak-version-status")
+def get_pak_version_status_endpoint(
+	mod_id: Optional[int] = None,
+	download_ids: Optional[str] = None,
+	only_needs_update: bool = False,
+) -> List[Dict[str, Any]]:
+	conn = get_db()
+	try:
+		ids: Set[int] = set()
+		if download_ids:
+			for token in re.split(r"[,\s]+", str(download_ids)):
+				if not token:
+					continue
+				try:
+					value = int(token)
+				except (TypeError, ValueError):
+					continue
+				if value >= 0:
+					ids.add(value)
+		filtered_ids = sorted(ids)
+		rows = fetch_pak_version_status(
+			conn,
+			only_needs_update=only_needs_update,
+			mod_id=mod_id,
+			download_ids=filtered_ids if filtered_ids else None,
+		)
+		return rows
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+
+@app.get("/api/mods/{mod_id}")
+def get_mod_details(mod_id: int, response: Response) -> Dict[str, Any]:
+	# Disable caching for dynamic content
+	response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+	response.headers["Pragma"] = "no-cache"
+	response.headers["Expires"] = "0"
+	
+	import logging
+	logger = logging.getLogger("modmanager.api")
+	conn = get_db()
+	data = mod_with_local_and_latest(conn, mod_id)
+	if not data or not data.get("mod"):
+		raise HTTPException(status_code=404, detail="Mod not found")
+	# Ensure description field is exposed as HTML (merged summary+description from storage if present)
+	try:
+		if data.get("mod"):
+			m = data["mod"]
+			# If DB has description_html, surface it as 'description' for frontend
+			desc_html = m.get("description_html") if isinstance(m, dict) else None
+			logger.info(f"[get_mod_details] mod_id={mod_id}, has description_html: {bool(desc_html)}, length: {len(desc_html) if desc_html else 0}")
+			if desc_html:
+				# Inject a presentation field 'description'
+				m["description"] = desc_html
+				data["mod"] = m
+			else:
+				logger.warning(f"[get_mod_details] mod_id={mod_id}, no description_html in DB. Keys: {list(m.keys())}")
+	except Exception as e:
+		logger.error(f"[get_mod_details] Error processing description: {e}")
+		pass
+	mod_row = data.get("mod") if isinstance(data, dict) else None
+	if isinstance(mod_row, dict):
+		member_id = _extract_member_id(mod_row.get("author_member_id"))
+		profile_url = mod_row.get("author_profile_url")
+		avatar_url = _author_avatar_url(member_id, profile_url)
+		mod_row["author_member_id"] = member_id
+		if profile_url is not None:
+			mod_row["author_profile_url"] = profile_url
+		if avatar_url:
+			mod_row["author_avatar_url"] = avatar_url
+		data["mod"] = mod_row
+	# Also include active conflict badge counts if present
+	cur = conn.cursor()
+	try:
+		vc = cur.execute(
+			"SELECT active_conflicting_assets, active_opposing_mods FROM v_mod_conflicts_active WHERE mod_id = ?",
+			(mod_id,),
+		).fetchone()
+		if vc:
+			data["active_conflicting_assets"] = vc[0]
+			data["active_opposing_mods"] = vc[1]
+		else:
+			data["active_conflicting_assets"] = 0
+			data["active_opposing_mods"] = 0
+	except Exception as e:
+		# View might not exist yet, default to 0
+		logger.debug(f"[get_mod_details] Could not query v_mod_conflicts_active: {e}")
+		data["active_conflicting_assets"] = 0
+		data["active_opposing_mods"] = 0
+	# Aggregate tags for this mod from pak_tags_json (SQLite source of truth)
+	try:
+		tags_tokens: set[str] = set()
+		rows = cur.execute(
+			"SELECT tags_json FROM pak_tags_json WHERE mod_id = ?",
+			(mod_id,),
+		).fetchall()
+		for r in rows:
+			tj = r[0]
+			if not tj:
+				continue
+			try:
+				arr = json.loads(tj)
+				if isinstance(arr, list):
+					# Each element is already a separate tag (no comma splitting needed)
+					for elem in arr:
+						tok = str(elem).strip()
+						if tok:
+							tags_tokens.add(tok)
+			except Exception:
+				continue
+		# Canonicalize tokens (categories + canonical characters only)
+		data["tags"] = _canonicalize_tokens(tags_tokens)
+	except Exception:
+		data["tags"] = []
+	try:
+		return data
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+
+@app.get("/api/mods/{mod_id}/conflicts")
+def get_mod_conflicts(mod_id: int, limit: int = 200) -> List[Dict[str, Any]]:
+	conn = get_db()
+	cur = conn.cursor()
+	rows = cur.execute(
+		"""
+		SELECT asset_path, self_pak, opponents_json
+		FROM v_mod_conflict_assets_active_named
+		WHERE mod_id = ?
+		ORDER BY asset_path, self_pak
+		LIMIT ?
+		""",
+		(mod_id, limit),
+	).fetchall()
+	out: List[Dict[str, Any]] = []
+	for asset_path, self_pak, opponents_json in rows:
+		# Category for the asset
+		cat_row = cur.execute("SELECT category FROM asset_tags WHERE asset_path = ?", (asset_path,)).fetchone()
+		category = cat_row[0] if cat_row else None
+		# Parse opponents
+		try:
+			opponents = json.loads(opponents_json) if opponents_json else []
+		except Exception:
+			opponents = []
+		# Attach icons for opponents
+		enriched: List[Dict[str, Any]] = []
+		for o in opponents:
+			omod_id = o.get("mod_id")
+			icon = None
+			if omod_id is not None:
+				m = cur.execute("SELECT picture_url FROM mods WHERE mod_id = ?", (omod_id,)).fetchone()
+				icon = m[0] if m else None
+			enriched.append({**o, "icon": icon})
+		out.append(
+			{
+				"asset_path": asset_path,
+				"category": category,
+				"self_pak": self_pak,
+				"opponents": enriched,
+			}
+		)
+	try:
+		return out
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+
+@app.get("/api/mods/{mod_id}/files")
+def get_mod_files_endpoint(mod_id: int) -> List[Dict[str, Any]]:
+	conn = get_db()
+	try:
+		files = list_mod_files(conn, mod_id)
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=str(e))
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+	return files
+
+
+@app.get("/api/mods/{mod_id}/changelogs")
+def get_mod_changelogs_endpoint(mod_id: int, response: Response) -> List[Dict[str, Any]]:
+	# Disable caching for dynamic content
+	response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+	response.headers["Pragma"] = "no-cache"
+	response.headers["Expires"] = "0"
+	
+	import logging
+	logger = logging.getLogger("modmanager.api")
+	conn = get_db()
+	try:
+		logs = get_changelogs(conn, mod_id)
+		logger.info(f"[get_mod_changelogs] mod_id={mod_id}, returned {len(logs)} changelogs")
+		if logs:
+			logger.info(f"[get_mod_changelogs] First changelog: version={logs[0].get('version')}, changelog_len={len(logs[0].get('changelog', ''))}")
+	except Exception as e:
+		logger.error(f"[get_mod_changelogs] Error: {e}")
+		raise HTTPException(status_code=500, detail=str(e))
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+	return logs
+
+
+@app.get("/api/downloads")
+def list_downloads(limit: int = 500) -> List[Dict[str, Any]]:
+	"""List local downloads with joined mod info and tags sourced strictly from v_local_downloads_with_tags.
+
+	Returns items like: { id, name, mod_id, version, path, contents[], active_paks[], created_at,
+						  mod_name, mod_author, picture_url, tags: [token,...] }
+	"""
+	import logging
+	logger = logging.getLogger("modmanager.api.downloads")
+	
+	conn = get_db()
+	cur = conn.cursor()
+	
+	# Log table counts for debugging
+	try:
+		dl_count = cur.execute("SELECT COUNT(*) FROM local_downloads").fetchone()[0]
+		logger.info(f"[list_downloads] Found {dl_count} rows in local_downloads table")
+	except Exception as e:
+		logger.warning(f"[list_downloads] Could not count local_downloads: {e}")
+	
+	rows = cur.execute(
+		"""
+		SELECT l.id, l.name, l.mod_id, l.version, l.path, l.contents, l.active_paks, l.created_at,
+		   m.name AS mod_name, m.author AS mod_author, m.picture_url,
+		   m.created_time AS mod_created_time, m.updated_at AS mod_updated_at,
+		   m.mod_downloads, m.endorsement_count,
+		   m.author_profile_url, m.author_member_id,
+		   v.tags_json,
+		   latest.file_version,
+		   latest.latest_uploaded_at,
+		   latest.latest_file_id,
+		   latest.latest_version_key,
+		   latest.file_name
+		FROM local_downloads l
+		LEFT JOIN mods m ON m.mod_id = l.mod_id
+		LEFT JOIN v_local_downloads_with_tags v ON v.download_id = l.id
+		LEFT JOIN v_mods_with_latest_by_version latest ON latest.mod_id = l.mod_id
+		ORDER BY l.created_at DESC
+		LIMIT ?
+		""",
+		(limit,),
+	).fetchall()
+	
+	logger.info(f"[list_downloads] Query returned {len(rows)} rows (limit={limit})")
+	
+	out: List[Dict[str, Any]] = []
+	for (
+		dl_id,
+		name,
+		mod_id,
+		version,
+		path,
+		contents_json,
+		active_json,
+		created_at,
+		mod_name,
+		mod_author,
+		picture_url,
+		mod_created_time,
+		mod_updated_at,
+		mod_downloads,
+		endorsement_count,
+		mod_author_profile_url,
+		mod_author_member_id,
+		view_tags_json,
+		latest_version,
+		latest_uploaded_at,
+		latest_file_id,
+		latest_version_key,
+		latest_file_name,
+	) in rows:
+		# contents / active paks parsing
+		try:
+			contents = json.loads(contents_json) if contents_json else []
+			if not isinstance(contents, list):
+				contents = []
+		except Exception:
+			contents = []
+		try:
+			active_paks = json.loads(active_json) if active_json else []
+			if not isinstance(active_paks, list):
+				active_paks = []
+		except Exception:
+			active_paks = []
+
+		# Tags strictly from the view; no heuristics
+		tags_list: List[str] = []
+		if view_tags_json:
+			try:
+				arr = json.loads(view_tags_json)
+				if isinstance(arr, list):
+					# Flatten elements to strings, optionally split comma-delimited entries
+					flat: List[str] = []
+					for elem in arr:
+						if elem is None:
+							continue
+						s = str(elem).strip()
+						if not s:
+							continue
+						if "," in s:
+							flat.extend([t.strip() for t in s.split(",") if t.strip()])
+						else:
+							flat.append(s)
+					# Deduplicate while preserving order
+					seen: set[str] = set()
+					for t in flat:
+						if t not in seen:
+							seen.add(t)
+							tags_list.append(t)
+			except Exception:
+				tags_list = []
+
+		resolved_member_id = _extract_member_id(mod_author_member_id)
+		avatar_url = _author_avatar_url(resolved_member_id, mod_author_profile_url)
+
+		local_version_key = make_version_key(version)[0]
+		needs_update = False
+		if latest_version_key and local_version_key:
+			needs_update = latest_version_key > local_version_key
+		elif latest_version and (version or "").strip():
+			needs_update = latest_version.strip() != (version or "").strip()
+
+		out.append(
+			{
+				"id": dl_id,
+				"download_id": dl_id,
+				"name": name,
+				"mod_id": mod_id,
+				"version": version,
+				"path": path,
+				"contents": contents,
+				"active_paks": active_paks,
+				"created_at": created_at,
+				"mod_name": mod_name,
+				"mod_author": mod_author,
+				"picture_url": picture_url,
+				"tags": tags_list,
+				"mod_downloads": mod_downloads,
+				"endorsement_count": endorsement_count,
+				"mod_author_profile_url": mod_author_profile_url,
+				"mod_author_member_id": resolved_member_id,
+				"mod_author_avatar_url": avatar_url,
+				"mod_created_time": mod_created_time,
+				"mod_updated_at": mod_updated_at,
+				"latest_version": latest_version,
+				"latest_uploaded_at": latest_uploaded_at,
+				"latest_file_id": latest_file_id,
+				"latest_version_key": latest_version_key,
+				"latest_file_name": latest_file_name,
+				"local_version_key": local_version_key,
+				"needs_update": needs_update,
+			}
+		)
+	
+	logger.info(f"[list_downloads] Returning {len(out)} download entries to client")
+	try:
+		return out
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+
+# --- Activation endpoints ---
+
+def _mods_folder_from_env() -> Path:
+	current = _get_current_settings()
+	root = current.marvel_rivals_root
+	if not root:
+		raise HTTPException(
+			status_code=400,
+			detail="MARVEL_RIVALS_ROOT is not configured. Update core/config/settings.py with your Marvel Rivals installation path.",
+		)
+	mods_dir = root.expanduser() / "MarvelGame/Marvel/Content/Paks/~mods"
+	return mods_dir
+
+
+def _downloads_root_from_env() -> Path:
+	current = _get_current_settings()
+	root = current.marvel_rivals_local_downloads_root or current.marvel_rivals_root
+	if root:
+		return root.expanduser().resolve()
+	return (_ROOT / "downloads").resolve()
+
+
+def _load_nexus_prefs_cached() -> Dict[str, Dict[str, str]]:
+	global _NEXUS_PREFS_CACHE
+	if _NEXUS_PREFS_CACHE is None:
+		try:
+			_NEXUS_PREFS_CACHE = load_prefs()
+		except Exception:
+			_NEXUS_PREFS_CACHE = {}
+	return _NEXUS_PREFS_CACHE
+
+
+def _lookup_mod_id_by_name(conn, name: Optional[str]) -> Optional[int]:
+	if not name:
+		return None
+	cur = conn.cursor()
+	row = cur.execute(
+		"SELECT mod_id FROM mods WHERE name = ? COLLATE NOCASE LIMIT 1",
+		(name.strip(),),
+	).fetchone()
+	if row and row[0]:
+		return int(row[0])
+	row = cur.execute(
+		"SELECT mod_id FROM mods WHERE name LIKE ? COLLATE NOCASE ORDER BY LENGTH(name) ASC LIMIT 1",
+		(f"%{name.strip()}%",),
+	).fetchone()
+	if row and row[0]:
+		return int(row[0])
+	return None
+
+
+def _search_mod_id_remote(name: str, api_key: str, game: str = DEFAULT_GAME) -> Optional[int]:
+	if not name:
+		return None
+	params = urllib.parse.urlencode({"terms": name})
+	url = f"https://api.nexusmods.com/v1/games/{game}/mods.json?{params}"
+	headers = {
+		"apikey": api_key,
+		"User-Agent": "Project_ModManager_Rivals/0.1.0",
+		"Application-Name": "Project_ModManager_Rivals",
+	}
+	req = urllib.request.Request(url, headers=headers, method="GET")
+	try:
+		with urllib.request.urlopen(req, timeout=30) as resp:
+			data = json.loads(resp.read().decode("utf-8"))
+	except Exception:
+		return None
+	if isinstance(data, dict):
+		results = data.get("mods") or data.get("results") or data.get("data")
+	else:
+		results = data
+	if isinstance(results, list):
+		for item in results:
+			if isinstance(item, dict):
+				mid = item.get("mod_id") or item.get("id")
+				if isinstance(mid, int):
+					return mid
+	return None
+
+
+def _sync_mod_metadata(
+	conn,
+	mod_id: Optional[int],
+	mod_name: Optional[str],
+	*,
+	pre_fetched: Optional[Dict[str, Any]] = None,
+	filtered_payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+	result: Dict[str, Any] = {}
+	try:
+		key = get_api_key()
+		if not key and pre_fetched is None:
+			result["metadata_warning"] = "NEXUS_API_KEY not configured; skipped metadata sync"
+			return result
+		resolved_mod_id = mod_id
+		if resolved_mod_id is None:
+			if mod_name:
+				_, parsed_mod_id, _ = parse_mod_filename(mod_name)
+				if parsed_mod_id is not None:
+					resolved_mod_id = parsed_mod_id
+			if resolved_mod_id is None:
+				resolved_mod_id = _lookup_mod_id_by_name(conn, mod_name)
+			if resolved_mod_id is None and mod_name:
+				resolved_mod_id = _search_mod_id_remote(mod_name, key, DEFAULT_GAME)
+		if resolved_mod_id is None:
+			result["metadata_warning"] = "Unable to resolve Nexus mod ID from name"
+			return result
+		prefs = None
+		payload = pre_fetched
+		if payload is None:
+			if not key:
+				result["metadata_warning"] = "Unable to contact Nexus; no metadata payload available"
+				return result
+			payload = collect_all_for_mod(key, DEFAULT_GAME, resolved_mod_id)
+		if filtered_payload is not None:
+			filtered = filtered_payload
+		else:
+			prefs = _load_nexus_prefs_cached()
+			filtered = filter_aggregate_payload(payload, prefs)
+		mod_info_payload = dict(filtered.get("mod_info") or {})
+		desc_text = extract_description_text(filtered.get("description"))
+		if desc_text:
+			mod_info_payload["description"] = desc_text
+		upsert_api_cache(conn, resolved_mod_id, filtered)
+		mod_info_status = int(payload.get("mod_info_status", 0))
+		upsert_mod_info(conn, DEFAULT_GAME, resolved_mod_id, mod_info_status, mod_info_payload)
+		replace_mod_files(conn, resolved_mod_id, filtered.get("files"))
+		changelogs_payload = filtered.get("changelogs") or {}
+		if not changelogs_payload or (
+			isinstance(changelogs_payload, dict) and not changelogs_payload.get("changelogs")
+		):
+			changelogs_payload = derive_changelogs_from_files(filtered.get("files"))
+		replace_mod_changelogs(conn, resolved_mod_id, changelogs_payload)
+		result["synced_mod_id"] = resolved_mod_id
+		return result
+	except Exception as e:
+		result["metadata_warning"] = f"Metadata sync failed: {e}"
+		return result
+
+
+def _extract_archive_assets(
+	archive_path: Path,
+	*,
+	repak_bin: Optional[str] = None,
+	aes_key: Optional[str] = None,
+) -> tuple[List[str], Dict[str, List[str]]]:
+	tmpdir_obj = tempfile.TemporaryDirectory(prefix="addmod_extract_")
+	tmpdir = Path(tmpdir_obj.name)
+	try:
+		entries = extract_archive(str(archive_path), str(tmpdir))
+		contents: List[str] = []
+		seen: set[str] = set()
+		for rel in entries:
+			base = os.path.basename(rel)
+			if not base:
+				continue
+			ext = Path(base).suffix.lower()
+			if ext in _ARCHIVE_UE_EXTS and base.lower() not in seen:
+				seen.add(base.lower())
+				contents.append(base)
+		pak_map = extract_pak_asset_map_from_folder(str(tmpdir), repak_bin=repak_bin, aes_key=aes_key)
+		return contents, pak_map
+	finally:
+		tmpdir_obj.cleanup()
+
+
+def _looks_like_url(value: str) -> bool:
+	return value.lower().startswith(("http://", "https://"))
+
+
+def _safe_filename(name: str) -> str:
+	base = os.path.basename(name or "").strip()
+	if not base:
+		return ""
+	stem, ext = os.path.splitext(base)
+	stem = re.sub(r"[^A-Za-z0-9._-]", "_", stem)
+	stem = re.sub(r"_+", "_", stem).strip("._") or "mod"
+	clean_ext = "".join(ch for ch in ext if ch.isalnum())
+	ext_part = f".{clean_ext}" if clean_ext else ""
+	return f"{stem}{ext_part}"
+
+
+def _unique_destination(directory: Path, filename: str) -> Path:
+	"""Return a deterministic destination under ``directory`` without suffixing.
+
+	If the target already exists we reuse the same path, allowing callers to decide
+	whether to overwrite or short-circuit when a duplicate is detected.
+	"""
+	return directory / filename
+
+
+def _allow_direct_api_downloads() -> bool:
+	current = _get_current_settings()
+	return current.allow_direct_api_downloads
+
+
+def _nxm_required_detail(
+	mod_id: int,
+	file_id: int,
+	*,
+	mod_name: Optional[str],
+	latest_version: Optional[str],
+	uploaded_at: Optional[Any],
+) -> Dict[str, Any]:
+	nxm_uri = f"nxm://{DEFAULT_GAME}/mods/{mod_id}/files/{file_id}"
+	detail: Dict[str, Any] = {
+		"requires_nxm_handoff": True,
+		"message": (
+			"Nexus Mods requires a browser-initiated handoff for this download. "
+			"Click 'Mod Manager Download' on the Nexus Mods file page to continue."
+		),
+		"nxm_uri": nxm_uri,
+		"game": DEFAULT_GAME,
+		"mod_id": mod_id,
+		"file_id": file_id,
+	}
+	if mod_name:
+		detail["mod_name"] = mod_name
+	if latest_version:
+		detail["latest_version"] = latest_version
+	if uploaded_at:
+		detail["latest_uploaded_at"] = uploaded_at
+	return detail
+
+
+def _download_remote_archive(url: str, *, force: bool = False) -> Path:
+	downloads_root = _downloads_root_from_env()
+	_ensure_dir(downloads_root)
+	parsed = urllib.parse.urlparse(url)
+	unquoted_path = urllib.parse.unquote(parsed.path or "")
+	filename_guess = Path(unquoted_path or "download").name or "download"
+	# Nexus CDN occasionally returns URLs with literal spaces or control characters in the path
+	# (for example, when file names contain spaces). Normalize the path component so urllib
+	# does not reject the request, while keeping already-encoded characters intact.
+	sanitized_path = urllib.parse.quote(unquoted_path, safe="/%:@&=+$,;.-_~!'()*")
+	if sanitized_path != parsed.path:
+		url = urllib.parse.urlunparse(
+			(
+				parsed.scheme,
+				parsed.netloc,
+				sanitized_path,
+				parsed.params,
+				parsed.query,
+				parsed.fragment,
+			)
+		)
+		parsed = urllib.parse.urlparse(url)
+	safe_name = _safe_filename(filename_guess) or "download"
+	dest = _unique_destination(downloads_root, safe_name)
+	if dest.exists():
+		if force:
+			base_stem = dest.stem
+			suffix = dest.suffix
+			counter = 1
+			while True:
+				candidate = dest.with_name(f"{base_stem}-{counter}{suffix}")
+				if not candidate.exists():
+					dest = candidate
+					break
+				counter += 1
+		else:
+			return dest.resolve()
+	req = urllib.request.Request(url, headers={"User-Agent": "MarvelRivalsModManager/0.1"})
+	try:
+		with urllib.request.urlopen(req, timeout=120) as response, dest.open("wb") as out:
+			shutil.copyfileobj(response, out)
+	except Exception as e:
+		if dest.exists():
+			try:
+				dest.unlink()
+			except Exception:
+				pass
+		raise HTTPException(status_code=400, detail=f"Failed to download {url}: {e}")
+	try:
+		if dest.stat().st_size <= 0:
+			dest.unlink(missing_ok=True)
+			raise HTTPException(status_code=400, detail=f"Downloaded file was empty: {url}")
+	except FileNotFoundError:
+		raise HTTPException(status_code=400, detail=f"Downloaded file missing after fetch: {url}")
+	return dest.resolve()
+
+
+def _resolve_nexus_download_candidates(
+	record: Dict[str, Any],
+	game_domain: str,
+	file_id: int,
+) -> List[Tuple[str, Optional[str]]]:
+	request_data = record.get("request", {}) if isinstance(record, dict) else {}
+	metadata = record.get("metadata", {}) if isinstance(record.get("metadata"), dict) else {}
+	mod_id = request_data.get("mod_id")
+	if not isinstance(mod_id, int):
+		mod_id = metadata.get("mod_id") if isinstance(metadata.get("mod_id"), int) else None
+	if not isinstance(mod_id, int):
+		raise HTTPException(status_code=400, detail="nxm handoff missing mod id; please click Mod Manager Download again")
+	query = request_data.get("query") if isinstance(request_data.get("query"), dict) else {}
+	key = str(query.get("key") or metadata.get("key") or "").strip()
+	expires = str(query.get("expires") or metadata.get("expires") or "").strip()
+	user_id = str(query.get("user_id") or "").strip()
+	if not key or not expires:
+		raise HTTPException(
+			status_code=400,
+			detail="nxm handoff missing download authorization; please click Mod Manager Download again",
+		)
+	domain = (game_domain or DEFAULT_GAME or "marvelrivals").strip().lower() or DEFAULT_GAME
+	params = {"key": key, "expires": expires}
+	if user_id:
+		params["user_id"] = user_id
+	api_query = urllib.parse.urlencode(params)
+	api_url = (
+		f"https://api.nexusmods.com/v1/games/{domain}/mods/{mod_id}/files/{file_id}/download_link.json"
+	)
+	if api_query:
+		api_url = f"{api_url}?{api_query}"
+	headers = {
+		"User-Agent": "MarvelRivalsModManager/0.1",
+		"Accept": "application/json",
+	}
+	api_key = get_api_key()
+	if api_key:
+		headers["apikey"] = api_key
+		headers["Application-Name"] = "MarvelRivalsModManager"
+		headers["Application-Version"] = "0.1.0"
+	req = urllib.request.Request(api_url, headers=headers, method="GET")
+	try:
+		with urllib.request.urlopen(req, timeout=30) as resp:
+			status = resp.getcode() or 0
+			raw = resp.read()
+	except urllib.error.HTTPError as exc:
+		body = None
+		try:
+			body = exc.read().decode("utf-8", errors="replace")
+		except Exception:
+			pass
+		detail = body or exc.reason or str(exc)
+		if exc.code in (401, 403):
+			raise HTTPException(
+				status_code=exc.code,
+				detail=(
+					"Nexus download link request was denied ("
+					f"{exc.code}). Ensure you're logged into Nexus Mods in your browser and click Mod Manager Download again. "
+					"If the issue persists, configure a Nexus API key. "
+					f"Details: {detail}"
+				),
+			)
+		raise HTTPException(status_code=exc.code or 502, detail=f"Nexus download link request failed ({exc.code}): {detail}")
+	except urllib.error.URLError as exc:
+		reason = exc.reason
+		host = urllib.parse.urlparse(api_url).netloc
+		raise HTTPException(
+			status_code=502,
+			detail=f"Unable to reach Nexus download link API at {host}: {reason}",
+		)
+	if status != 200:
+		raise HTTPException(status_code=502, detail=f"Unexpected response {status} from Nexus download link API")
+	if not raw:
+		raise HTTPException(status_code=502, detail="Nexus download link API returned an empty payload")
+	try:
+		payload = json.loads(raw.decode("utf-8"))
+	except json.JSONDecodeError as exc:
+		raise HTTPException(status_code=502, detail=f"Failed to parse Nexus download link JSON: {exc}")
+	if isinstance(payload, dict):
+		error_detail = None
+		if payload.get("error"):
+			error_detail = payload.get("message") or payload.get("detail") or payload.get("error")
+		elif payload.get("errors"):
+			error_detail = payload.get("errors")
+		if error_detail:
+			error_text = error_detail if isinstance(error_detail, str) else str(error_detail)
+			raise HTTPException(status_code=502, detail=f"Nexus download link API error: {error_text}")
+	candidates: List[Tuple[str, Optional[str]]] = []
+	iterable: List[Any]
+	if isinstance(payload, list):
+		iterable = payload
+	else:
+		iterable = [payload]
+	for entry in iterable:
+		uri = _extract_download_uri(entry)
+		if uri:
+			label: Optional[str] = None
+			if isinstance(entry, dict):
+				label_val = entry.get("short_name") or entry.get("name") or entry.get("cdn") or entry.get("label")
+				if isinstance(label_val, str) and label_val.strip():
+					label = label_val.strip()
+			candidates.append((uri, label))
+	if not candidates:
+		raise HTTPException(status_code=502, detail="Nexus download link API did not return any usable URLs")
+	return candidates
+
+
+def _download_archive_via_nxm(
+	record: Dict[str, Any],
+	game_domain: str,
+	file_id: int,
+) -> Tuple[Path, str]:
+	download_errors: List[str] = []
+	candidates = _resolve_nexus_download_candidates(record, game_domain, file_id)
+	for download_url, label in candidates:
+		host = urllib.parse.urlparse(download_url).netloc
+		logger.info(
+			"[nxm_handoff] attempting Nexus CDN download host=%s label=%s file_id=%s",
+			host,
+			label or "",
+			file_id,
+		)
+		try:
+			download_path = _download_remote_archive(download_url, force=True)
+			logger.info(
+				"[nxm_handoff] download succeeded host=%s saved_as=%s",
+				host,
+				download_path.name,
+			)
+			return download_path, download_url
+		except HTTPException as exc:
+			detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+			download_errors.append(detail)
+			logger.warning("[nxm_handoff] download attempt failed url=%s detail=%s", download_url, detail)
+		except Exception as exc:
+			download_errors.append(str(exc))
+			logger.warning("[nxm_handoff] download attempt failed url=%s detail=%s", download_url, exc)
+	message = "; ".join(download_errors) if download_errors else "unknown error"
+	raise HTTPException(status_code=502, detail=f"Failed to download from Nexus CDN: {message}")
+
+
+def _to_folder_name(tag: str) -> str:
+	"""Convert a canonical character tag to a safe folder name (snake case)."""
+	s = str(tag).lower()
+	# Replace separators and special chars with underscores
+	s = re.sub(r"[^a-z0-9]+", "_", s)
+	# Collapse repeats and trim underscores
+	s = re.sub(r"_+", "_", s).strip("_")
+	return s or "misc"
+
+
+def _infer_character_tag(cur, name: Optional[str], pak_candidates: List[str]) -> Optional[str]:
+	"""Infer a canonical character tag for a download using pak_tags_json; fallback to name heuristics.
+	Returns a canonical character name if found, otherwise None.
+	"""
+	# Aggregate tags for all candidate pak names from pak_tags_json
+	tokens: set[str] = set()
+	for pak in pak_candidates:
+		if not pak:
+			continue
+		tr = cur.execute("SELECT tags_json FROM pak_tags_json WHERE pak_name = ?", (pak,)).fetchone()
+		if (not tr or not tr[0]) and "." in pak:
+			stem = os.path.splitext(pak)[0]
+			for alt in (f"{stem}.utoc", f"{stem}.pak"):
+				tr = cur.execute("SELECT tags_json FROM pak_tags_json WHERE pak_name = ?", (alt,)).fetchone()
+				if tr and tr[0]:
+					break
+		if tr and tr[0]:
+			try:
+				arr = json.loads(tr[0])
+				if isinstance(arr, list) and arr:
+					for elem in arr:
+						for t in str(elem).split(","):
+							tok = t.strip()
+							if tok:
+								tokens.add(tok)
+				else:
+					for t in str(arr).split(","):
+						tok = t.strip()
+						if tok:
+							tokens.add(tok)
+			except Exception:
+				pass
+	# Fallback heuristics using name and candidate filenames
+	if not tokens:
+		try:
+			canon = _load_canonical_names()
+			text_parts = [name or ""] + list(pak_candidates)
+			joined = " ".join([t for t in text_parts if isinstance(t, str)])
+			spaced, compact = _normalize(joined)
+			for cname in canon:
+				cs, cc = _normalize(cname)
+				if cs and (cs in spaced or cc in compact):
+					tokens.add(cname)
+		except Exception:
+			pass
+	# Canonicalize and pick first non-category token
+	canon = _canonicalize_tokens(tokens)
+	for t in canon:
+		if t not in _KNOWN_CATEGORIES:
+			return t
+	return None
+
+
+def _resolve_download_source_path(identifier: str) -> str:
+	"""Resolve a local download source path from either a path-like string or a local_downloads.name.
+
+	- If 'identifier' is an existing path (absolute or relative), return it.
+	- Else, if it looks like an absolute path but doesn't exist, return as-is (to aid debugging).
+	- Else, attempt to treat it as a local_downloads.name and fetch its 'path' from DB.
+	- Finally, resolve any non-absolute file path relative to downloads root (MARVEL_RIVALS_LOCAL_DOWNLOADS_ROOT).
+	"""
+	try:
+		p = Path(identifier)
+		if p.exists():
+			return str(p.resolve())
+		if p.is_absolute():
+			# Absolute but missing, return as-is
+			return str(p)
+	except Exception:
+		pass
+	# Try DB lookup by name
+	try:
+		conn = get_db()
+		cur = conn.cursor()
+		row = cur.execute(
+			"SELECT path FROM local_downloads WHERE name = ? ORDER BY id DESC LIMIT 1",
+			(identifier,),
+		).fetchone()
+		if row and row[0]:
+			candidate = row[0]
+			cp = Path(candidate)
+			if cp.exists():
+				return str(cp.resolve())
+			# join with downloads root when relative
+			if not cp.is_absolute():
+				return str((_downloads_root_from_env() / cp).resolve())
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+	# Fallback: treat identifier as relative path under downloads root
+	return str((_downloads_root_from_env() / identifier).resolve())
+
+
+def _ensure_dir(p: Path) -> None:
+	try:
+		p.mkdir(parents=True, exist_ok=True)
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=f"Failed to create directory {p}: {e}")
+
+
+## zip member extraction helper removed (use core.utils.archive.extract_member)
+
+
+def _remove_in_mods_by_names(mods_dir: Path, names: List[str]) -> List[str]:
+	"""Remove any files in mods_dir (recursively) whose basename is in names (case-insensitive)."""
+	names_lower = {str(n).lower() for n in names if isinstance(n, str) and n}
+	removed: List[str] = []
+	try:
+		for p in mods_dir.rglob("*"):
+			if p.is_file() and p.name.lower() in names_lower:
+				try:
+					p.unlink()
+					removed.append(p.name)
+				except Exception:
+					pass
+	except Exception:
+		pass
+	return removed
+
+
+def _remove_in_mods_by_stems(mods_dir: Path, stems: List[str]) -> List[str]:
+	"""Remove any files in mods_dir (recursively) with basename matching stem + (.pak|.utoc|.ucas)."""
+	targets = set()
+	for st in stems:
+		if not st:
+			continue
+		for ext in (".pak", ".utoc", ".ucas"):
+			targets.add(f"{st}{ext}".lower())
+	removed: List[str] = []
+	try:
+		for p in mods_dir.rglob("*"):
+			if p.is_file() and p.name.lower() in targets:
+				try:
+					p.unlink()
+					removed.append(p.name)
+				except Exception:
+					pass
+	except Exception:
+		pass
+	return removed
+
+
+@app.post("/api/local_downloads/delete")
+def delete_local_downloads_endpoint(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+	"""Remove one or more local_downloads rows and cascade associated data."""
+	if not isinstance(payload, dict):
+		raise HTTPException(status_code=400, detail="JSON body required")
+	ids_raw = payload.get("download_ids") or payload.get("ids") or []
+	if ids_raw and not isinstance(ids_raw, list):
+		raise HTTPException(status_code=400, detail="download_ids must be an array of integers")
+	id_values: List[int] = []
+	for raw in ids_raw:
+		try:
+			value = int(raw)
+		except (TypeError, ValueError):
+			continue
+		if value < 0:
+			continue
+		if value not in id_values:
+			id_values.append(value)
+	mod_id_val = payload.get("mod_id")
+	try:
+		mod_id_int = int(mod_id_val) if mod_id_val is not None else None
+	except (TypeError, ValueError):
+		mod_id_int = None
+	conn = get_db()
+	try:
+		if not id_values and mod_id_int is not None:
+			cur = conn.cursor()
+			rows = cur.execute(
+				"SELECT id FROM local_downloads WHERE mod_id = ?",
+				(mod_id_int,),
+			).fetchall()
+			id_values = [int(r[0]) for r in rows]
+		if not id_values:
+			return {"ok": True, "deleted": 0, "removed_mod_ids": []}
+		deleted_count, removed_mod_ids, source_paths = delete_local_downloads(conn, id_values)
+		downloads_root = _downloads_root_from_env().resolve()
+		removed_files: List[str] = []
+		missing_files: List[str] = []
+		failed_files: List[str] = []
+		seen_paths: set[str] = set()
+		for raw_path in source_paths:
+			if not raw_path or not isinstance(raw_path, str):
+				continue
+			key = raw_path.strip()
+			if not key or key in seen_paths:
+				continue
+			seen_paths.add(key)
+			try:
+				absolute = Path(_resolve_download_source_path(key))
+			except Exception:
+				continue
+			try:
+				resolved = absolute.expanduser().resolve()
+			except Exception:
+				resolved = absolute.expanduser()
+			if resolved == downloads_root:
+				continue
+			try:
+				if not resolved.is_relative_to(downloads_root):
+					continue
+			except AttributeError:
+				# Python < 3.9 compatibility fallback
+				try:
+					resolved.relative_to(downloads_root)
+				except Exception:
+					continue
+			if not resolved.exists():
+				missing_files.append(str(resolved))
+				continue
+			try:
+				if resolved.is_dir():
+					shutil.rmtree(resolved)
+				else:
+					resolved.unlink()
+				removed_files.append(str(resolved))
+			except Exception:
+				failed_files.append(str(resolved))
+		try:
+			from scripts import build_asset_tags as _bat  # type: ignore
+			from scripts import build_pak_tags as _bpt  # type: ignore
+			_bat.main([])
+			_bpt.main([])
+		except Exception:
+			pass
+		try:
+			rebuild_conflicts(conn, active_only=None)
+		except Exception:
+			pass
+		return {
+			"ok": True,
+			"deleted": deleted_count,
+			"removed_mod_ids": removed_mod_ids,
+			"removed_files": removed_files,
+			"missing_files": missing_files,
+			"failed_files": failed_files,
+		}
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+
+@app.post("/api/local_downloads/{download_id}/set-active")
+def set_active_paks(download_id: int, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+	"""Set the active pak list for a local_downloads row and mirror files into the game's ~mods folder.
+
+	Body: { active_paks: ["SomePak_P.pak", ...] }
+	- Copies requested paks from the local download source (.zip/.pak) into the ~mods folder.
+	- Removes previously active paks for this download that are no longer requested.
+	- Updates SQLite (active_paks plus last_activated/last_deactivated timestamps).
+	"""
+	req_active = payload.get("active_paks")
+	if not isinstance(req_active, list):
+		raise HTTPException(status_code=400, detail="active_paks must be an array of strings")
+	desired: List[str] = []
+	for x in req_active:
+		if isinstance(x, str) and x.strip():
+			desired.append(os.path.basename(x.strip()))
+	# Load current row
+	conn = get_db()
+	cur = conn.cursor()
+	row = cur.execute(
+		"SELECT path, contents, active_paks, mod_id, name FROM local_downloads WHERE id = ?",
+		(download_id,),
+	).fetchone()
+	if not row:
+		try:
+			conn.close()
+		except Exception:
+			pass
+		raise HTTPException(status_code=404, detail="local_downloads row not found")
+	src_path, contents_json, prev_active_json, row_mod_id, row_name = row
+	
+	# DIAGNOSTIC: Log what we read from database
+	print(f"[ACTIVATE] Download ID {download_id}: name={row_name}")
+	print(f"[ACTIVATE] contents_json length: {len(contents_json) if contents_json else 0}")
+	print(f"[ACTIVATE] contents_json preview: {contents_json[:200] if contents_json else 'NULL'}")
+	
+	try:
+		contents = json.loads(contents_json) if contents_json else []
+		if not isinstance(contents, list):
+			contents = []
+	except Exception:
+		contents = []
+	try:
+		prev_active = json.loads(prev_active_json) if prev_active_json else []
+		if not isinstance(prev_active, list):
+			prev_active = []
+	except Exception:
+		prev_active = []
+	try:
+		mod_id_for_download = int(row_mod_id) if row_mod_id is not None else None
+	except (TypeError, ValueError):
+		mod_id_for_download = None
+	download_name = row_name if isinstance(row_name, str) else None
+	related_contents: List[str] = []
+	related_active: List[str] = []
+	related_map: Dict[int, Tuple[List[str], List[str]]] = {}
+
+	def _collect_related(rows: Iterable[Tuple[Any, Any, Any]]) -> None:
+		nonlocal related_contents, related_active, related_map
+		for other_id_raw, contents_raw, active_raw in rows:
+			other_contents: List[str] = []
+			other_active: List[str] = []
+			try:
+				loaded_contents = json.loads(contents_raw) if contents_raw else []
+				if isinstance(loaded_contents, list):
+					other_contents = [str(x) for x in loaded_contents if isinstance(x, str)]
+			except Exception:
+				other_contents = []
+			try:
+				loaded_active = json.loads(active_raw) if active_raw else []
+				if isinstance(loaded_active, list):
+					other_active = [str(x) for x in loaded_active if isinstance(x, str)]
+			except Exception:
+				other_active = []
+			try:
+				other_id = int(other_id_raw)
+			except Exception:
+				continue
+			if other_id == download_id or other_id in related_map:
+				continue
+			related_map[other_id] = (other_contents, other_active)
+			related_contents.extend(other_contents)
+			related_active.extend(other_active)
+
+	if mod_id_for_download is not None:
+		try:
+			related_rows = cur.execute(
+				"SELECT id, contents, active_paks FROM local_downloads WHERE mod_id = ? AND id != ?",
+				(mod_id_for_download, download_id),
+			).fetchall()
+			_collect_related(related_rows)
+		except Exception:
+			pass
+	try:
+		normalized_name = str(download_name).strip() if download_name else ""
+		if normalized_name:
+			name_rows = cur.execute(
+				"SELECT id, contents, active_paks FROM local_downloads WHERE id != ? AND name = ? COLLATE NOCASE",
+				(download_id, normalized_name),
+			).fetchall()
+			_collect_related(name_rows)
+	except Exception:
+		pass
+	# Validate desired names against contents, case-insensitive, with .pak/.utoc stem fallback
+	valid_names = [os.path.basename(c) for c in contents if isinstance(c, str) and c]
+	valid_lower = {v.lower() for v in valid_names}
+	def _alt_ext(name: str) -> List[str]:
+		try:
+			stem, ext = os.path.splitext(name)
+			if ext.lower() == ".pak":
+				return [name, f"{stem}.utoc"]
+			if ext.lower() == ".utoc":
+				return [name, f"{stem}.pak"]
+			return [name]
+		except Exception:
+			return [name]
+	desired_effective: List[str] = []
+	for d in desired:
+		dl = d.lower()
+		if dl in valid_lower:
+			# use the original casing from contents if present
+			match = next((v for v in valid_names if v.lower() == dl), d)
+			desired_effective.append(match)
+			continue
+		# try alt extension
+		alts = _alt_ext(d)
+		found = None
+		for a in alts:
+			if a.lower() in valid_lower:
+				found = next((v for v in valid_names if v.lower() == a.lower()), a)
+				break
+		if found:
+			desired_effective.append(found)
+			continue
+		try:
+			conn.close()
+		except Exception:
+			pass
+		raise HTTPException(status_code=400, detail=f"Requested pak '{d}' is not part of this download's contents")
+	# Use normalized desired list going forward
+	desired = desired_effective
+
+	candidate_paks: Set[str] = set()
+	for name in contents + prev_active + desired:
+		if not isinstance(name, str):
+			continue
+		base = os.path.basename(name)
+		if base:
+			candidate_paks.add(base.lower())
+	if candidate_paks:
+		try:
+			ordered = sorted(candidate_paks)
+			placeholders = ",".join("?" for _ in ordered)
+			params: List[Any] = [download_id, *ordered]
+			shared_rows = cur.execute(
+				f"""
+				SELECT DISTINCT l.id, l.contents, l.active_paks
+				FROM local_downloads l
+				JOIN json_each(l.contents) AS c ON 1
+				WHERE l.id != ?
+				  AND LOWER(COALESCE(c.value, '')) IN ({placeholders})
+				""",
+				tuple(params),
+			).fetchall()
+			_collect_related(shared_rows)
+		except Exception:
+			pass
+
+	related_downloads: List[Tuple[int, List[str], List[str]]] = [
+		(other_id, data[0], data[1]) for other_id, data in related_map.items()
+	]
+
+	# Ensure ~mods exists
+	mods_dir = _mods_folder_from_env()
+	_ensure_dir(mods_dir)
+
+	# Determine target subfolder by inferred character tag from DB tags/heuristics
+	char_folder: Optional[Path] = None
+	try:
+		# candidate paks from contents desired list
+		candidate_paks = [p for p in desired if isinstance(p, str)]
+		tag = _infer_character_tag(cur, name=download_name, pak_candidates=candidate_paks)
+		if tag:
+			char_folder = mods_dir / _to_folder_name(tag)
+			_ensure_dir(char_folder)
+	except Exception:
+		char_folder = None
+	# Fallback: reuse previous active tag mapping if current files are new
+	if char_folder is None and prev_active:
+		try:
+			prev_candidates = [p for p in prev_active if isinstance(p, str)]
+			alt_tag = _infer_character_tag(cur, name=download_name, pak_candidates=prev_candidates)
+			if alt_tag:
+				char_folder = mods_dir / _to_folder_name(alt_tag)
+				_ensure_dir(char_folder)
+		except Exception:
+			pass
+	# Fallback: consider other downloads for this mod to infer a shared folder
+	if char_folder is None and related_active:
+		try:
+			alt_tag = _infer_character_tag(cur, name=download_name, pak_candidates=related_active)
+			if alt_tag:
+				char_folder = mods_dir / _to_folder_name(alt_tag)
+				_ensure_dir(char_folder)
+		except Exception:
+			pass
+	if char_folder is None and not related_active and related_contents:
+		try:
+			alt_tag = _infer_character_tag(cur, name=download_name, pak_candidates=related_contents)
+			if alt_tag:
+				char_folder = mods_dir / _to_folder_name(alt_tag)
+				_ensure_dir(char_folder)
+		except Exception:
+			pass
+	# Last resort: locate existing destination of prior files within ~mods and reuse its parent folder
+	if char_folder is None:
+		extra_names = [p for p in related_active + related_contents if isinstance(p, str)]
+		search_names = [p for p in desired + prev_active + extra_names if isinstance(p, str)]
+		seen_lower: set[str] = set()
+		for name in search_names:
+			base = os.path.basename(name)
+			if not base:
+				continue
+			lower = base.lower()
+			if lower in seen_lower:
+				continue
+			seen_lower.add(lower)
+			try:
+				candidate_path: Optional[Path] = None
+				for found in mods_dir.rglob(base):
+					if not found.is_file():
+						continue
+					parent = found.parent
+					try:
+						parent.relative_to(mods_dir)
+					except Exception:
+						continue
+					candidate_path = parent
+					break
+			except Exception:
+				candidate_path = None
+			if candidate_path is not None:
+				char_folder = candidate_path
+				break
+	if char_folder is not None:
+		try:
+			_ensure_dir(char_folder)
+		except HTTPException:
+			raise
+		except Exception:
+			char_folder = None
+
+	# Resolve source path: handle relative DB paths (resolve under MARVEL_RIVALS_MODS_ROOT) and names
+	src_path = _resolve_download_source_path(str(src_path or ""))
+	src_lower = src_path.lower()
+	is_zip = src_lower.endswith('.zip')
+	is_pak = src_lower.endswith('.pak')
+	is_rar = src_lower.endswith('.rar')
+	is_7z = src_lower.endswith('.7z')
+	is_folder = os.path.isdir(src_path)
+
+	if not os.path.exists(src_path):
+		try:
+			conn.close()
+		except Exception:
+			pass
+		raise HTTPException(status_code=404, detail=f"Source archive not found: {src_path}")
+
+	# Activate: copy requested paks and their IoStore companions (.utoc, .ucas) if present
+	copied: List[str] = []
+	companions: List[str] = []
+	applied_set: set[str] = set()
+	if is_zip or is_rar or is_7z:
+		try:
+			entries = list_entries(src_path)
+			lookup = build_entry_lookup(entries)
+			for item in desired:
+				stem, _ext = os.path.splitext(item)
+				# For each stem, try to extract .pak, .utoc, .ucas if present
+				for ext in (".pak", ".utoc", ".ucas"):
+					fname = f"{stem}{ext}"
+					entry = resolve_entry(lookup, fname)
+					if not entry:
+						continue
+					dest_base = char_folder if char_folder else mods_dir
+					dest = dest_base / fname
+					if dest.exists():
+						try:
+							dest.unlink()
+						except Exception:
+							pass
+					extract_member(src_path, entry, str(dest))
+					applied_set.add(fname)
+					if fname.lower() == item.lower():
+						copied.append(fname)
+					else:
+						companions.append(fname)
+		except HTTPException:
+			raise
+		except Exception as e:
+			raise HTTPException(status_code=500, detail=f"Archive extract failed: {e}")
+	elif is_pak:
+		# Single pak source; also copy sibling .utoc/.ucas if present alongside
+		base = os.path.basename(src_path)
+		if base in desired:
+			dest_base = char_folder if char_folder else mods_dir
+			dest = dest_base / base
+			try:
+				if dest.exists():
+					dest.unlink()
+				shutil.copy2(src_path, dest)
+			except Exception as e:
+				raise HTTPException(status_code=500, detail=f"Copy failed: {e}")
+			copied.append(base)
+			applied_set.add(base)
+			# Try siblings for IoStore
+			stem, _ = os.path.splitext(base)
+			for ext in (".utoc", ".ucas"):
+				cand = Path(src_path).with_suffix(ext)
+				if cand.exists():
+					dest_base = char_folder if char_folder else mods_dir
+					d = dest_base / cand.name
+					try:
+						if d.exists():
+							d.unlink()
+						shutil.copy2(str(cand), d)
+					except Exception as e:
+						raise HTTPException(status_code=500, detail=f"Copy failed: {e}")
+					companions.append(cand.name)
+					applied_set.add(cand.name)
+	elif is_folder:
+		# Folder source: copy files directly from folder
+		src_folder = Path(src_path)
+		try:
+			for item in desired:
+				stem, _ext = os.path.splitext(item)
+				# For each stem, try to copy .pak, .utoc, .ucas if present
+				for ext in (".pak", ".utoc", ".ucas"):
+					fname = f"{stem}{ext}"
+					src_file = src_folder / fname
+					if not src_file.exists():
+						continue
+					dest_base = char_folder if char_folder else mods_dir
+					dest = dest_base / fname
+					try:
+						if dest.exists():
+							dest.unlink()
+						shutil.copy2(str(src_file), str(dest))
+					except Exception as e:
+						raise HTTPException(status_code=500, detail=f"Copy failed: {e}")
+					applied_set.add(fname)
+					if fname.lower() == item.lower():
+						copied.append(fname)
+					else:
+						companions.append(fname)
+		except HTTPException:
+			raise
+		except Exception as e:
+			raise HTTPException(status_code=500, detail=f"Folder copy failed: {e}")
+	else:
+		# For unknown sources, cannot auto-apply
+		raise HTTPException(status_code=400, detail="Unsupported source type for auto-apply. Use .zip/.rar/.7z/.pak or folder containing .pak files.")
+
+	# If nothing was newly extracted but files already existed, ensure they are considered applied
+	if not applied_set and (is_zip or is_rar or is_7z):
+		# Consider already-present main requested items as applied
+		for item in desired:
+			stem, _ = os.path.splitext(item)
+			for ext in (".pak", ".utoc", ".ucas"):
+				fname = f"{stem}{ext}"
+				if (mods_dir / fname).exists():
+					applied_set.add(fname)
+
+	# Build the final applied list (desired + companions we handled)
+	applied: List[str] = sorted({*desired, *applied_set})
+
+	# Deactivate: remove files no longer desired (best-effort)
+	to_remove = [p for p in prev_active if p not in applied]
+	removed: List[str] = []
+	# Try direct files and recursive by basenames
+	for pak in to_remove:
+		fp = mods_dir / pak
+		try:
+			if fp.exists():
+				fp.unlink()
+				removed.append(pak)
+		except Exception:
+			pass
+	# Also try recursive removal by names (handles pre-existing files in subfolders)
+	removed += _remove_in_mods_by_names(mods_dir, to_remove)
+
+	# Additionally, ensure IoStore companions are removed by stem when a pak gets deactivated
+	def _stem_of(fname: str) -> Optional[str]:
+		try:
+			st, ext = os.path.splitext(fname)
+			if ext.lower() in (".pak", ".utoc", ".ucas"):
+				return st
+			return None
+		except Exception:
+			return None
+	prev_stems = {s for s in (_stem_of(x) for x in prev_active) if s}
+	applied_stems = {s for s in (_stem_of(x) for x in applied) if s}
+	stems_to_remove = prev_stems - applied_stems
+	# Remove companions by stems in any subfolder
+	removed += _remove_in_mods_by_stems(mods_dir, list(stems_to_remove))
+
+	# Persist new active list
+	try:
+		update_local_download_active_paks(conn, download_id, applied)
+		if related_downloads:
+			applied_lower = {os.path.basename(name).lower() for name in applied}
+			for other_id, _other_contents, other_active in related_downloads:
+				if not other_active:
+					continue
+				filtered_active: List[str] = []
+				changed = False
+				for name in other_active:
+					base = os.path.basename(name)
+					if base.lower() in applied_lower:
+						changed = True
+						continue
+					filtered_active.append(name)
+				if changed:
+					update_local_download_active_paks(conn, other_id, filtered_active)
+	except Exception as e:
+		try:
+			conn.close()
+		except Exception:
+			pass
+		raise HTTPException(status_code=500, detail=f"DB update failed: {e}")
+
+	# Sync DB with on-disk state and refresh conflicts
+	try:
+		scan_active_main(_get_scan_active_args())
+	except Exception:
+		pass
+	try:
+		rebuild_conflicts(conn, active_only=1)
+	except Exception:
+		pass
+	try:
+		conn.close()
+	except Exception:
+		pass
+	return {
+		"ok": True,
+		"download_id": download_id,
+		"active_paks": applied,
+		"copied": copied,
+		"removed": removed,
+		"mods_dir": str(mods_dir),
+	}
+
+
+@app.post("/api/local_downloads/activate-by-name")
+def activate_by_name(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+	"""Activate all pak files for the given local_download name by extracting its archive to ~mods.
+
+	Body: { name: string }
+	"""
+	name = payload.get("name")
+	if not name or not isinstance(name, str):
+		raise HTTPException(status_code=400, detail="name is required")
+	conn = get_db()
+	cur = conn.cursor()
+	row = cur.execute(
+		"SELECT id, path, contents FROM local_downloads WHERE name = ? ORDER BY id DESC LIMIT 1",
+		(name,),
+	).fetchone()
+	if not row:
+		try:
+			conn.close()
+		except Exception:
+			pass
+		raise HTTPException(status_code=404, detail="local_download not found by name")
+	dl_id, rel_path, contents_json = row
+	# Resolve full path using helper; supports absolute, relative, or name lookup
+	full_path = _resolve_download_source_path(str(rel_path or name))
+	# Ensure destination ~mods exists
+	mods_dir = _mods_folder_from_env()
+	_ensure_dir(mods_dir)
+	# Determine target subfolder by inferred character tag
+	char_folder: Optional[Path] = None
+	try:
+		try:
+			contents = json.loads(contents_json) if contents_json else []
+		except Exception:
+			contents = []
+		candidate_paks = [c for c in contents if isinstance(c, str) and c.lower().endswith('.pak')]
+		tag = _infer_character_tag(cur, name=name, pak_candidates=candidate_paks)
+		if tag:
+			char_folder = mods_dir / _to_folder_name(tag)
+			_ensure_dir(char_folder)
+	except Exception:
+		char_folder = None
+	# Extract only the .pak files into ~mods
+	lower = full_path.lower()
+	copied: List[str] = []
+	companions: List[str] = []
+	applied_set: set[str] = set()
+	try:
+		if lower.endswith((".zip", ".rar", ".7z")):
+			entries = list_entries(full_path)
+			lookup = build_entry_lookup(entries)
+			try:
+				contents = json.loads(contents_json) if contents_json else []
+			except Exception:
+				contents = []
+			desired = [c for c in contents if isinstance(c, str) and c.lower().endswith('.pak')]
+			for pak in desired:
+				stem, _ = os.path.splitext(pak)
+				for ext in (".pak", ".utoc", ".ucas"):
+					fname = f"{stem}{ext}"
+					entry = resolve_entry(lookup, fname)
+					if not entry:
+						continue
+					dest_base = char_folder if char_folder else mods_dir
+					dest = dest_base / fname
+					if dest.exists():
+						applied_set.add(fname)
+						continue
+					extract_member(full_path, entry, str(dest))
+					applied_set.add(fname)
+					if ext == ".pak":
+						copied.append(fname)
+					else:
+						companions.append(fname)
+		elif lower.endswith(".pak"):
+			base = os.path.basename(full_path)
+			dest_base = char_folder if char_folder else mods_dir
+			dest = dest_base / base
+			if not dest.exists():
+				shutil.copy2(full_path, dest)
+				copied.append(base)
+				applied_set.add(base)
+			# Try siblings .utoc/.ucas
+			stem, _ = os.path.splitext(base)
+			for ext in (".utoc", ".ucas"):
+				cand = Path(full_path).with_suffix(ext)
+				if cand.exists():
+					dest_base = char_folder if char_folder else mods_dir
+					d = dest_base / cand.name
+					if not d.exists():
+						shutil.copy2(str(cand), d)
+						companions.append(cand.name)
+						applied_set.add(cand.name)
+		else:
+			raise HTTPException(status_code=400, detail="Unsupported source type for activation. Use .zip/.rar/.7z/.pak")
+	except HTTPException:
+		raise
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=f"Activation failed: {e}")
+	# Update DB active_paks and rescan
+	try:
+		if copied or companions or applied_set:
+			# Merge copied into current active for this download id
+			try:
+				prev = cur.execute("SELECT active_paks FROM local_downloads WHERE id=?", (dl_id,)).fetchone()
+				active = []
+				if prev and prev[0]:
+					active = json.loads(prev[0]) if isinstance(prev[0], str) else []
+				merged = list({*(active or []), *copied, *companions, *applied_set})
+				update_local_download_active_paks(conn, dl_id, merged)
+			except Exception:
+				pass
+		scan_active_main(_get_scan_active_args())
+		rebuild_conflicts(conn, active_only=1)
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+	return {"ok": True, "name": name, "copied": copied, "mods_dir": str(mods_dir)}
+
+
+@app.post("/api/local_downloads/deactivate-by-name")
+def deactivate_by_name(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+	"""Deactivate (remove) all pak files for the given local_download name from ~mods and DB.
+
+	Body: { name: string }
+	"""
+	name = payload.get("name")
+	if not name or not isinstance(name, str):
+		raise HTTPException(status_code=400, detail="name is required")
+	conn = get_db()
+	cur = conn.cursor()
+	row = cur.execute(
+		"SELECT id, contents FROM local_downloads WHERE name = ? ORDER BY id DESC LIMIT 1",
+		(name,),
+	).fetchone()
+	if not row:
+		try:
+			conn.close()
+		except Exception:
+			pass
+		raise HTTPException(status_code=404, detail="local_download not found by name")
+	dl_id, contents_json = row
+	try:
+		contents = json.loads(contents_json) if contents_json else []
+		pak_names = [os.path.basename(c) for c in contents if isinstance(c, str) and c.lower().endswith('.pak')]
+	except Exception:
+		pak_names = []
+	mods_dir = _mods_folder_from_env()
+	removed: List[str] = []
+	# Remove by stems (handles .pak/.utoc/.ucas and nested folders)
+	stems = [os.path.splitext(p)[0] for p in pak_names]
+	removed += _remove_in_mods_by_stems(mods_dir, stems)
+	# Also attempt direct/name-based removal as a safety (in case of unusual extensions)
+	removed += _remove_in_mods_by_names(mods_dir, pak_names)
+	# Update DB active_paks and rescan
+	try:
+		update_local_download_active_paks(conn, dl_id, [])
+	except Exception:
+		pass
+	try:
+		scan_active_main(_get_scan_active_args())
+		rebuild_conflicts(conn, active_only=1)
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+	return {"ok": True, "name": name, "removed": removed}
+
+
+@app.post("/api/scan/active")
+def scan_active_endpoint() -> Dict[str, Any]:
+	"""Trigger a filesystem scan of ~mods and update local_downloads.active_paks accordingly."""
+	# Validate configuration before scanning
+	try:
+		_mods_folder_from_env()
+	except HTTPException as e:
+		raise e
+	try:
+		scan_active_main(_get_scan_active_args())
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=f"scan failed: {e}")
+	return {"ok": True}
+
+
+@app.get("/api/local_downloads/{download_id}")
+def get_local_download(download_id: int) -> Dict[str, Any]:
+	"""Return a single local_download row with parsed contents and active_paks."""
+	conn = get_db()
+	try:
+		cur = conn.cursor()
+		row = cur.execute(
+			"""
+			SELECT id, name, mod_id, version, path, contents, active_paks, created_at
+			FROM local_downloads WHERE id = ?
+			""",
+			(download_id,),
+		).fetchone()
+		if not row:
+			raise HTTPException(status_code=404, detail="local_download not found")
+		id_, name, mod_id, version, path, contents_raw, active_raw, created_at = row
+		try:
+			contents = json.loads(contents_raw) if contents_raw else []
+			if not isinstance(contents, list):
+				contents = []
+		except Exception:
+			contents = []
+		try:
+			active_paks = json.loads(active_raw) if active_raw else []
+			if not isinstance(active_paks, list):
+				active_paks = []
+		except Exception:
+			active_paks = []
+		return {
+			"id": id_,
+			"name": name,
+			"mod_id": mod_id,
+			"version": version,
+			"path": path,
+			"contents": contents,
+			"active_paks": active_paks,
+			"created_at": created_at,
+		}
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass

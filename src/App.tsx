@@ -1,0 +1,1455 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AppHeader } from "./components/AppHeader";
+import { GetStartedDialog } from "./components/GetStartedDialog";
+import {
+  SettingsDialog,
+  type SettingsFormValues,
+} from "./components/SettingsDialog";
+import { TabHeader } from "./components/TabHeader";
+import { DownloadsSidebar } from "./components/DownloadsSidebar";
+import { DownloadsPage } from "./components/DownloadsPage";
+import { ActiveModsView } from "./components/ActiveModsView";
+import { toast } from "sonner";
+import { Toaster } from "./components/ui/sonner";
+import { ThemeProvider } from "./components/ThemeProvider";
+import { openInBrowser } from "./lib/tauri-utils";
+import {
+  refreshConflicts,
+  listDownloads,
+  deleteLocalDownloads,
+  updateMod,
+  listNxmHandoffs,
+  previewNxmHandoff,
+  ingestNxmHandoff,
+  dismissNxmHandoff,
+  ApiError,
+  type ApiDownload,
+  type ApiNxmHandoffSummary,
+  type ApiNxmPreview,
+  getSettings,
+  updateSettings,
+  runSettingsTask,
+  getSettingsTaskJob,
+  getBootstrapStatus,
+  type ApiSettings,
+  type ApiSettingsTaskResponse,
+  type SettingsTask,
+  type ApiUpdateSettingsRequest,
+  type ApiBootstrapStatus,
+} from "./lib/api";
+import { NxmHandoffPrompt } from "./components/NxmHandoffPrompt";
+import {
+  deriveCategoryTags,
+  categoriesMatchTag,
+  getCategoryTokenSet,
+} from "./lib/categoryUtils";
+
+const CATEGORY_KEYWORD_SET = getCategoryTokenSet();
+const GET_STARTED_STORAGE_KEY = "modmanager:get-started-complete";
+
+const SETTINGS_TASK_LABELS: Record<SettingsTask, string> = {
+  ingest_download_assets: "Rebuild Local Downloads",
+  scan_active_mods: "Rescan Active Mods",
+  sync_nexus: "Sync Nexus API",
+  rebuild_tags: "Rebuild Tags",
+  rebuild_conflicts: "Rebuild Conflicts",
+  bootstrap_rebuild: "Initial Database Build",
+};
+
+type NxmEntry = {
+  summary: ApiNxmHandoffSummary;
+  preview?: ApiNxmPreview | null;
+  error?: string | null;
+};
+
+export default function App() {
+  // State management
+  const [mods, setMods] = useState<any[]>([]);
+  const [activeTab, setActiveTab] = useState<"downloads" | "active">(
+    "downloads"
+  );
+  const [selectedCategory, setSelectedCategory] = useState("all");
+  const [selectedCharacters, setSelectedCharacters] = useState<string[]>([]);
+  const [nxmEntries, setNxmEntries] = useState<Record<string, NxmEntry>>({});
+  const nxmEntriesRef = useRef<Record<string, NxmEntry>>({});
+  const [nxmIngestingId, setNxmIngestingId] = useState<string | null>(null);
+  const [nxmDismissingId, setNxmDismissingId] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsLoading, setSettingsLoading] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsData, setSettingsData] = useState<ApiSettings | null>(null);
+  const [settingsTaskBusy, setSettingsTaskBusy] = useState<SettingsTask | null>(
+    null
+  );
+  const [settingsTaskJobs, setSettingsTaskJobs] = useState<
+    Partial<Record<SettingsTask, ApiSettingsTaskResponse>>
+  >({});
+  const [conflictsReloadToken, setConflictsReloadToken] = useState(0);
+  const [getStartedOpen, setGetStartedOpen] = useState(false);
+  const [bootstrapStatus, setBootstrapStatus] =
+    useState<ApiBootstrapStatus | null>(null);
+  const [bootstrapJob, setBootstrapJob] =
+    useState<ApiSettingsTaskResponse | null>(null);
+  const [bootstrapRunning, setBootstrapRunning] = useState(false);
+
+  const notifyConflictsDirty = useCallback(() => {
+    setConflictsReloadToken((token) => token + 1);
+  }, []);
+
+  useEffect(() => {
+    nxmEntriesRef.current = nxmEntries;
+  }, [nxmEntries]);
+
+  const updateNxmEntry = useCallback((id: string, patch: Partial<NxmEntry>) => {
+    setNxmEntries((prev) => {
+      if (!prev[id]) {
+        return prev;
+      }
+      const nextEntry = { ...prev[id], ...patch };
+      const next = { ...prev, [id]: nextEntry };
+      nxmEntriesRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const removeNxmEntry = useCallback((id: string) => {
+    setNxmEntries((prev) => {
+      if (!(id in prev)) {
+        return prev;
+      }
+      const next = { ...prev };
+      delete next[id];
+      nxmEntriesRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const fetchSettings = useCallback(async (showToast: boolean = true) => {
+    setSettingsLoading(true);
+    try {
+      const data = await getSettings();
+      setSettingsData(data);
+    } catch (err) {
+      const message =
+        err instanceof Error && err.message
+          ? err.message
+          : String(err ?? "Failed to load settings");
+      if (showToast) {
+        toast.error(`Failed to load settings: ${message}`);
+      } else {
+        console.error("Failed to load settings", err);
+      }
+    } finally {
+      setSettingsLoading(false);
+    }
+  }, []);
+
+  const fetchBootstrapStatus = useCallback(async () => {
+    try {
+      const status = await getBootstrapStatus();
+      setBootstrapStatus(status);
+      return status;
+    } catch (err) {
+      console.error("Failed to fetch bootstrap status", err);
+      return null;
+    }
+  }, []);
+
+  const saveSettings = useCallback(
+    async (values: SettingsFormValues): Promise<boolean> => {
+      setSettingsSaving(true);
+      try {
+        const payload: ApiUpdateSettingsRequest = {
+          allow_direct_api_downloads: values.allow_direct_api_downloads,
+          nexus_api_key: values.nexus_api_key.trim(),
+          aes_key_hex: values.aes_key_hex.trim(),
+          marvel_rivals_root: values.marvel_rivals_root.trim() || null,
+          marvel_rivals_local_downloads_root:
+            values.marvel_rivals_local_downloads_root.trim() || null,
+          repak_bin: values.repak_bin.trim() || null,
+          retoc_cli: values.retoc_cli.trim() || null,
+          seven_zip_bin: values.seven_zip_bin.trim() || null,
+        };
+        const dataDir = values.data_dir.trim();
+        if (dataDir) {
+          payload.data_dir = dataDir;
+        }
+        const updated = await updateSettings(payload);
+        setSettingsData(updated);
+        toast.success("Settings updated");
+        return true;
+      } catch (err) {
+        const message =
+          err instanceof Error && err.message
+            ? err.message
+            : String(err ?? "Failed to save settings");
+        toast.error(`Failed to save settings: ${message}`);
+        return false;
+      } finally {
+        setSettingsSaving(false);
+      }
+    },
+    []
+  );
+
+  const handleSettingsSubmit = useCallback(
+    async (values: SettingsFormValues) => {
+      const success = await saveSettings(values);
+      if (success) {
+        setSettingsOpen(false);
+      }
+    },
+    [saveSettings]
+  );
+
+  const handleSettingsRefresh = useCallback(() => {
+    void fetchSettings();
+  }, [fetchSettings]);
+
+  const handleOpenSettings = useCallback(() => {
+    if (!settingsLoading) {
+      void fetchSettings();
+    }
+    setSettingsOpen(true);
+  }, [fetchSettings, settingsLoading]);
+
+  const handleSettingsOpenChange = useCallback(
+    (isOpen: boolean) => {
+      setSettingsOpen(isOpen);
+      if (isOpen) {
+        if (!settingsLoading && settingsData == null) {
+          void fetchSettings();
+        }
+        return;
+      }
+      setSettingsTaskBusy(null);
+    },
+    [fetchSettings, settingsData, settingsLoading]
+  );
+
+  const fetchNxmQueue = useCallback(async () => {
+    try {
+      const handoffs = await listNxmHandoffs();
+      const next: Record<string, NxmEntry> = {};
+      for (const handoff of handoffs) {
+        const previous = nxmEntriesRef.current[handoff.id];
+        next[handoff.id] = {
+          summary: handoff,
+          preview: previous?.preview ?? null,
+          error: previous?.error ?? null,
+        };
+      }
+      setNxmEntries(next);
+      nxmEntriesRef.current = next;
+      for (const handoff of handoffs) {
+        const entry = next[handoff.id];
+        if (!entry || entry.preview || entry.error) {
+          continue;
+        }
+        try {
+          const preview = await previewNxmHandoff(handoff.id);
+          updateNxmEntry(handoff.id, { preview, error: null });
+        } catch (err) {
+          const message =
+            err instanceof Error
+              ? err.message
+              : String(err ?? "Preview failed");
+          updateNxmEntry(handoff.id, { error: message });
+        }
+      }
+    } catch (err) {
+      console.error("Failed to fetch Nexus handoffs", err);
+    }
+  }, [updateNxmEntry]);
+
+  const handleNxmDismiss = useCallback(
+    async (handoffId: string) => {
+      setNxmDismissingId(handoffId);
+      try {
+        await dismissNxmHandoff(handoffId);
+        removeNxmEntry(handoffId);
+        toast.success("Dismissed Nexus download request");
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : String(err ?? "Failed");
+        toast.error(`Failed to dismiss handoff: ${message}`);
+      } finally {
+        setNxmDismissingId(null);
+        void fetchNxmQueue();
+      }
+    },
+    [fetchNxmQueue, removeNxmEntry]
+  );
+
+  useEffect(() => {
+    void fetchNxmQueue();
+    const interval = window.setInterval(() => {
+      void fetchNxmQueue();
+    }, 10000);
+    return () => window.clearInterval(interval);
+  }, [fetchNxmQueue]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      console.log("[App] Checking bootstrap status...");
+      const status = await fetchBootstrapStatus();
+      console.log("[App] Bootstrap status:", status);
+
+      if (cancelled || !status) {
+        console.log("[App] Cancelled or no status, skipping modal check");
+        return;
+      }
+
+      const storedFlag =
+        typeof window !== "undefined"
+          ? window.localStorage.getItem(GET_STARTED_STORAGE_KEY)
+          : null;
+
+      console.log("[App] Get Started storage flag:", storedFlag);
+      console.log("[App] needs_bootstrap:", status.needs_bootstrap);
+      console.log("[App] db_exists:", status.db_exists);
+      console.log("[App] downloads_count:", status.downloads_count);
+      console.log("[App] mods_count:", status.mods_count);
+
+      if (status.needs_bootstrap && storedFlag !== "true") {
+        console.log("[App] Bootstrap needed - preparing to show modal");
+        if (!settingsLoading && settingsData == null) {
+          console.log("[App] Loading settings first...");
+          await fetchSettings(false);
+        }
+        if (!cancelled) {
+          console.log("[App] Opening Get Started modal");
+          setGetStartedOpen(true);
+        }
+      } else {
+        console.log("[App] Modal not needed:", {
+          needs_bootstrap: status.needs_bootstrap,
+          storedFlag,
+          willOpen: status.needs_bootstrap && storedFlag !== "true",
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchBootstrapStatus, fetchSettings, settingsData, settingsLoading]);
+
+  // Get counts for header
+  const installedMods = mods.filter((mod) => mod.isInstalled);
+  const activeMods = installedMods.filter((mod) => mod.isActive !== false);
+  const updatesCount = installedMods.filter((mod) => mod.hasUpdate).length;
+
+  // Get counts by category for sidebar
+  const modMatchesCategory = (mod: any, categoryId: string) => {
+    if (Array.isArray(mod?.categoryTags)) {
+      return mod.categoryTags.includes(categoryId);
+    }
+    return categoriesMatchTag(mod?.tags, categoryId);
+  };
+  const installedCounts = {
+    all: installedMods.length,
+    characters: installedMods.filter((mod) =>
+      modMatchesCategory(mod, "characters")
+    ).length,
+    ui: installedMods.filter((mod) => modMatchesCategory(mod, "ui")).length,
+    maps: installedMods.filter((mod) => modMatchesCategory(mod, "maps")).length,
+    audio: installedMods.filter((mod) => modMatchesCategory(mod, "audio"))
+      .length,
+  };
+
+  // Event handlers
+  async function fetchServerMods(limit = 500): Promise<any[]> {
+    const downloads = await listDownloads(limit);
+    const mapped = groupDownloadsByMod(downloads).map(toUiMod);
+    return dedupeById(mapped);
+  }
+
+  const handleUninstall = async (modId: string) => {
+    const mod = mods.find((m) => String(m.id) === String(modId));
+    if (!mod) {
+      return;
+    }
+
+    const sourceIds = Array.isArray(mod.sourceDownloadIds)
+      ? mod.sourceDownloadIds
+      : [];
+    const numericIds = sourceIds
+      .map((value: unknown) => {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : undefined;
+      })
+      .filter(
+        (value: number | undefined): value is number =>
+          typeof value === "number"
+      );
+    const downloadIds = Array.from(new Set<number>(numericIds));
+
+    let backendModId: number | undefined;
+    if (
+      typeof mod.backendModId === "number" &&
+      Number.isFinite(mod.backendModId)
+    ) {
+      backendModId = mod.backendModId;
+    } else {
+      const parsed = Number(modId);
+      backendModId = Number.isFinite(parsed) ? parsed : undefined;
+    }
+
+    if (downloadIds.length === 0 && backendModId == null) {
+      toast.error(`Can't delete ${mod.name}: missing download reference`);
+      return;
+    }
+
+    try {
+      await deleteLocalDownloads(downloadIds, backendModId);
+      const deduped = await fetchServerMods();
+      setMods(deduped);
+      toast.success(`${mod.name} removed from local downloads`);
+    } catch (e: any) {
+      const message = e?.message ?? String(e);
+      toast.error(`Failed to delete ${mod.name}: ${message}`);
+    }
+  };
+
+  const handleUpdate = async (modId: string) => {
+    const target = mods.find((m) => m.id === modId);
+    if (!target) {
+      return;
+    }
+
+    const displayName = target.name ?? `Mod ${modId}`;
+    let backendModId: number | undefined;
+    if (
+      typeof target.backendModId === "number" &&
+      Number.isFinite(target.backendModId)
+    ) {
+      backendModId = target.backendModId;
+    } else {
+      const parsed = Number(modId);
+      backendModId = Number.isFinite(parsed) ? parsed : undefined;
+    }
+
+    if (backendModId == null) {
+      toast.error(`Can't update ${displayName}: missing Nexus mod reference`);
+      return;
+    }
+
+    setMods((prev) =>
+      prev.map((mod) =>
+        mod.id === modId
+          ? {
+              ...mod,
+              isUpdating: true,
+              updateError: null,
+            }
+          : mod
+      )
+    );
+
+    let responseLatestVersion = target.latestVersion || target.version || "";
+    try {
+      const response = await updateMod(backendModId, { activate: true });
+      responseLatestVersion = response.latest_version || responseLatestVersion;
+      await refreshMods({ quiet: true });
+      const message = response.already_latest
+        ? `${displayName} is already on the latest version (${
+            responseLatestVersion || "unknown"
+          })`
+        : `${displayName} updated to v${responseLatestVersion || "latest"}`;
+      const hasWarning =
+        response.activation_warning &&
+        response.activation_warning.trim().length > 0;
+      toast.success(message, {
+        description: hasWarning
+          ? response.activation_warning ?? undefined
+          : undefined,
+      });
+    } catch (error) {
+      const setUpdateError = (message: string) => {
+        setMods((prev) =>
+          prev.map((mod) =>
+            mod.id === modId
+              ? {
+                  ...mod,
+                  isUpdating: false,
+                  updateError: message,
+                  hasUpdate: true,
+                }
+              : mod
+          )
+        );
+      };
+
+      if (error instanceof ApiError) {
+        const detail = error.detail as Record<string, unknown> | undefined;
+        if (
+          detail &&
+          typeof detail === "object" &&
+          detail["requires_nxm_handoff"]
+        ) {
+          const instructions =
+            typeof detail["message"] === "string" &&
+            detail["message"].trim().length > 0
+              ? (detail["message"] as string).trim()
+              : "Nexus Mods requires a browser-initiated handoff before the download can continue.";
+          const nexusGame =
+            typeof detail["game"] === "string" &&
+            detail["game"].trim().length > 0
+              ? (detail["game"] as string)
+              : "marvelrivals";
+          const nexusModId =
+            typeof detail["mod_id"] === "number"
+              ? (detail["mod_id"] as number)
+              : backendModId ?? undefined;
+          const fileIdText =
+            typeof detail["file_id"] === "number"
+              ? `File #${detail["file_id"] as number}`
+              : typeof detail["file_id"] === "string" &&
+                detail["file_id"].trim()
+              ? `File #${detail["file_id"] as string}`
+              : "the desired file";
+          const nexusUrl =
+            nexusModId != null
+              ? (() => {
+                  const base = `https://www.nexusmods.com/${encodeURIComponent(
+                    nexusGame
+                  )}/mods/${encodeURIComponent(String(nexusModId))}`;
+                  const params = new URLSearchParams();
+                  params.set("tab", "files");
+                  const fileIdValue = detail["file_id"];
+                  if (
+                    (typeof fileIdValue === "number" &&
+                      Number.isFinite(fileIdValue)) ||
+                    (typeof fileIdValue === "string" &&
+                      fileIdValue.trim().length > 0)
+                  ) {
+                    params.set("file_id", String(fileIdValue).trim());
+                    params.set("nmm", "1"); // Ensure Nexus shows the Mod Manager (nmm) UI when possible
+                  }
+                  return `${base}?${params.toString()}`;
+                })()
+              : undefined;
+
+          setUpdateError(instructions);
+
+          toast.warning(`Action needed for ${displayName}`, {
+            description: `${instructions} We've opened the Nexus Mods page so you can click "Mod Manager Download" for ${fileIdText}. Once the handoff appears in the queue, press "Download & Activate".`,
+          });
+
+          if (nexusUrl) {
+            try {
+              await openInBrowser(nexusUrl);
+            } catch (openErr) {
+              console.warn("Failed to open Nexus Mods page", openErr);
+            }
+          }
+
+          void fetchNxmQueue();
+          return;
+        }
+      }
+
+      let message: string;
+      if (error instanceof Error && error.message) {
+        message = error.message;
+      } else if (typeof error === "string") {
+        message = error;
+      } else {
+        try {
+          message = JSON.stringify(error);
+        } catch {
+          message = String(error);
+        }
+      }
+      setUpdateError(message);
+      toast.error(`Failed to update ${displayName}: ${message}`);
+      return;
+    }
+
+    setMods((prev) =>
+      prev.map((mod) =>
+        mod.id === modId
+          ? {
+              ...mod,
+              isUpdating: false,
+              updateError: null,
+            }
+          : mod
+      )
+    );
+  };
+
+  const handleFavorite = (modId: string) => {
+    setMods((prev) =>
+      prev.map((mod) =>
+        mod.id === modId ? { ...mod, isFavorited: !mod.isFavorited } : mod
+      )
+    );
+
+    const mod = mods.find((m) => m.id === modId);
+    if (mod) {
+      toast.success(
+        mod.isFavorited
+          ? `${mod.name} removed from favorites`
+          : `${mod.name} added to favorites!`
+      );
+    }
+  };
+
+  const handleToggleMod = (modId: string) => {
+    setMods((prev) =>
+      prev.map((mod) =>
+        mod.id === modId && mod.isInstalled
+          ? { ...mod, isActive: !mod.isActive }
+          : mod
+      )
+    );
+
+    const mod = mods.find((m) => m.id === modId);
+    if (mod) {
+      toast.success(
+        mod.isActive
+          ? `${mod.name} has been disabled`
+          : `${mod.name} has been enabled!`
+      );
+    }
+  };
+
+  const handleDisableAll = () => {
+    const activeCount = activeMods.length;
+    setMods((prev) =>
+      prev.map((mod) =>
+        mod.isInstalled && mod.isActive !== false
+          ? { ...mod, isActive: false }
+          : mod
+      )
+    );
+    toast.success(`${activeCount} mod${activeCount !== 1 ? "s" : ""} disabled`);
+  };
+
+  const handleEnableAll = () => {
+    const inactiveCount = installedMods.filter(
+      (mod) => mod.isActive === false
+    ).length;
+    setMods((prev) =>
+      prev.map((mod) =>
+        mod.isInstalled && mod.isActive === false
+          ? { ...mod, isActive: true }
+          : mod
+      )
+    );
+    toast.success(
+      `${inactiveCount} mod${inactiveCount !== 1 ? "s" : ""} enabled`
+    );
+  };
+
+  const refreshMods = async (
+    options: { quiet?: boolean; includeConflicts?: boolean } = {}
+  ) => {
+    const { quiet = false, includeConflicts = false } = options;
+    try {
+      if (includeConflicts) {
+        await refreshConflicts();
+      }
+      const deduped = await fetchServerMods();
+      setMods(deduped);
+      if (!quiet) {
+        toast.success(`Refreshed from DB: ${deduped.length} local downloads`);
+      }
+    } catch (e: any) {
+      if (quiet) {
+        console.error("Auto refresh failed", e);
+      } else {
+        toast.error(`Refresh failed: ${e?.message || e}`);
+      }
+    }
+  };
+
+  const handleBootstrapTask = useCallback(async (): Promise<boolean> => {
+    const sleep = (ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      });
+
+    console.log("[Bootstrap] Starting bootstrap task...");
+    setBootstrapRunning(true);
+    setBootstrapJob(null);
+    try {
+      console.log("[Bootstrap] Calling runSettingsTask API...");
+      const job = await runSettingsTask("bootstrap_rebuild");
+      console.log("[Bootstrap] Initial job response:", job);
+      setBootstrapJob(job);
+      const terminalStatuses: Array<ApiSettingsTaskResponse["status"]> = [
+        "succeeded",
+        "failed",
+      ];
+      let currentJob = job;
+      let delay = 400;
+      let pollCount = 0;
+      while (!terminalStatuses.includes(currentJob.status)) {
+        pollCount++;
+        console.log(
+          `[Bootstrap] Polling ${pollCount}: status=${currentJob.status}, waiting ${delay}ms...`
+        );
+        await sleep(delay);
+        delay = Math.min(delay + 250, 2000);
+        const latest = await getSettingsTaskJob(currentJob.id);
+        console.log(
+          `[Bootstrap] Poll ${pollCount} result:`,
+          latest.status,
+          "ok:",
+          latest.ok
+        );
+        currentJob = latest;
+        setBootstrapJob(latest);
+      }
+      console.log("[Bootstrap] Final job state:", currentJob);
+      setBootstrapJob(currentJob);
+      const ok = currentJob.status === "succeeded" && Boolean(currentJob.ok);
+      console.log("[Bootstrap] Task completed, ok:", ok);
+      if (ok) {
+        console.log("[Bootstrap] Success! Refreshing data...");
+        toast.success("Initial database build completed");
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(GET_STARTED_STORAGE_KEY, "true");
+        }
+        await refreshMods({ quiet: false, includeConflicts: true });
+        await fetchSettings(false);
+        console.log("[Bootstrap] Data refresh complete");
+      } else {
+        const exitSuffix =
+          typeof currentJob.exit_code === "number"
+            ? ` (exit ${currentJob.exit_code})`
+            : "";
+        toast.error(`Initial database build failed${exitSuffix}`, {
+          description:
+            currentJob.error && currentJob.error.trim().length > 0
+              ? currentJob.error
+              : undefined,
+        });
+      }
+      await fetchBootstrapStatus();
+      console.log("[Bootstrap] Bootstrap status refreshed");
+      return ok;
+    } catch (err) {
+      console.error("[Bootstrap] Error during bootstrap:", err);
+      const message =
+        err instanceof Error && err.message
+          ? err.message
+          : String(err ?? "Task failed");
+      toast.error(`Failed to run initial build: ${message}`);
+      return false;
+    } finally {
+      console.log("[Bootstrap] Setting bootstrapRunning to false");
+      setBootstrapRunning(false);
+    }
+  }, [fetchBootstrapStatus, fetchSettings, refreshMods]);
+
+  const handleRunSettingsTask = useCallback(
+    async (task: SettingsTask) => {
+      const sleep = (ms: number) =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, ms);
+        });
+
+      setSettingsTaskJobs((prev) => {
+        const next = { ...prev };
+        delete next[task];
+        return next;
+      });
+      setSettingsTaskBusy(task);
+      try {
+        const job = await runSettingsTask(task);
+        setSettingsTaskJobs((prev) => ({ ...prev, [task]: job }));
+
+        const terminalStatuses: Array<ApiSettingsTaskResponse["status"]> = [
+          "succeeded",
+          "failed",
+        ];
+        let currentJob = job;
+        let delay = 400;
+        while (!terminalStatuses.includes(currentJob.status)) {
+          await sleep(delay);
+          delay = Math.min(delay + 250, 2000);
+          const latest = await getSettingsTaskJob(currentJob.id);
+          currentJob = latest;
+          setSettingsTaskJobs((prev) => ({ ...prev, [task]: latest }));
+        }
+
+        const finalJob = currentJob;
+        setSettingsTaskJobs((prev) => ({ ...prev, [task]: finalJob }));
+
+        const taskLabel = SETTINGS_TASK_LABELS[task] ?? task;
+        if (finalJob.status === "succeeded" && finalJob.ok) {
+          toast.success(`${taskLabel} completed`);
+          await refreshMods({ quiet: true, includeConflicts: true });
+        } else {
+          const exitSuffix =
+            typeof finalJob.exit_code === "number"
+              ? ` (exit ${finalJob.exit_code})`
+              : "";
+          const description =
+            finalJob.error && finalJob.error.trim().length > 0
+              ? finalJob.error
+              : undefined;
+          toast.error(`${taskLabel} failed${exitSuffix}`, {
+            description,
+          });
+        }
+      } catch (err) {
+        const message =
+          err instanceof Error && err.message
+            ? err.message
+            : String(err ?? "Task failed");
+        toast.error(`Failed to run task: ${message}`);
+      } finally {
+        setSettingsTaskBusy(null);
+      }
+    },
+    [refreshMods]
+  );
+
+  const handleNxmIngest = useCallback(
+    async (entry: NxmEntry) => {
+      const handoffId = entry.summary.id;
+      setNxmIngestingId(handoffId);
+      try {
+        const response = await ingestNxmHandoff(handoffId, {
+          activate: true,
+          deactivateExisting: false,
+        });
+        const modDisplayName =
+          typeof response.mod_name === "string" &&
+          response.mod_name.trim().length > 0
+            ? response.mod_name
+            : `Mod ${response.mod_id}`;
+        const selectedFile = response.selected_file as
+          | Record<string, unknown>
+          | undefined;
+        const fileDisplayName =
+          selectedFile && typeof selectedFile["name"] === "string"
+            ? (selectedFile["name"] as string)
+            : undefined;
+        toast.success(`Downloaded ${modDisplayName}`, {
+          description: fileDisplayName,
+        });
+        removeNxmEntry(handoffId);
+        await refreshMods({ quiet: true, includeConflicts: true });
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : String(err ?? "Failed");
+        toast.error(`Failed to download Nexus mod: ${message}`);
+      } finally {
+        setNxmIngestingId(null);
+        void fetchNxmQueue();
+      }
+    },
+    [fetchNxmQueue, refreshMods, removeNxmEntry]
+  );
+
+  const handleRefresh = () => {
+    void refreshMods({ includeConflicts: true });
+  };
+
+  const handleModAdded = () =>
+    refreshMods({ quiet: true, includeConflicts: true });
+
+  // On mount, try to get mods from API (doesn't replace mock cards yet, just signals connectivity)
+  useEffect(() => {
+    (async () => {
+      try {
+        const deduped = await fetchServerMods();
+        // Always reflect server state, even if empty (replaces mock data)
+        setMods(deduped);
+      } catch (e) {
+        // ignore, stay on mock data
+      }
+    })();
+  }, []);
+
+  function extractMemberId(value: unknown): number | undefined {
+    if (value == null) return undefined;
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!trimmed) return undefined;
+      if (/^\d+$/.test(trimmed)) {
+        const direct = Number(trimmed);
+        return Number.isFinite(direct) ? direct : undefined;
+      }
+      const match = trimmed.match(/(\d+)(?:\/?(?:\?.*)?)?$/);
+      if (match) {
+        const parsed = Number(match[1]);
+        return Number.isFinite(parsed) ? parsed : undefined;
+      }
+    }
+    return undefined;
+  }
+
+  function deriveAuthorAvatar(download: ApiDownload): string | undefined {
+    if (download.mod_author_avatar_url) {
+      if (typeof window !== "undefined") {
+        console.debug("[avatar] using API-provided avatar", {
+          downloadId: download.id,
+          modId: download.mod_id,
+          source: download.mod_author_avatar_url,
+        });
+      }
+      return download.mod_author_avatar_url;
+    }
+    const memberId =
+      extractMemberId(download.mod_author_member_id) ??
+      extractMemberId(download.mod_author_profile_url);
+    if (memberId !== undefined) {
+      const fallback = `https://avatars.nexusmods.com/${memberId}/100`;
+      if (typeof window !== "undefined") {
+        console.debug("[avatar] derived Nexus avatar", {
+          downloadId: download.id,
+          modId: download.mod_id,
+          memberId,
+          fallback,
+        });
+      }
+      return fallback;
+    }
+    if (typeof window !== "undefined") {
+      console.warn("[avatar] unable to derive avatar", {
+        downloadId: download.id,
+        modId: download.mod_id,
+        mod_author_member_id: download.mod_author_member_id,
+        mod_author_profile_url: download.mod_author_profile_url,
+      });
+    }
+    return undefined;
+  }
+
+  function toUiMod(d: ApiDownload) {
+    // Consolidate tags and remove any stray tokens like 'data' for robustness
+    const cleanTags = (d.tags || []).filter(
+      (t) => t && t.toLowerCase() !== "data"
+    );
+    const categoryTags = deriveCategoryTags(cleanTags);
+    const images = d.picture_url
+      ? [d.picture_url]
+      : [
+          "https://i.pinimg.com/1200x/44/da/5e/44da5e6d9dd75cb753ab5925aff4ce4c.jpg",
+        ];
+    const installedVersion = d.version || undefined;
+    const localVersionKey = d.local_version_key ?? null;
+    const latestVersionKey = d.latest_version_key ?? null;
+    const latestVersion =
+      d.latest_version || installedVersion || d.version || "";
+    const hasUpdateFromBackend = Boolean(d.needs_update);
+    const hasUpdateFromKeys =
+      latestVersionKey != null && localVersionKey != null
+        ? latestVersionKey > localVersionKey
+        : latestVersion !== installedVersion && latestVersion !== "";
+    const hasUpdate = hasUpdateFromBackend || hasUpdateFromKeys;
+    const isActive = d.active_paks && d.active_paks.length > 0;
+    const releaseDate = d.mod_created_time || null;
+    const rawUpdatedAt = d.latest_uploaded_at || d.mod_updated_at || null;
+    const hasUpdateTimestamp = Boolean(rawUpdatedAt);
+    const installDate = d.created_at ?? null;
+    const hasInstallDate = Boolean(installDate);
+    const displayUpdatedAt = rawUpdatedAt ?? installDate ?? null;
+    const authorMemberId =
+      extractMemberId(d.mod_author_member_id) ??
+      extractMemberId(d.mod_author_profile_url);
+    const authorProfileUrl = d.mod_author_profile_url || undefined;
+    const authorAvatar = deriveAuthorAvatar(d);
+    return {
+      id: d.mod_id != null ? String(d.mod_id) : String(d.id),
+      backendModId: d.mod_id,
+      sourceDownloadIds: d.source_download_ids || [d.id],
+      name: d.mod_name || d.name,
+      description: d.path || "",
+      author: d.mod_author || "",
+      authorAvatar,
+      authorMemberId,
+      authorProfileUrl,
+      category: categoryTags[0] || inferCategoryFromTags(cleanTags),
+      categoryTags,
+      character: inferCharacterFromTags(cleanTags),
+      tags: cleanTags,
+      downloads: (d.mod_downloads as number | null) ?? 0,
+      rating: d.endorsement_count != null ? d.endorsement_count : 0,
+      images,
+      version: installedVersion || "",
+      lastUpdated: displayUpdatedAt ?? "",
+      lastUpdatedRaw: rawUpdatedAt,
+      releaseDate,
+      isInstalled: true,
+      isFavorited: false,
+      hasUpdate,
+      installedVersion,
+      latestVersion,
+      latestVersionKey,
+      localVersionKey,
+      latestUploadedAt: d.latest_uploaded_at ?? null,
+      latestFileId: d.latest_file_id ?? null,
+      latestFileName: d.latest_file_name ?? null,
+      installDate,
+      hasInstallDate,
+      hasUpdateTimestamp,
+      isActive,
+      defaultActivePaks: d.active_paks || [],
+      performanceImpact: undefined,
+      needsUpdate: hasUpdate,
+      isUpdating: false,
+      updateError: null,
+    } as any;
+  }
+
+  function groupDownloadsByMod(downloads: ApiDownload[]): ApiDownload[] {
+    const out: ApiDownload[] = [];
+    const byMod = new Map<number, ApiDownload>();
+    const byName = new Map<string, ApiDownload>();
+
+    const mergeMetadata = (target: ApiDownload, incoming: ApiDownload) => {
+      if (!target.latest_version && incoming.latest_version)
+        target.latest_version = incoming.latest_version;
+      if (!target.latest_version_key && incoming.latest_version_key)
+        target.latest_version_key = incoming.latest_version_key;
+      if (!target.latest_uploaded_at && incoming.latest_uploaded_at)
+        target.latest_uploaded_at = incoming.latest_uploaded_at;
+      if (target.latest_version_key && incoming.latest_version_key) {
+        if (incoming.latest_version_key > target.latest_version_key) {
+          target.latest_version_key = incoming.latest_version_key;
+          if (incoming.latest_version)
+            target.latest_version = incoming.latest_version;
+          if (incoming.latest_uploaded_at)
+            target.latest_uploaded_at = incoming.latest_uploaded_at;
+          if (incoming.latest_file_id != null)
+            target.latest_file_id = incoming.latest_file_id;
+          if (incoming.latest_file_name)
+            target.latest_file_name = incoming.latest_file_name;
+        }
+      } else {
+        if (incoming.latest_file_id != null && target.latest_file_id == null)
+          target.latest_file_id = incoming.latest_file_id;
+        if (!target.latest_file_name && incoming.latest_file_name)
+          target.latest_file_name = incoming.latest_file_name;
+      }
+
+      if (incoming.local_version_key) {
+        if (
+          !target.local_version_key ||
+          incoming.local_version_key > target.local_version_key
+        ) {
+          target.local_version_key = incoming.local_version_key;
+          if (incoming.version) target.version = incoming.version;
+          if (incoming.created_at) target.created_at = incoming.created_at;
+        }
+      }
+
+      target.needs_update = Boolean(
+        target.needs_update || incoming.needs_update
+      );
+      const latestKey = target.latest_version_key;
+      const localKey = target.local_version_key;
+      if (latestKey && localKey) {
+        target.needs_update = latestKey > localKey;
+      } else if (target.latest_version && target.version) {
+        target.needs_update = target.latest_version !== target.version;
+      }
+    };
+
+    for (const d of downloads) {
+      if (d.mod_id == null) {
+        const key = (d.mod_name || d.name || "").toLowerCase().trim();
+        if (!key) {
+          out.push({
+            ...d,
+            source_download_ids: [d.id],
+            contents: [...(d.contents || [])],
+            active_paks: [...(d.active_paks || [])],
+            tags: [...(d.tags || [])],
+            local_version_key: d.local_version_key ?? null,
+            latest_version: d.latest_version ?? null,
+            latest_version_key: d.latest_version_key ?? null,
+            latest_uploaded_at: d.latest_uploaded_at ?? null,
+            latest_file_id: d.latest_file_id ?? null,
+            latest_file_name: d.latest_file_name ?? null,
+            needs_update: Boolean(d.needs_update),
+          });
+          continue;
+        }
+        const prev = byName.get(key);
+        if (!prev) {
+          byName.set(key, {
+            ...d,
+            contents: [...(d.contents || [])],
+            active_paks: [...(d.active_paks || [])],
+            tags: [...(d.tags || [])],
+            source_download_ids: [d.id],
+            local_version_key: d.local_version_key ?? null,
+            latest_version: d.latest_version ?? null,
+            latest_version_key: d.latest_version_key ?? null,
+            latest_uploaded_at: d.latest_uploaded_at ?? null,
+            latest_file_id: d.latest_file_id ?? null,
+            latest_file_name: d.latest_file_name ?? null,
+            needs_update: Boolean(d.needs_update),
+          });
+          continue;
+        }
+        // merge into prev by name
+        const merged = prev;
+        merged.mod_name =
+          merged.mod_name || d.mod_name || merged.name || d.name;
+        merged.name = merged.mod_name || merged.name || d.name;
+        if (!merged.picture_url) merged.picture_url = d.picture_url;
+        if (!merged.mod_author) merged.mod_author = d.mod_author;
+        if (
+          merged.mod_author_member_id == null &&
+          d.mod_author_member_id != null
+        )
+          merged.mod_author_member_id = d.mod_author_member_id;
+        if (!merged.mod_author_profile_url && d.mod_author_profile_url)
+          merged.mod_author_profile_url = d.mod_author_profile_url;
+        if (!merged.mod_author_avatar_url && d.mod_author_avatar_url)
+          merged.mod_author_avatar_url = d.mod_author_avatar_url;
+        const cset = new Set<string>(merged.contents || []);
+        (d.contents || []).forEach((c) => c && cset.add(c));
+        merged.contents = Array.from(cset);
+        const aset = new Set<string>(merged.active_paks || []);
+        (d.active_paks || []).forEach((a) => a && aset.add(a));
+        merged.active_paks = Array.from(aset);
+        const tset = new Set<string>(merged.tags || []);
+        (d.tags || []).forEach((t) => t && tset.add(t));
+        merged.tags = Array.from(tset).sort();
+        merged.source_download_ids = [
+          ...new Set([...(merged.source_download_ids || []), d.id]),
+        ];
+        if (
+          new Date(d.created_at).getTime() >
+          new Date(merged.created_at).getTime()
+        ) {
+          merged.created_at = d.created_at;
+          merged.version = d.version;
+        }
+        if (merged.mod_downloads == null && d.mod_downloads != null)
+          merged.mod_downloads = d.mod_downloads;
+        if (merged.endorsement_count == null && d.endorsement_count != null)
+          merged.endorsement_count = d.endorsement_count;
+        mergeMetadata(merged, d);
+        continue;
+      }
+      const prev = byMod.get(d.mod_id);
+      if (!prev) {
+        byMod.set(d.mod_id, {
+          ...d,
+          contents: [...(d.contents || [])],
+          active_paks: [...(d.active_paks || [])],
+          tags: [...(d.tags || [])],
+          source_download_ids: [d.id],
+          local_version_key: d.local_version_key ?? null,
+          latest_version: d.latest_version ?? null,
+          latest_version_key: d.latest_version_key ?? null,
+          latest_uploaded_at: d.latest_uploaded_at ?? null,
+          latest_file_id: d.latest_file_id ?? null,
+          latest_file_name: d.latest_file_name ?? null,
+          needs_update: Boolean(d.needs_update),
+        });
+        continue;
+      }
+      // merge into prev
+      const merged = prev;
+      // prefer mod_name, but keep something displayable
+      merged.mod_name = merged.mod_name || d.mod_name || merged.name || d.name;
+      merged.name = merged.mod_name || merged.name || d.name;
+      if (!merged.picture_url) merged.picture_url = d.picture_url;
+      if (!merged.mod_author) merged.mod_author = d.mod_author;
+      if (merged.mod_author_member_id == null && d.mod_author_member_id != null)
+        merged.mod_author_member_id = d.mod_author_member_id;
+      if (!merged.mod_author_profile_url && d.mod_author_profile_url)
+        merged.mod_author_profile_url = d.mod_author_profile_url;
+      if (!merged.mod_author_avatar_url && d.mod_author_avatar_url)
+        merged.mod_author_avatar_url = d.mod_author_avatar_url;
+      const cset = new Set<string>(merged.contents || []);
+      (d.contents || []).forEach((c) => c && cset.add(c));
+      merged.contents = Array.from(cset);
+      const aset = new Set<string>(merged.active_paks || []);
+      (d.active_paks || []).forEach((a) => a && aset.add(a));
+      merged.active_paks = Array.from(aset);
+      const tset = new Set<string>(merged.tags || []);
+      (d.tags || []).forEach((t) => t && tset.add(t));
+      merged.tags = Array.from(tset).sort();
+      merged.source_download_ids = [
+        ...new Set([...(merged.source_download_ids || []), d.id]),
+      ];
+      // latest timestamp wins for date/version
+      if (
+        new Date(d.created_at).getTime() > new Date(merged.created_at).getTime()
+      ) {
+        merged.created_at = d.created_at;
+        merged.version = d.version;
+      }
+      if (merged.mod_downloads == null && d.mod_downloads != null)
+        merged.mod_downloads = d.mod_downloads;
+      if (merged.endorsement_count == null && d.endorsement_count != null)
+        merged.endorsement_count = d.endorsement_count;
+      mergeMetadata(merged, d);
+    }
+    byMod.forEach((v) => out.push(v));
+    byName.forEach((v) => out.push(v));
+    return out;
+  }
+
+  function dedupeById<T extends { id: string }>(arr: T[]): T[] {
+    const seen = new Set<string>();
+    const dups = new Set<string>();
+    const out: T[] = [];
+    for (const m of arr) {
+      const k = String(m.id);
+      if (seen.has(k)) {
+        dups.add(k);
+        continue;
+      }
+      seen.add(k);
+      out.push(m);
+    }
+    if (dups.size > 0) {
+      // Helpful during development; safe in production consoles too
+      console.warn("Deduped duplicate mod ids:", Array.from(dups));
+    }
+    return out;
+  }
+
+  function inferCategoryFromTags(tags: string[]): string {
+    const derived = deriveCategoryTags(tags);
+    if (derived.length > 0) return derived[0];
+    // if any tag resembles a character name token (not a category), treat as characters
+    if (tags.some((t) => t && !CATEGORY_KEYWORD_SET.has(t.toLowerCase())))
+      return "characters";
+    return "ui";
+  }
+
+  function inferCharacterFromTags(tags: string[]): string | undefined {
+    // Heuristic: if tags contain words beyond category set, pick the first as character label
+    const candidate = tags.find(
+      (t) => t && !CATEGORY_KEYWORD_SET.has(t.toLowerCase())
+    );
+    return candidate;
+  }
+
+  const handleCharacterToggle = (character: string) => {
+    setSelectedCharacters((prev) =>
+      prev.includes(character)
+        ? prev.filter((c) => c !== character)
+        : [...prev, character]
+    );
+  };
+
+  const handleCategoryChange = (category: string) => {
+    setSelectedCategory(category);
+    // Clear character filters when switching away from characters
+    if (category !== "characters") {
+      setSelectedCharacters([]);
+    }
+  };
+
+  const sortedNxmEntries = Object.values(nxmEntries).sort(
+    (a, b) => (b.summary.created_at ?? 0) - (a.summary.created_at ?? 0)
+  );
+  const activeNxmEntry = sortedNxmEntries[0];
+  const queueCount = sortedNxmEntries.length;
+
+  const activeSummary = activeNxmEntry?.summary;
+  const activePreview = activeNxmEntry?.preview;
+  const activeModInfo =
+    (activePreview?.mod_info as Record<string, unknown> | undefined) ??
+    (activeSummary?.metadata?.mod_info as Record<string, unknown> | undefined);
+  const activeModName =
+    activeModInfo && typeof activeModInfo["name"] === "string"
+      ? (activeModInfo["name"] as string)
+      : undefined;
+  const selectedFile = activePreview?.selected_file as
+    | Record<string, unknown>
+    | undefined;
+  const activeFileName =
+    selectedFile && typeof selectedFile["name"] === "string"
+      ? (selectedFile["name"] as string)
+      : undefined;
+  const activeFileVersion = (() => {
+    if (selectedFile) {
+      if (typeof selectedFile["version"] === "string") {
+        return selectedFile["version"] as string;
+      }
+      if (typeof selectedFile["mod_version"] === "string") {
+        return selectedFile["mod_version"] as string;
+      }
+    }
+    if (activeModInfo && typeof activeModInfo["version"] === "string") {
+      return activeModInfo["version"] as string;
+    }
+    return undefined;
+  })();
+  const activeModId =
+    activeSummary?.request?.mod_id ??
+    (activeModInfo && typeof activeModInfo["mod_id"] === "number"
+      ? (activeModInfo["mod_id"] as number)
+      : undefined);
+  const activeFileId = (() => {
+    if (typeof activePreview?.selected_file_id === "number") {
+      return activePreview.selected_file_id;
+    }
+    if (activeSummary?.request?.file_id != null) {
+      return activeSummary.request.file_id;
+    }
+    if (selectedFile && typeof selectedFile["file_id"] === "number") {
+      return selectedFile["file_id"] as number;
+    }
+    return undefined;
+  })();
+
+  return (
+    <ThemeProvider defaultTheme="dark">
+      <div className="h-screen bg-background flex flex-col">
+        {/* Header */}
+        <AppHeader
+          downloadsCount={installedMods.length}
+          updatesCount={updatesCount}
+          activeModsCount={activeMods.length}
+          onRefresh={handleRefresh}
+          onOpenSettings={handleOpenSettings}
+        />
+
+        {/* Main Content */}
+        <div className="flex-1 overflow-hidden flex">
+          {/* Left Sidebar - Always the same */}
+          <DownloadsSidebar
+            selectedCategory={selectedCategory}
+            onCategoryChange={handleCategoryChange}
+            installedCounts={installedCounts}
+            updatesCount={updatesCount}
+            selectedCharacters={selectedCharacters}
+            onCharacterToggle={handleCharacterToggle}
+            mods={mods}
+            conflictsReloadToken={conflictsReloadToken}
+          />
+
+          {/* Main Content Area */}
+          <div className="flex-1 flex flex-col">
+            {activeSummary ? (
+              <div className="px-6 pt-4">
+                <NxmHandoffPrompt
+                  id={activeSummary.id}
+                  modId={activeModId}
+                  fileId={activeFileId}
+                  modName={activeModName}
+                  fileName={activeFileName}
+                  version={activeFileVersion}
+                  createdAt={activeSummary.created_at ?? null}
+                  expiresAt={activeSummary.expires_at ?? null}
+                  error={activeNxmEntry?.error ?? null}
+                  acceptBusy={nxmIngestingId === activeSummary.id}
+                  dismissBusy={nxmDismissingId === activeSummary.id}
+                  onAccept={() => {
+                    if (!activeNxmEntry) return;
+                    void handleNxmIngest(activeNxmEntry);
+                  }}
+                  onDismiss={() => void handleNxmDismiss(activeSummary.id)}
+                />
+                {queueCount > 1 ? (
+                  <div className="px-2 pb-2 text-xs text-muted-foreground">
+                    {queueCount - 1} additional handoff
+                    {queueCount - 1 === 1 ? "" : "s"} in queue
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {/* Tab Header */}
+            <TabHeader
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+              downloadsCount={installedMods.length}
+              activeCount={activeMods.length}
+            />
+
+            {/* Tab Content */}
+            <div className="flex-1 overflow-hidden">
+              {activeTab === "downloads" ? (
+                <DownloadsPage
+                  mods={mods}
+                  onUpdate={handleUpdate}
+                  onUninstall={handleUninstall}
+                  onFavorite={handleFavorite}
+                  selectedCategory={selectedCategory}
+                  selectedCharacters={selectedCharacters}
+                  onModAdded={handleModAdded}
+                  onConflictStateChanged={notifyConflictsDirty}
+                />
+              ) : (
+                <ActiveModsView
+                  mods={mods}
+                  onToggleMod={handleToggleMod}
+                  onDisableAll={handleDisableAll}
+                  onEnableAll={handleEnableAll}
+                  onUpdate={handleUpdate}
+                  onUninstall={handleUninstall}
+                  onFavorite={handleFavorite}
+                  selectedCategory={selectedCategory}
+                  selectedCharacters={selectedCharacters}
+                  onConflictStateChanged={notifyConflictsDirty}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+
+        <GetStartedDialog
+          open={getStartedOpen}
+          loadingSettings={settingsLoading}
+          savingSettings={settingsSaving}
+          settings={settingsData}
+          bootstrapStatus={bootstrapStatus}
+          job={bootstrapJob}
+          jobRunning={bootstrapRunning}
+          onOpenChange={(isOpen) => {
+            const canDismiss =
+              !bootstrapRunning ||
+              !!(
+                bootstrapJob &&
+                bootstrapJob.status === "succeeded" &&
+                bootstrapJob.ok
+              );
+            if (!isOpen && !canDismiss) {
+              return;
+            }
+            setGetStartedOpen(isOpen);
+            if (isOpen) {
+              if (!settingsLoading && settingsData == null) {
+                void fetchSettings(false);
+              }
+              void fetchBootstrapStatus();
+            }
+          }}
+          onSubmit={saveSettings}
+          onRunBootstrap={handleBootstrapTask}
+          onRefreshSettings={handleSettingsRefresh}
+          onRefreshStatus={() => {
+            void fetchBootstrapStatus();
+          }}
+        />
+
+        {/* Toast Notifications */}
+        <SettingsDialog
+          open={settingsOpen}
+          loading={settingsLoading}
+          saving={settingsSaving}
+          settings={settingsData}
+          taskBusy={settingsTaskBusy}
+          taskJobs={settingsTaskJobs}
+          onOpenChange={handleSettingsOpenChange}
+          onRefresh={handleSettingsRefresh}
+          onSubmit={handleSettingsSubmit}
+          onRunTask={handleRunSettingsTask}
+        />
+        <Toaster />
+      </div>
+    </ThemeProvider>
+  );
+}

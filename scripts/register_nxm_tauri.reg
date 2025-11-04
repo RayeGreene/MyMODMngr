@@ -1,0 +1,43 @@
+Windows Registry Editor Version 5.00
+
+; NXM Protocol Registration for Mod Manager (Tauri App)
+; This registers nxm:// links to launch the Tauri desktop app directly
+; NO PYTHON REQUIRED - points to the Tauri .exe, not python.exe
+
+[HKEY_CURRENT_USER\Software\Classes\nxm]
+@="URL:nxm Protocol"
+"URL Protocol"=""
+
+[HKEY_CURRENT_USER\Software\Classes\nxm\DefaultIcon]
+; TODO: Update this path to your actual Tauri .exe location
+; Production: C:\\Users\\YourName\\AppData\\Local\\Programs\\project-modmanager-rivals\\project-modmanager-rivals.exe
+; Development: C:\\Path\\To\\Project\\src-tauri\\target\\release\\project-modmanager-rivals.exe
+@="\"C:\\Users\\rouna\\AppData\\Local\\Programs\\project-modmanager-rivals\\project-modmanager-rivals.exe\",0"
+
+[HKEY_CURRENT_USER\Software\Classes\nxm\shell]
+
+[HKEY_CURRENT_USER\Software\Classes\nxm\shell\open]
+
+[HKEY_CURRENT_USER\Software\Classes\nxm\shell\open\command]
+; CRITICAL: This MUST point to the Tauri .exe, NOT python.exe
+; The "%1" placeholder will be replaced with the actual nxm:// URL
+; TODO: Update this path to your actual Tauri .exe location
+@="\"C:\\Users\\rouna\\AppData\\Local\\Programs\\project-modmanager-rivals\\project-modmanager-rivals.exe\" \"%1\""
+
+; HOW TO USE:
+; 1. Find your Tauri .exe location:
+;    - Production: Usually in %LOCALAPPDATA%\Programs\project-modmanager-rivals\
+;    - Development: src-tauri\target\debug\ or src-tauri\target\release\
+; 
+; 2. Update BOTH paths above (DefaultIcon and command) with your actual .exe path
+;
+; 3. Double-click this .reg file to register
+;    OR use the Register button in the app's Settings panel (recommended)
+;
+; 4. Test by clicking an nxm:// link in your browser
+;
+; NOTES:
+; - Use double backslashes (\\) in .reg files
+; - Use quotes around paths that contain spaces
+; - The "%1" at the end is required - it's the nxm:// URL
+; - DO NOT point to python.exe - point to the Tauri .exe

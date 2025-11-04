@@ -1,0 +1,36 @@
+{
+  "encryption": {
+    "mode": "GCM",
+    "keyHex": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+  },
+  "targets": [
+    {
+      "container": "C:/path/to/your/Mod/Chunk0/Windows/paks/YourMod.pak",
+      "segments": [
+        {
+          "name": "header",
+          "offset": 0,
+          "size": 64,
+          "nonceHex": "000102030405060708090a0b",
+          "tagHex": "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+          "aadHex": null,
+          "outPath": null
+        }
+      ]
+    },
+    {
+      "container": "C:/path/to/your/Mod/Content/Paks/global.utoc",
+      "segments": [
+        {
+          "name": "toc_sample",
+          "offset": 0,
+          "size": 32,
+          "nonceHex": "000102030405060708090a0b",
+          "tagHex": "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+          "aadHex": null,
+          "outPath": null
+        }
+      ]
+    }
+  ]
+}
