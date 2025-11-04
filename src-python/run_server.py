@@ -7,17 +7,19 @@ import os
 import sys
 from pathlib import Path
 
+# CRITICAL: Add repo root to sys.path BEFORE any local imports
+_repo_root = Path(__file__).resolve().parents[1]
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
+
 import uvicorn
 
 from core.config.settings import SETTINGS, configure
 
 
 def _ensure_repo_on_path() -> Path:
-    """Add the repository root to ``sys.path`` so relative imports succeed."""
-    repo_root = Path(__file__).resolve().parents[1]
-    if str(repo_root) not in sys.path:
-        sys.path.insert(0, str(repo_root))
-    return repo_root
+    """Return the repository root (already added to sys.path at module load)."""
+    return _repo_root
 
 
 def _parse_args() -> argparse.Namespace:

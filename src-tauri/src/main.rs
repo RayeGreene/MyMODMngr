@@ -9,6 +9,11 @@ use tauri_plugin_shell::process::CommandEvent;
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use tauri_plugin_shell::ShellExt;
 
+#[cfg(target_os = "windows")]
+use winreg::enums::*;
+#[cfg(target_os = "windows")]
+use winreg::RegKey;
+
 #[derive(Clone, Default)]
 struct BackendChild(Arc<Mutex<Option<tauri_plugin_shell::process::CommandChild>>>);
 
@@ -30,6 +35,64 @@ fn get_executable_path() -> Result<String, String> {
     std::env::current_exe()
         .map(|p| p.to_string_lossy().to_string())
         .map_err(|e| format!("Failed to get executable path: {}", e))
+}
+
+// Windows-specific: Ensure NXM protocol is registered with proper quoting
+// This fixes the issue where ampersands in URLs get split by Windows shell
+#[cfg(target_os = "windows")]
+fn ensure_nxm_protocol_registration() -> Result<(), String> {
+    let exe_path = std::env::current_exe()
+        .map_err(|e| format!("Failed to get executable path: {}", e))?;
+    
+    let exe_str = exe_path.to_string_lossy().to_string();
+    
+    // The critical fix: Use proper quoting so the full URL is passed as ONE argument
+    // Format: "C:\Path\To\App.exe" "%1"
+    // The "%1" in quotes ensures ampersands and other special chars are preserved
+    let command_value = format!("\"{}\" \"%1\"", exe_str);
+    
+    println!("[NXM Protocol] Registering with command: {}", command_value);
+    
+    // Register under HKEY_CURRENT_USER (per-user, no admin needed)
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    
+    // Create/open: HKCU\Software\Classes\nxm
+    let (nxm_key, _) = hkcu
+        .create_subkey(r"Software\Classes\nxm")
+        .map_err(|e| format!("Failed to create nxm key: {}", e))?;
+    
+    // Set default value: "URL:nxm"
+    nxm_key
+        .set_value("", &"URL:nxm")
+        .map_err(|e| format!("Failed to set nxm description: {}", e))?;
+    
+    // Set URL Protocol marker (empty string value)
+    nxm_key
+        .set_value("URL Protocol", &"")
+        .map_err(|e| format!("Failed to set URL Protocol: {}", e))?;
+    
+    // Create: HKCU\Software\Classes\nxm\shell\open\command
+    let (command_key, _) = hkcu
+        .create_subkey(r"Software\Classes\nxm\shell\open\command")
+        .map_err(|e| format!("Failed to create command key: {}", e))?;
+    
+    // Set default value with PROPER QUOTING: "C:\Path\To\App.exe" "%1"
+    command_key
+        .set_value("", &command_value)
+        .map_err(|e| format!("Failed to set command value: {}", e))?;
+    
+    println!("[NXM Protocol] Successfully registered nxm:// protocol");
+    println!("[NXM Protocol] Executable: {}", exe_str);
+    println!("[NXM Protocol] Command registered: {}", command_value);
+    
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn ensure_nxm_protocol_registration() -> Result<(), String> {
+    // Non-Windows platforms use Tauri's built-in deep-link plugin
+    println!("[NXM Protocol] Using Tauri deep-link plugin (non-Windows)");
+    Ok(())
 }
 
 // Tauri command to handle NXM protocol URLs
@@ -269,6 +332,18 @@ fn main() {
             handle_nxm_url
         ])
         .setup(|app| {
+            // CRITICAL FIX: Register NXM protocol with proper quoting on Windows
+            // This ensures the full URL (including &key=...&expires=...) is passed intact
+            #[cfg(target_os = "windows")]
+            {
+                if let Err(e) = ensure_nxm_protocol_registration() {
+                    eprintln!("[NXM Protocol] WARNING: Failed to register protocol: {}", e);
+                    eprintln!("[NXM Protocol] Deep links may not work correctly!");
+                } else {
+                    println!("[NXM Protocol] Successfully ensured proper registration with quoting");
+                }
+            }
+            
             // Register deep link handler for nxm:// protocol
             #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
             {
