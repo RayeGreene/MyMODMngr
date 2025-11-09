@@ -175,6 +175,7 @@ export type ApiSettingsValidation = {
   repak_bin: ApiSettingPathValidation;
   retoc_cli: ApiSettingPathValidation;
   seven_zip_bin: ApiSettingPathValidation;
+  nexus_api_key: ApiSettingPathValidation;
 };
 
 export interface ApiUpdateSettingsRequest {
@@ -511,6 +512,29 @@ export async function unregisterNxmProtocol(): Promise<{
     Record<string, never>,
     { ok: boolean; message?: string; error?: string }
   >("/api/nxm/protocol/unregister", {});
+}
+
+export type LastNxmUrl = {
+  ok: boolean;
+  last_url: {
+    url: string;
+    received_at: string;
+    parsed?: {
+      game_domain: string;
+      mod_id: number;
+      file_id: number;
+      query_params: Record<string, string>;
+      has_key: boolean;
+      has_expires: boolean;
+      has_user_id: boolean;
+    };
+    parse_error?: string;
+  } | null;
+  message?: string;
+};
+
+export async function getLastNxmUrl(): Promise<LastNxmUrl> {
+  return getJson<LastNxmUrl>("/api/nxm/last-received");
 }
 
 // Mod details

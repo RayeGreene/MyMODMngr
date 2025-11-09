@@ -240,8 +240,12 @@ export function DownloadsSidebar({
 
   return (
     <div
-      className="w-80 min-w-0 bg-card border-r border-border h-full flex flex-col overflow-y-auto sidebar-hide-scrollbar"
+      className="w-80 bg-card border-r border-border h-full flex flex-col overflow-y-auto sidebar-hide-scrollbar"
       style={{
+        width: "20rem",
+        minWidth: "20rem",
+        maxWidth: "20rem",
+        flex: "0 0 20rem",
         scrollbarWidth: "none", // Firefox
         msOverflowStyle: "none", // IE 10+
         overflowY: "auto",

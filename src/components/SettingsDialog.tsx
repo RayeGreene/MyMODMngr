@@ -28,7 +28,6 @@ import {
   type SettingsTask,
 } from "../lib/api";
 import { NxmProtocolSettings } from "./NxmProtocolSettings";
-
 export type SettingsFormValues = {
   data_dir: string;
   marvel_rivals_root: string;
@@ -505,7 +504,7 @@ export function SettingsDialog({
                           />
                         </div>
 
-                        <div
+                        {/* <div
                           style={{
                             display: "flex",
                             alignItems: "flex-start",
@@ -535,7 +534,7 @@ export function SettingsDialog({
                             aria-label="Allow direct API downloads"
                             className="shrink-0"
                           />
-                        </div>
+                        </div> */}
                       </div>
                     </section>
 

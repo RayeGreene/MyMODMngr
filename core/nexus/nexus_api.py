@@ -3,15 +3,26 @@ import urllib.error
 import urllib.request
 from typing import Any, Dict, Optional, Tuple
 
-from core.config.settings import SETTINGS
+from core.config import settings
 
 BASE_URL = "https://api.nexusmods.com/v1"
 DEFAULT_GAME = "marvelrivals"
 APP_NAME = "Project_ModManager_Rivals"
 APP_VERSION = "0.1.0"
 
+def _coerce_key(raw: str | None) -> str:
+    return raw.strip() if raw else ""
+
+
 def get_api_key(*_, **__) -> Optional[str]:
-    value = SETTINGS.nexus_api_key.strip() if SETTINGS.nexus_api_key else ""
+    active_settings = settings.SETTINGS
+    value = _coerce_key(getattr(active_settings, "nexus_api_key", ""))
+    if value:
+        return value
+
+    # If the in-memory settings are stale, reload once from disk.
+    refreshed = settings.reload_settings()
+    value = _coerce_key(getattr(refreshed, "nexus_api_key", ""))
     return value or None
 
 def _get(api_key: str, path: str) -> Tuple[int, Any]:

@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { Toaster } from "./components/ui/sonner";
 import { ThemeProvider } from "./components/ThemeProvider";
 import { openInBrowser } from "./lib/tauri-utils";
+import { waitForMatchingHandoff } from "./lib/nxmHelpers";
 import {
   refreshConflicts,
   listDownloads,
@@ -20,8 +21,6 @@ import {
   updateMod,
   listNxmHandoffs,
   previewNxmHandoff,
-  ingestNxmHandoff,
-  dismissNxmHandoff,
   ApiError,
   type ApiDownload,
   type ApiNxmHandoffSummary,
@@ -37,7 +36,6 @@ import {
   type ApiUpdateSettingsRequest,
   type ApiBootstrapStatus,
 } from "./lib/api";
-import { NxmHandoffPrompt } from "./components/NxmHandoffPrompt";
 import {
   deriveCategoryTags,
   categoriesMatchTag,
@@ -72,8 +70,6 @@ export default function App() {
   const [selectedCharacters, setSelectedCharacters] = useState<string[]>([]);
   const [nxmEntries, setNxmEntries] = useState<Record<string, NxmEntry>>({});
   const nxmEntriesRef = useRef<Record<string, NxmEntry>>({});
-  const [nxmIngestingId, setNxmIngestingId] = useState<string | null>(null);
-  const [nxmDismissingId, setNxmDismissingId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
@@ -107,18 +103,6 @@ export default function App() {
       }
       const nextEntry = { ...prev[id], ...patch };
       const next = { ...prev, [id]: nextEntry };
-      nxmEntriesRef.current = next;
-      return next;
-    });
-  }, []);
-
-  const removeNxmEntry = useCallback((id: string) => {
-    setNxmEntries((prev) => {
-      if (!(id in prev)) {
-        return prev;
-      }
-      const next = { ...prev };
-      delete next[id];
       nxmEntriesRef.current = next;
       return next;
     });
@@ -213,6 +197,14 @@ export default function App() {
     setSettingsOpen(true);
   }, [fetchSettings, settingsLoading]);
 
+  const handleOpenBootstrap = useCallback(() => {
+    if (!settingsLoading && settingsData == null) {
+      void fetchSettings(false);
+    }
+    void fetchBootstrapStatus();
+    setGetStartedOpen(true);
+  }, [fetchBootstrapStatus, fetchSettings, settingsData, settingsLoading]);
+
   const handleSettingsOpenChange = useCallback(
     (isOpen: boolean) => {
       setSettingsOpen(isOpen);
@@ -261,25 +253,6 @@ export default function App() {
       console.error("Failed to fetch Nexus handoffs", err);
     }
   }, [updateNxmEntry]);
-
-  const handleNxmDismiss = useCallback(
-    async (handoffId: string) => {
-      setNxmDismissingId(handoffId);
-      try {
-        await dismissNxmHandoff(handoffId);
-        removeNxmEntry(handoffId);
-        toast.success("Dismissed Nexus download request");
-      } catch (err) {
-        const message =
-          err instanceof Error ? err.message : String(err ?? "Failed");
-        toast.error(`Failed to dismiss handoff: ${message}`);
-      } finally {
-        setNxmDismissingId(null);
-        void fetchNxmQueue();
-      }
-    },
-    [fetchNxmQueue, removeNxmEntry]
-  );
 
   useEffect(() => {
     void fetchNxmQueue();
@@ -448,23 +421,40 @@ export default function App() {
     );
 
     let responseLatestVersion = target.latestVersion || target.version || "";
-    try {
-      const response = await updateMod(backendModId, { activate: true });
-      responseLatestVersion = response.latest_version || responseLatestVersion;
+
+    const applyUpdateSuccess = async (result: any) => {
+      responseLatestVersion = result.latest_version || responseLatestVersion;
       await refreshMods({ quiet: true });
-      const message = response.already_latest
+      const message = result.already_latest
         ? `${displayName} is already on the latest version (${
             responseLatestVersion || "unknown"
           })`
         : `${displayName} updated to v${responseLatestVersion || "latest"}`;
       const hasWarning =
-        response.activation_warning &&
-        response.activation_warning.trim().length > 0;
+        typeof result.activation_warning === "string" &&
+        result.activation_warning.trim().length > 0;
       toast.success(message, {
         description: hasWarning
-          ? response.activation_warning ?? undefined
+          ? result.activation_warning ?? undefined
           : undefined,
       });
+      setMods((prev) =>
+        prev.map((mod) =>
+          mod.id === modId
+            ? {
+                ...mod,
+                isUpdating: false,
+                updateError: null,
+              }
+            : mod
+        )
+      );
+    };
+
+    try {
+      const response = await updateMod(backendModId, { activate: true });
+      await applyUpdateSuccess(response);
+      return;
     } catch (error) {
       const setUpdateError = (message: string) => {
         setMods((prev) =>
@@ -531,10 +521,8 @@ export default function App() {
                 })()
               : undefined;
 
-          setUpdateError(instructions);
-
           toast.warning(`Action needed for ${displayName}`, {
-            description: `${instructions} We've opened the Nexus Mods page so you can click "Mod Manager Download" for ${fileIdText}. Once the handoff appears in the queue, press "Download & Activate".`,
+            description: `${instructions} We've opened the Nexus Mods page so you can click "Mod Manager Download" for ${fileIdText}. We'll watch for the handoff and finish the update automatically once it appears.`,
           });
 
           if (nexusUrl) {
@@ -546,7 +534,52 @@ export default function App() {
           }
 
           void fetchNxmQueue();
-          return;
+
+          const fileIdRaw = detail["file_id"];
+          let expectedFileId: number | null = null;
+          if (typeof fileIdRaw === "number" && Number.isFinite(fileIdRaw)) {
+            expectedFileId = fileIdRaw;
+          } else if (typeof fileIdRaw === "string" && fileIdRaw.trim()) {
+            const parsed = Number.parseInt(fileIdRaw.trim(), 10);
+            if (Number.isFinite(parsed)) {
+              expectedFileId = parsed;
+            }
+          }
+
+          try {
+            const expectedModId = nexusModId ?? backendModId;
+            if (expectedModId == null) {
+              throw new Error("Missing Nexus mod id for the handoff.");
+            }
+            const handoff = await waitForMatchingHandoff(
+              expectedModId,
+              expectedFileId
+            );
+            if (!handoff) {
+              throw new Error(
+                "Timed out waiting for the Mod Manager download handoff."
+              );
+            }
+            const followUp = await updateMod(backendModId, {
+              activate: true,
+              handoffId: handoff.id,
+              ...(expectedFileId != null ? { fileId: expectedFileId } : {}),
+            });
+            await applyUpdateSuccess(followUp);
+            void fetchNxmQueue();
+            return;
+          } catch (handoffErr) {
+            const message =
+              handoffErr instanceof Error && handoffErr.message
+                ? handoffErr.message
+                : String(handoffErr ?? "Unknown handoff error");
+            setUpdateError(`${instructions} (${message})`);
+            toast.error(
+              `Failed to resume Nexus download for ${displayName}: ${message}`
+            );
+            void fetchNxmQueue();
+            return;
+          }
         }
       }
 
@@ -566,18 +599,6 @@ export default function App() {
       toast.error(`Failed to update ${displayName}: ${message}`);
       return;
     }
-
-    setMods((prev) =>
-      prev.map((mod) =>
-        mod.id === modId
-          ? {
-              ...mod,
-              isUpdating: false,
-              updateError: null,
-            }
-          : mod
-      )
-    );
   };
 
   const handleFavorite = (modId: string) => {
@@ -808,44 +829,6 @@ export default function App() {
       }
     },
     [refreshMods]
-  );
-
-  const handleNxmIngest = useCallback(
-    async (entry: NxmEntry) => {
-      const handoffId = entry.summary.id;
-      setNxmIngestingId(handoffId);
-      try {
-        const response = await ingestNxmHandoff(handoffId, {
-          activate: true,
-          deactivateExisting: false,
-        });
-        const modDisplayName =
-          typeof response.mod_name === "string" &&
-          response.mod_name.trim().length > 0
-            ? response.mod_name
-            : `Mod ${response.mod_id}`;
-        const selectedFile = response.selected_file as
-          | Record<string, unknown>
-          | undefined;
-        const fileDisplayName =
-          selectedFile && typeof selectedFile["name"] === "string"
-            ? (selectedFile["name"] as string)
-            : undefined;
-        toast.success(`Downloaded ${modDisplayName}`, {
-          description: fileDisplayName,
-        });
-        removeNxmEntry(handoffId);
-        await refreshMods({ quiet: true, includeConflicts: true });
-      } catch (err) {
-        const message =
-          err instanceof Error ? err.message : String(err ?? "Failed");
-        toast.error(`Failed to download Nexus mod: ${message}`);
-      } finally {
-        setNxmIngestingId(null);
-        void fetchNxmQueue();
-      }
-    },
-    [fetchNxmQueue, refreshMods, removeNxmEntry]
   );
 
   const handleRefresh = () => {
@@ -1251,60 +1234,6 @@ export default function App() {
     }
   };
 
-  const sortedNxmEntries = Object.values(nxmEntries).sort(
-    (a, b) => (b.summary.created_at ?? 0) - (a.summary.created_at ?? 0)
-  );
-  const activeNxmEntry = sortedNxmEntries[0];
-  const queueCount = sortedNxmEntries.length;
-
-  const activeSummary = activeNxmEntry?.summary;
-  const activePreview = activeNxmEntry?.preview;
-  const activeModInfo =
-    (activePreview?.mod_info as Record<string, unknown> | undefined) ??
-    (activeSummary?.metadata?.mod_info as Record<string, unknown> | undefined);
-  const activeModName =
-    activeModInfo && typeof activeModInfo["name"] === "string"
-      ? (activeModInfo["name"] as string)
-      : undefined;
-  const selectedFile = activePreview?.selected_file as
-    | Record<string, unknown>
-    | undefined;
-  const activeFileName =
-    selectedFile && typeof selectedFile["name"] === "string"
-      ? (selectedFile["name"] as string)
-      : undefined;
-  const activeFileVersion = (() => {
-    if (selectedFile) {
-      if (typeof selectedFile["version"] === "string") {
-        return selectedFile["version"] as string;
-      }
-      if (typeof selectedFile["mod_version"] === "string") {
-        return selectedFile["mod_version"] as string;
-      }
-    }
-    if (activeModInfo && typeof activeModInfo["version"] === "string") {
-      return activeModInfo["version"] as string;
-    }
-    return undefined;
-  })();
-  const activeModId =
-    activeSummary?.request?.mod_id ??
-    (activeModInfo && typeof activeModInfo["mod_id"] === "number"
-      ? (activeModInfo["mod_id"] as number)
-      : undefined);
-  const activeFileId = (() => {
-    if (typeof activePreview?.selected_file_id === "number") {
-      return activePreview.selected_file_id;
-    }
-    if (activeSummary?.request?.file_id != null) {
-      return activeSummary.request.file_id;
-    }
-    if (selectedFile && typeof selectedFile["file_id"] === "number") {
-      return selectedFile["file_id"] as number;
-    }
-    return undefined;
-  })();
-
   return (
     <ThemeProvider defaultTheme="dark">
       <div className="h-screen bg-background flex flex-col">
@@ -1315,6 +1244,7 @@ export default function App() {
           activeModsCount={activeMods.length}
           onRefresh={handleRefresh}
           onOpenSettings={handleOpenSettings}
+          onOpenBootstrap={handleOpenBootstrap}
         />
 
         {/* Main Content */}
@@ -1333,34 +1263,6 @@ export default function App() {
 
           {/* Main Content Area */}
           <div className="flex-1 flex flex-col">
-            {activeSummary ? (
-              <div className="px-6 pt-4">
-                <NxmHandoffPrompt
-                  id={activeSummary.id}
-                  modId={activeModId}
-                  fileId={activeFileId}
-                  modName={activeModName}
-                  fileName={activeFileName}
-                  version={activeFileVersion}
-                  createdAt={activeSummary.created_at ?? null}
-                  expiresAt={activeSummary.expires_at ?? null}
-                  error={activeNxmEntry?.error ?? null}
-                  acceptBusy={nxmIngestingId === activeSummary.id}
-                  dismissBusy={nxmDismissingId === activeSummary.id}
-                  onAccept={() => {
-                    if (!activeNxmEntry) return;
-                    void handleNxmIngest(activeNxmEntry);
-                  }}
-                  onDismiss={() => void handleNxmDismiss(activeSummary.id)}
-                />
-                {queueCount > 1 ? (
-                  <div className="px-2 pb-2 text-xs text-muted-foreground">
-                    {queueCount - 1} additional handoff
-                    {queueCount - 1 === 1 ? "" : "s"} in queue
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
             {/* Tab Header */}
             <TabHeader
               activeTab={activeTab}

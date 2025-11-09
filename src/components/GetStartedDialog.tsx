@@ -246,6 +246,24 @@ export function GetStartedDialog({
 
   const handleRunBootstrapClick = async () => {
     setErrorMessage(null);
+
+    // CRITICAL: Save settings BEFORE running bootstrap so the rebuild script
+    // can read the latest configuration (API key, paths, etc.) from disk
+    console.log("[GetStartedDialog] Saving settings before bootstrap...");
+    const settingsSaved = await onSubmit(formValues);
+    if (!settingsSaved) {
+      setErrorMessage(
+        "Unable to save settings. Please fix any errors and try again."
+      );
+      return;
+    }
+    console.log(
+      "[GetStartedDialog] Settings saved successfully, starting bootstrap..."
+    );
+
+    // Small delay to ensure settings.json is fully written to disk before subprocess reads it
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
     setStage("running");
     const ok = await onRunBootstrap();
     if (ok) {
@@ -587,6 +605,35 @@ export function GetStartedDialog({
                         value={formValues.nexus_api_key}
                         onChange={handleInputChange("nexus_api_key")}
                       />
+                      {settings?.validation?.nexus_api_key ? (
+                        <p
+                          style={{
+                            fontSize: "0.75rem",
+                            color: settings.validation.nexus_api_key.ok
+                              ? "#059669"
+                              : settings.validation.nexus_api_key.reason ===
+                                "not_configured"
+                              ? "#6b7280"
+                              : "#dc2626",
+                            marginTop: "0.25rem",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "0.25rem",
+                          }}
+                        >
+                          {settings.validation.nexus_api_key.ok ? (
+                            <CheckCircle
+                              style={{ width: "0.875rem", height: "0.875rem" }}
+                            />
+                          ) : (
+                            <AlertCircle
+                              style={{ width: "0.875rem", height: "0.875rem" }}
+                            />
+                          )}
+                          {settings.validation.nexus_api_key.message?.trim() ||
+                            ""}
+                        </p>
+                      ) : null}
                     </div>
 
                     <div className="space-y-2">

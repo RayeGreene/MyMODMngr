@@ -62,7 +62,7 @@ class AppSettings:
 	data_dir: Path = _default_data_dir()
 	marvel_rivals_root: Optional[Path] = None
 	marvel_rivals_local_downloads_root: Optional[Path] = None
-	nexus_api_key: str = "PhrRky7c5F7tKmdgPfr4Pgysj8FnViJxJuVPrAMnpvuPpZqS/g==--9S1Pqt+a/SVjJfsW--kbc5zktMJuy/y2HxgLtVHw=="
+	nexus_api_key: str = ""  # User must configure their own Nexus API key
 	aes_key_hex: str = "0x0C263D8C22DCB085894899C3A3796383E9BF9DE0CBFB08C9BF2DEF2E84F29D74"
 	allow_direct_api_downloads: bool = False
 	repak_bin: Optional[Path] = None
@@ -72,10 +72,43 @@ class AppSettings:
 
 
 # Path to settings file in data_dir
-def _settings_file_path(data_dir: Path = None) -> Path:
+def _settings_file_path(data_dir: Path | None = None) -> Path:
 	if data_dir is None:
 		data_dir = _default_data_dir()
-	return data_dir / "settings.json"
+	return Path(data_dir).expanduser().resolve() / "settings.json"
+
+
+def _candidate_data_dirs() -> list[Path]:
+	"""Resolve candidate data directories, honoring env and current settings.
+
+	Order of precedence:
+	1. MOD_MANAGER_DATA_DIR env override (if set)
+	2. Currently-loaded SETTINGS.data_dir (if available)
+	3. Default platform-specific data dir
+	"""
+
+	candidates: list[Path] = []
+
+	env_data_dir = os.environ.get("MOD_MANAGER_DATA_DIR")
+	if env_data_dir:
+		candidates.append(Path(env_data_dir).expanduser())
+
+	current_settings = globals().get("SETTINGS")
+	if isinstance(current_settings, AppSettings) and current_settings.data_dir:
+		candidates.append(Path(current_settings.data_dir))
+
+	candidates.append(_default_data_dir())
+
+	normalized: list[Path] = []
+	seen: set[str] = set()
+	for candidate in candidates:
+		resolved = candidate.expanduser().resolve()
+		key = str(resolved).lower()
+		if key in seen:
+			continue
+		seen.add(key)
+		normalized.append(resolved)
+	return normalized
 
 def _normalize_path(value: Optional[str | Path]) -> Optional[Path]:
 	if value is None or value == "":
@@ -115,39 +148,77 @@ def save_settings(settings: AppSettings) -> None:
 
 def load_settings() -> AppSettings:
 	import json
-	path = _settings_file_path()
-	if not path.exists():
-		print(f"[Settings] No settings file at {path}, using defaults")
-		return AppSettings()
+
+	candidates = _candidate_data_dirs()
+	last_error: Exception | None = None
+
 	try:
-		with open(path, "r", encoding="utf-8") as f:
-			data = json.load(f)
-		print(f"[Settings] Loaded settings from {path}")
-		print(f"[Settings] marvel_rivals_root: {data.get('marvel_rivals_root')}")
-		print(f"[Settings] marvel_rivals_local_downloads_root: {data.get('marvel_rivals_local_downloads_root')}")
-		# Use default AppSettings values for missing keys
-		defaults = AppSettings()
-		return AppSettings(
-			backend_host=data.get("backend_host", defaults.backend_host),
-			backend_port=data.get("backend_port", defaults.backend_port),
-			data_dir=_normalize_path(data.get("data_dir")) or defaults.data_dir,
-			marvel_rivals_root=_normalize_path(data.get("marvel_rivals_root")),
-			marvel_rivals_local_downloads_root=_normalize_path(data.get("marvel_rivals_local_downloads_root")),
-			nexus_api_key=data.get("nexus_api_key", defaults.nexus_api_key),
-			aes_key_hex=data.get("aes_key_hex", defaults.aes_key_hex),
-			allow_direct_api_downloads=bool(data.get("allow_direct_api_downloads", defaults.allow_direct_api_downloads)),
-			repak_bin=_normalize_path(data.get("repak_bin")),
-			retoc_cli=_normalize_path(data.get("retoc_cli")),
-			seven_zip_bin=_normalize_path(data.get("seven_zip_bin")),
-		)
-	except Exception as e:
-		print(f"[Settings] ERROR loading settings: {e}")
-		import traceback
-		traceback.print_exc()
-		return AppSettings()
+		print("[Settings] Candidate data directories:")
+		for idx, candidate in enumerate(candidates, start=1):
+			print(f"[Settings]   {idx}. {candidate}")
+	except Exception:
+		pass
+
+	for data_dir in candidates:
+		path = _settings_file_path(data_dir)
+		if not path.exists():
+			continue
+		try:
+			with open(path, "r", encoding="utf-8") as f:
+				data = json.load(f)
+			print(f"[Settings] Loaded settings from {path}")
+			print(f"[Settings] marvel_rivals_root: {data.get('marvel_rivals_root')}")
+			print(f"[Settings] marvel_rivals_local_downloads_root: {data.get('marvel_rivals_local_downloads_root')}")
+			if data.get("nexus_api_key"):
+				print(f"[Settings] nexus_api_key length: {len(str(data.get('nexus_api_key')))}")
+			else:
+				print("[Settings] nexus_api_key missing or empty in file")
+			defaults = AppSettings()
+			resolved_data_dir = _normalize_path(data.get("data_dir")) or data_dir
+			return AppSettings(
+				backend_host=data.get("backend_host", defaults.backend_host),
+				backend_port=data.get("backend_port", defaults.backend_port),
+				data_dir=resolved_data_dir,
+				marvel_rivals_root=_normalize_path(data.get("marvel_rivals_root")),
+				marvel_rivals_local_downloads_root=_normalize_path(data.get("marvel_rivals_local_downloads_root")),
+				nexus_api_key=data.get("nexus_api_key", defaults.nexus_api_key),
+				aes_key_hex=data.get("aes_key_hex", defaults.aes_key_hex),
+				allow_direct_api_downloads=bool(data.get("allow_direct_api_downloads", defaults.allow_direct_api_downloads)),
+				repak_bin=_normalize_path(data.get("repak_bin")),
+				retoc_cli=_normalize_path(data.get("retoc_cli")),
+				seven_zip_bin=_normalize_path(data.get("seven_zip_bin")),
+			)
+		except Exception as e:
+			last_error = e
+			print(f"[Settings] ERROR loading settings from {path}: {e}")
+			import traceback
+			traceback.print_exc()
+
+	# If we reach here, no existing settings file was found; fall back to first candidate
+	if last_error is None:
+		# Provide feedback on where we expect to write new settings
+		fallback_dir = candidates[0] if candidates else _default_data_dir()
+		path = _settings_file_path(fallback_dir)
+		print(f"[Settings] No settings file found. Using defaults with data_dir={fallback_dir}")
+		return AppSettings(data_dir=fallback_dir)
+
+	# If we failed to load due to persistent error, return defaults but surface via print
+	print("[Settings] Falling back to default settings due to previous errors")
+	return AppSettings()
 
 # Load settings from disk on startup
 SETTINGS = load_settings()
+
+
+def reload_settings() -> AppSettings:
+	"""Reload settings from disk and update the global SETTINGS object.
+	
+	This is useful when settings.json has been updated by another process
+	or by the API server, and we need to pick up the new values.
+	"""
+	global SETTINGS
+	SETTINGS = load_settings()
+	return SETTINGS
 
 
 def configure(**overrides: object) -> AppSettings:

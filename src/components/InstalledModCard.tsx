@@ -82,8 +82,20 @@ export function InstalledModCard({
     return (
       <Card className="hover:shadow-md transition-shadow">
         <CardContent className="p-4">
-          <div className="flex gap-4">
-            <div className="w-20 h-16 bg-muted rounded-lg overflow-hidden flex-shrink-0 relative">
+          <div className="flex gap-4 flex-wrap sm:flex-nowrap">
+            <div
+              className="w-20 h-16 bg-muted rounded-lg overflow-hidden flex-shrink-0 relative cursor-pointer"
+              role="button"
+              tabIndex={0}
+              aria-label={`Open ${mod.name} details`}
+              onClick={() => onView(mod)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onView(mod);
+                }
+              }}
+            >
               <img
                 src={mod.images[0]}
                 alt={mod.name}
@@ -101,9 +113,9 @@ export function InstalledModCard({
             </div>
 
             <div className="flex-1 min-w-0">
-              <div className="flex items-start justify-between">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 mb-1">
+              <div className="flex flex-col sm:flex-row items-start justify-between gap-2">
+                <div className="min-w-0 flex-1 w-full">
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
                     <h3
                       className="font-medium truncate cursor-pointer hover:text-primary"
                       onClick={() => onView(mod)}
@@ -111,7 +123,7 @@ export function InstalledModCard({
                       {mod.name}
                     </h3>
                     {mod.hasUpdate && (
-                      <Badge variant="destructive" className="text-xs">
+                      <Badge variant="destructive" className="text-xs shrink-0">
                         Update Available
                       </Badge>
                     )}
@@ -121,24 +133,26 @@ export function InstalledModCard({
                     {mod.description}
                   </p>
 
-                  <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                    <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-2 sm:gap-4 text-xs text-muted-foreground flex-wrap">
+                    <div className="flex items-center gap-1 shrink-0">
                       <User className="w-3 h-3" />
-                      {mod.author}
+                      <span className="truncate max-w-[120px]">
+                        {mod.author}
+                      </span>
                     </div>
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1 shrink-0">
                       <Calendar className="w-3 h-3" />
                       Installed {formatDate(mod.installDate || mod.lastUpdated)}
                     </div>
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-1 shrink-0">
                       <CheckCircle className="w-3 h-3 text-green-500" />
                       Active
                     </div>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 ml-4">
-                  <div className="flex items-center gap-1 overflow-hidden flex-nowrap">
+                <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap">
+                  <div className="flex items-center gap-1 overflow-hidden flex-wrap sm:flex-nowrap">
                     {displayTags.map((tag) => (
                       <Badge
                         key={`tag-${mod.id}-${tag}`}
@@ -176,7 +190,7 @@ export function InstalledModCard({
                       variant="outline"
                       size="sm"
                       onClick={() => onUpdate(mod.id)}
-                      className="gap-1"
+                      className="gap-1 shrink-0"
                       disabled={mod.isUpdating}
                       aria-disabled={mod.isUpdating}
                     >
@@ -193,7 +207,7 @@ export function InstalledModCard({
                     variant="ghost"
                     size="sm"
                     onClick={() => onUninstall(mod.id)}
-                    className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                    className="text-destructive hover:text-destructive hover:bg-destructive/10 shrink-0"
                   >
                     <Trash2 className="w-3 h-3" />
                   </Button>
@@ -209,7 +223,19 @@ export function InstalledModCard({
   return (
     <Card className="hover:shadow-lg dark:hover:shadow-white transition-all duration-200 group relative">
       <CardContent className="p-0 min-h-[370px] flex flex-col flex-1">
-        <div className="aspect-video bg-muted relative overflow-hidden rounded-t-lg">
+        <div
+          className="aspect-video bg-muted relative overflow-hidden rounded-t-lg cursor-pointer"
+          role="button"
+          tabIndex={0}
+          aria-label={`Open ${mod.name} details`}
+          onClick={() => onView(mod)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              onView(mod);
+            }
+          }}
+        >
           <img
             src={mod.images[0]}
             alt={mod.name}
@@ -232,7 +258,11 @@ export function InstalledModCard({
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={() => onView(mod)}
+                onClick={(ev) => {
+                  // prevent parent handler from double-firing
+                  ev.stopPropagation();
+                  onView(mod);
+                }}
                 className="gap-2"
               >
                 <Eye className="w-4 h-4" />

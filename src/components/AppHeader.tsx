@@ -1,6 +1,6 @@
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
-import { Package, Bell, Settings, RefreshCw } from "lucide-react";
+import { Package, Bell, Settings, RefreshCw, Rocket } from "lucide-react";
 
 interface AppHeaderProps {
   downloadsCount: number;
@@ -8,6 +8,7 @@ interface AppHeaderProps {
   activeModsCount: number;
   onRefresh: () => void;
   onOpenSettings: () => void;
+  onOpenBootstrap?: () => void;
 }
 
 export function AppHeader({
@@ -16,6 +17,7 @@ export function AppHeader({
   activeModsCount,
   onRefresh,
   onOpenSettings,
+  onOpenBootstrap,
 }: AppHeaderProps) {
   return (
     <div className="bg-card border-b border-border">
@@ -53,6 +55,17 @@ export function AppHeader({
 
           {/* Actions */}
           <div className="flex items-center gap-2">
+            {onOpenBootstrap && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onOpenBootstrap}
+                className="gap-2"
+              >
+                <Rocket className="w-4 h-4" />
+                Setup
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"

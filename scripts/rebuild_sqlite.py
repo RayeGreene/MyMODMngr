@@ -16,6 +16,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
 	sys.path.insert(0, str(ROOT))
 
+# Reload settings from disk to ensure we have the latest configuration
+from core.config.settings import reload_settings
+reload_settings()
+
 from core.db import (
 	get_connection,
 	init_schema,
@@ -133,10 +137,14 @@ def _resolve_db_path(raw: Optional[str]) -> Path:
 
 
 def _resolve_downloads_root(override: Optional[str]) -> Path:
-	candidate = override or os.environ.get("MARVEL_RIVALS_LOCAL_DOWNLOADS_ROOT")
+	"""Resolve downloads root from override, SETTINGS, or environment (in that order)."""
+	from core.config.settings import SETTINGS
+	
+	candidate = override or (str(SETTINGS.marvel_rivals_local_downloads_root) if SETTINGS.marvel_rivals_local_downloads_root else None) or os.environ.get("MARVEL_RIVALS_LOCAL_DOWNLOADS_ROOT")
 	if not candidate:
 		raise RuntimeError(
-			"MARVEL_RIVALS_LOCAL_DOWNLOADS_ROOT is not set. Define it in .env or pass --downloads-root."
+			"Marvel Rivals local downloads root is not configured. "
+			"Please configure it in Settings or pass --downloads-root."
 		)
 	root = Path(candidate).expanduser().resolve()
 	if not root.exists():
@@ -145,9 +153,15 @@ def _resolve_downloads_root(override: Optional[str]) -> Path:
 
 
 def _resolve_game_root(override: Optional[str]) -> Path:
-	candidate = override or os.environ.get("MARVEL_RIVALS_ROOT")
+	"""Resolve game root from override, SETTINGS, or environment (in that order)."""
+	from core.config.settings import SETTINGS
+	
+	candidate = override or (str(SETTINGS.marvel_rivals_root) if SETTINGS.marvel_rivals_root else None) or os.environ.get("MARVEL_RIVALS_ROOT")
 	if not candidate:
-		raise RuntimeError("MARVEL_RIVALS_ROOT is not set. Provide --game-root or configure the environment.")
+		raise RuntimeError(
+			"Marvel Rivals game root is not configured. "
+			"Please configure it in Settings or pass --game-root."
+		)
 	root = Path(candidate).expanduser().resolve()
 	if not root.exists():
 		raise FileNotFoundError(f"Game root not found: {root}")
@@ -230,7 +244,9 @@ def _sync_mod_metadata(
 		return 0
 	key = get_api_key()
 	if not key:
-		raise RuntimeError("Missing Nexus API key. Set NEXUS_API_KEY in the environment or .env")
+		log.warning("Nexus API key not configured - skipping Nexus metadata sync.")
+		log.warning("To enable Nexus metadata sync, configure your API key in Settings.")
+		return 0
 	prefs = load_prefs()
 	processed = 0
 	for idx, mod_id in enumerate(mod_ids, start=1):
@@ -326,6 +342,16 @@ def _run_active_scan(db_path: Path, log: logging.Logger, *, game_root: Optional[
 
 
 def main(argv: Optional[Iterable[str]] = None) -> int:
+	current_settings = reload_settings()
+	try:
+		key_preview = len(current_settings.nexus_api_key.strip()) if current_settings.nexus_api_key else 0
+		if key_preview:
+			print(f"[Settings] Active Nexus API key detected (length={key_preview})")
+		else:
+			print("[Settings] No Nexus API key detected at task start")
+	except Exception:
+		pass
+
 	args = parse_args(argv)
 	logging.basicConfig(
 		level=getattr(logging, args.log_level.upper(), logging.INFO),
@@ -372,7 +398,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
 				rows = _load_download_rows_from_json(Path(args.downloads_json), args.downloads_limit, log)
 			else:
 				if downloads_root_path is None:
-					raise RuntimeError("Downloads root could not be resolved from .env")
+					raise RuntimeError(
+						"Downloads root could not be resolved. "
+						"Please configure Marvel Rivals local downloads root in Settings."
+					)
 				rows = _scan_download_rows(downloads_root_path, args.downloads_limit, log)
 			_store_local_downloads(db_path, rows, log)
 		else:

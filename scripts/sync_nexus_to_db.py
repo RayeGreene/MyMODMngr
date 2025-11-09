@@ -3,6 +3,10 @@ import json
 import time
 from typing import Iterable, List, Optional
 
+# Reload settings from disk to ensure we have the latest configuration
+from core.config.settings import reload_settings
+reload_settings()
+
 from core.db import (
     get_connection,
     init_schema,
@@ -34,7 +38,9 @@ def sync_mods(mod_ids: List[int], game: Optional[str] = None, rate_delay: float 
     init_schema(conn)
     key = get_api_key()
     if not key:
-        raise RuntimeError("Missing API key. Set NEXUS_API_KEY in environment or .env.")
+        print("WARNING: Nexus API key not configured - skipping Nexus metadata sync.")
+        print("To enable Nexus metadata sync, configure your API key in Settings.")
+        return
     prefs = load_prefs()
     to_process = list(dict.fromkeys(mod_ids))
     for i, mod_id in enumerate(to_process, 1):

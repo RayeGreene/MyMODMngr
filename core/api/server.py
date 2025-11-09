@@ -99,11 +99,35 @@ logger.info(f"Database Exists: {(SETTINGS.data_dir / 'mods.db').exists()}")
 logger.info("=" * 70)
 
 UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1 MiB chunks for uploads
+
+# Store the last received NXM URL for testing/debugging purposes
+_LAST_NXM_URL: Optional[Dict[str, Any]] = None
 verify_required_dns_hosts()
 
 _SETTINGS_TASK_LOCK = threading.Lock()
 _SETTINGS_TASK_JOBS: Dict[str, Dict[str, Any]] = {}
 _SETTINGS_TASK_MAX_JOBS = 25
+
+
+def _safe_rebuild_conflicts(
+	conn,
+	*,
+	active_only: Optional[bool],
+	purpose: str,
+	raise_on_error: bool = False,
+) -> Optional[Dict[str, int]]:
+	"""Rebuild conflict tables, logging failures with context and optional re-raise."""
+	try:
+		return rebuild_conflicts(conn, active_only=active_only)
+	except Exception:
+		logger.exception(
+			"Failed to rebuild conflict tables during %s (active_only=%s)",
+			purpose,
+			active_only,
+		)
+		if raise_on_error:
+			raise
+		return None
 
 
 def _get_current_settings():
@@ -460,6 +484,26 @@ def _validate_executable_path(path: Union[str, Path, None], *, label: str, requi
 	}
 
 
+def _validate_api_key(value: Optional[str]) -> Dict[str, Any]:
+	trimmed = (value or "").strip()
+	optional = True
+	if not trimmed:
+		return {
+			"ok": False,
+			"exists": False,
+			"reason": "not_configured",
+			"optional": optional,
+			"message": "Nexus API key not configured",
+		}
+	return {
+		"ok": True,
+		"exists": True,
+		"reason": None,
+		"optional": optional,
+		"message": f"Ready (length {len(trimmed)} chars)",
+	}
+
+
 def _collect_settings_validation(settings) -> Dict[str, Any]:
 	validation = {
 		"data_dir": _validate_directory_path(settings.data_dir, required=True),
@@ -468,6 +512,7 @@ def _collect_settings_validation(settings) -> Dict[str, Any]:
 		"repak_bin": _validate_executable_path(settings.repak_bin, label="RePak CLI", required=False),
 		"retoc_cli": _validate_executable_path(settings.retoc_cli, label="ReToc CLI", required=False),
 		"seven_zip_bin": _validate_executable_path(settings.seven_zip_bin, label="7-Zip", required=False),
+		"nexus_api_key": _validate_api_key(settings.nexus_api_key),
 	}
 	return _serialize_validation(validation)
 
@@ -593,7 +638,12 @@ def _task_rebuild_conflicts() -> int:
 	try:
 		init_schema(conn)
 		run_migrations(conn)
-		results = rebuild_conflicts(conn, active_only=None)
+		results = _safe_rebuild_conflicts(
+			conn,
+			active_only=None,
+			purpose="cli_rebuild_conflicts",
+			raise_on_error=True,
+		) or {}
 	finally:
 		try:
 			conn.close()
@@ -1210,10 +1260,7 @@ def _ingest_resolved_download(
 			resolved_mod_id = metadata_mod_id_hint
 
 		# Refresh conflict tables after finalizing mod IDs so new installs register
-		try:
-			rebuild_conflicts(conn, active_only=None)
-		except Exception:
-			pass
+		_safe_rebuild_conflicts(conn, active_only=None, purpose="ingest_mod")
 
 		res = {
 			"ok": True,
@@ -1764,23 +1811,60 @@ def add_mod(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 
 @app.post("/api/nxm/handoff")
 def submit_nxm_handoff(payload: Optional[Dict[str, Any]] = Body(default=None)) -> Dict[str, Any]:
+	global _LAST_NXM_URL
+	
 	nxm_value: Optional[str] = None
 	if payload is not None:
 		nxm_value = payload.get("nxm")
 	if not isinstance(nxm_value, str) or not nxm_value.strip():
 		raise HTTPException(status_code=400, detail="nxm field is required")
+	
+	# DEBUG: Log the exact URL received
+	logger.info("[NXM DEBUG] ===== RECEIVED NXM URL =====")
+	logger.info("[NXM DEBUG] Full URL: %s", nxm_value)
+	logger.info("[NXM DEBUG] URL length: %d", len(nxm_value))
+	logger.info("[NXM DEBUG] Contains '?': %s", "?" in nxm_value)
+	logger.info("[NXM DEBUG] Contains '&': %s", "&" in nxm_value)
+	if "?" in nxm_value:
+		query_part = nxm_value.split("?", 1)[1] if "?" in nxm_value else ""
+		logger.info("[NXM DEBUG] Query string: %s", query_part)
+	logger.info("[NXM DEBUG] =============================")
+	
+	# Store the last received NXM URL for testing/debugging
+	_LAST_NXM_URL = {
+		"url": nxm_value,
+		"received_at": datetime.utcnow().isoformat() + "Z",
+	}
+	
 	try:
 		nxm_request = parse_nxm_uri(nxm_value)
+		
+		# Add parsed details to last NXM URL info
+		_LAST_NXM_URL["parsed"] = {
+			"game_domain": nxm_request.game_domain,
+			"mod_id": nxm_request.mod_id,
+			"file_id": nxm_request.file_id,
+			"query_params": nxm_request.query,
+			"has_key": bool(nxm_request.key),
+			"has_expires": bool(nxm_request.expires),
+			"has_user_id": bool(nxm_request.user_id),
+		}
+		
 	except NXMParseError as exc:
+		# Even if parsing fails, we still stored the raw URL
+		if _LAST_NXM_URL:
+			_LAST_NXM_URL["parse_error"] = str(exc)
 		raise HTTPException(status_code=400, detail=str(exc))
+	
 	metadata = snapshot_metadata(nxm_request)
 	record = register_handoff(nxm_request, metadata=metadata)
 	logger.info(
-		"[nxm_handoff] received id=%s game=%s mod_id=%s file_id=%s",
+		"[nxm_handoff] received id=%s game=%s mod_id=%s file_id=%s query_params=%s",
 		record["id"],
 		nxm_request.game_domain,
 		nxm_request.mod_id,
 		nxm_request.file_id,
+		nxm_request.query,
 	)
 	return {"ok": True, "handoff": serialize_handoff(record)}
 
@@ -1791,6 +1875,22 @@ def get_nxm_handoff(handoff_id: str) -> Dict[str, Any]:
 		raise HTTPException(status_code=400, detail="handoff_id is required")
 	record = get_handoff_or_404(handoff_id)
 	return {"ok": True, "handoff": serialize_handoff(record)}
+
+
+@app.get("/api/nxm/last-received")
+def get_last_nxm_url() -> Dict[str, Any]:
+	"""Get the last NXM URL received by the backend for testing/debugging purposes."""
+	if _LAST_NXM_URL is None:
+		return {
+			"ok": True,
+			"last_url": None,
+			"message": "No NXM URL has been received yet",
+		}
+	
+	return {
+		"ok": True,
+		"last_url": _LAST_NXM_URL,
+	}
 
 
 @app.get("/api/nxm/handoffs")
@@ -1869,6 +1969,42 @@ def _collect_nexus_metadata_for_record(record: Dict[str, Any]) -> tuple[str, Dic
 	metadata["collect_all_timestamp"] = now
 	metadata["collect_all_filtered"] = filtered
 	return game_domain, payload, filtered
+
+
+def _find_matching_handoff(
+	mod_id: int,
+	*,
+	target_file_id: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+	"""Return the most recent handoff compatible with the given mod and file.
+
+	Parameters
+	----------
+	mod_id: int
+		The Nexus mod id we want to fulfill.
+	target_file_id: Optional[int]
+		Optionally restrict the search to handoffs that reference a specific file id.
+
+	Returns
+	-------
+	Optional[Dict[str, Any]]
+		The newest matching handoff record, or ``None`` if no compatible handoff exists.
+	"""
+	candidates: List[Dict[str, Any]] = []
+	for record in list_handoffs():
+		req = record.get("request") or {}
+		req_mod_id = _coerce_int(req.get("mod_id"))
+		if req_mod_id != mod_id:
+			continue
+		if target_file_id is not None:
+			req_file_id = _coerce_int(req.get("file_id"))
+			if req_file_id is not None and req_file_id != target_file_id:
+				continue
+		candidates.append(record)
+	if not candidates:
+		return None
+	candidates.sort(key=lambda rec: rec.get("created_at") or 0, reverse=True)
+	return candidates[0]
 
 
 def _summarize_mod_files(files_payload: Any) -> List[Dict[str, Any]]:
@@ -2435,6 +2571,31 @@ def update_mod(mod_id: int, payload: Optional[Dict[str, Any]] = Body(default=Non
 			fallback_uploaded_at=latest_uploaded_at,
 		)
 
+	matching_handoff = _find_matching_handoff(
+		mod_id,
+		target_file_id=requested_file_id or latest_file_id,
+	)
+	if matching_handoff and isinstance(matching_handoff.get("id"), str):
+		record_id = matching_handoff["id"]
+		logger.info(
+			"[update_mod] auto-consuming nxm handoff mod_id=%s file_id=%s handoff=%s",
+			mod_id,
+			requested_file_id or latest_file_id,
+			record_id,
+		)
+		return _complete_update_from_handoff(
+			record_id,
+			mod_id=mod_id,
+			mod_name=mod_name,
+			requested_file_id=requested_file_id,
+			auto_activate=auto_activate,
+			desired_paks_opt=desired_paks_opt,
+			preflight_metadata=preflight_metadata,
+			fallback_latest_version=latest_version,
+			fallback_file_id=latest_file_id,
+			fallback_uploaded_at=latest_uploaded_at,
+		)
+
 	if not allow_direct_api:
 		detail = _nxm_required_detail(
 			mod_id,
@@ -2719,7 +2880,12 @@ def refresh_conflicts() -> Dict[str, Any]:
 				"message": "No data to process yet - database needs bootstrapping"
 			}
 		
-		res = rebuild_conflicts(conn, active_only=None)
+		res = _safe_rebuild_conflicts(
+			conn,
+			active_only=None,
+			purpose="manual_refresh_conflicts",
+			raise_on_error=True,
+		) or {}
 		return {"ok": True, "results": res}
 	except Exception as e:
 		logger.error(f"Error refreshing conflicts: {e}")
@@ -3502,11 +3668,22 @@ def _resolve_nexus_download_candidates(
 	key = str(query.get("key") or metadata.get("key") or "").strip()
 	expires = str(query.get("expires") or metadata.get("expires") or "").strip()
 	user_id = str(query.get("user_id") or "").strip()
+	
+	# DEBUG: Log what we extracted
+	logger.info("[NXM DEBUG] Extracted from URL - key: %s, expires: %s, user_id: %s", 
+		"(present)" if key else "(MISSING)", 
+		"(present)" if expires else "(MISSING)", 
+		"(present)" if user_id else "(MISSING)")
+	
 	if not key or not expires:
-		raise HTTPException(
-			status_code=400,
-			detail="nxm handoff missing download authorization; please click Mod Manager Download again",
+		error_msg = (
+			"NXM download authorization missing or expired. "
+			"Please ensure you are logged into NexusMods in your browser, "
+			"then click 'Download with Manager' button again. "
+			f"(key={'present' if key else 'MISSING'}, expires={'present' if expires else 'MISSING'})"
 		)
+		logger.error("[NXM DEBUG] %s", error_msg)
+		raise HTTPException(status_code=400, detail=error_msg)
 	domain = (game_domain or DEFAULT_GAME or "marvelrivals").strip().lower() or DEFAULT_GAME
 	params = {"key": key, "expires": expires}
 	if user_id:
@@ -3538,6 +3715,26 @@ def _resolve_nexus_download_candidates(
 		except Exception:
 			pass
 		detail = body or exc.reason or str(exc)
+		
+		# Parse the error message
+		error_context = ""
+		if exc.code == 400 and body:
+			try:
+				error_data = json.loads(body)
+				if isinstance(error_data, dict):
+					error_message = error_data.get("message", "")
+					if "key and expire time isn't correct" in str(error_message).lower():
+						error_context = (
+							"\n\nThis error typically means:\n"
+							"1. The download link has EXPIRED (they expire in ~10 minutes)\n"
+							"2. You are not logged into NexusMods in your browser\n"
+							"3. The link was generated for a different user\n\n"
+							"SOLUTION: Log into YOUR NexusMods account in your browser, "
+							"then click 'Download with Manager' button AGAIN to generate a fresh link."
+						)
+			except Exception:
+				pass
+		
 		if exc.code in (401, 403):
 			raise HTTPException(
 				status_code=exc.code,
@@ -3547,6 +3744,11 @@ def _resolve_nexus_download_candidates(
 					"If the issue persists, configure a Nexus API key. "
 					f"Details: {detail}"
 				),
+			)
+		elif exc.code == 400:
+			raise HTTPException(
+				status_code=exc.code,
+				detail=f"Nexus download link request failed ({exc.code}): {detail}{error_context}"
 			)
 		raise HTTPException(status_code=exc.code or 502, detail=f"Nexus download link request failed ({exc.code}): {detail}")
 	except urllib.error.URLError as exc:
@@ -3865,10 +4067,7 @@ def delete_local_downloads_endpoint(payload: Dict[str, Any] = Body(...)) -> Dict
 			_bpt.main([])
 		except Exception:
 			pass
-		try:
-			rebuild_conflicts(conn, active_only=None)
-		except Exception:
-			pass
+		_safe_rebuild_conflicts(conn, active_only=None, purpose="delete_local_downloads")
 		return {
 			"ok": True,
 			"deleted": deleted_count,
@@ -4320,10 +4519,7 @@ def set_active_paks(download_id: int, payload: Dict[str, Any] = Body(...)) -> Di
 		scan_active_main(_get_scan_active_args())
 	except Exception:
 		pass
-	try:
-		rebuild_conflicts(conn, active_only=1)
-	except Exception:
-		pass
+	_safe_rebuild_conflicts(conn, active_only=True, purpose="set_active_paks")
 	try:
 		conn.close()
 	except Exception:
@@ -4450,7 +4646,7 @@ def activate_by_name(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 			except Exception:
 				pass
 		scan_active_main(_get_scan_active_args())
-		rebuild_conflicts(conn, active_only=1)
+		_safe_rebuild_conflicts(conn, active_only=True, purpose="activate_by_name")
 	finally:
 		try:
 			conn.close()
@@ -4500,7 +4696,7 @@ def deactivate_by_name(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 		pass
 	try:
 		scan_active_main(_get_scan_active_args())
-		rebuild_conflicts(conn, active_only=1)
+		_safe_rebuild_conflicts(conn, active_only=True, purpose="deactivate_by_name")
 	finally:
 		try:
 			conn.close()

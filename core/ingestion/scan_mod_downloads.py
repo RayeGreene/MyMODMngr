@@ -10,16 +10,22 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from core.config import settings
+from core.config.settings import AppSettings
 from core.db import get_connection, init_schema, replace_local_downloads
 from core.utils.mod_filename import parse_mod_filename_to_row
 from core.utils.download_paths import normalize_download_path
 from core.utils.archive import list_entries
 from scripts.sync_nexus_to_db import sync_mods
-from core.config.settings import SETTINGS
 
-DEFAULT_DOWNLOADS_ROOT = SETTINGS.marvel_rivals_local_downloads_root or Path(
+DEFAULT_DOWNLOADS_ROOT_FALLBACK = Path(
     r"C:\Users\rouna\OneDrive\Documents\Marvel_Rivals_Mods\downloads"
 )
+
+
+def _resolve_default_downloads_root(active_settings: AppSettings) -> Path:
+    configured = active_settings.marvel_rivals_local_downloads_root
+    return configured if configured else DEFAULT_DOWNLOADS_ROOT_FALLBACK
 
 
 def list_files_level_one_including_root(root_dir: str) -> List[tuple[str, str]]:
@@ -291,11 +297,13 @@ def ingest_single_file(
 
 
 if __name__ == "__main__":
+    active_settings = settings.reload_settings()
+    default_root = _resolve_default_downloads_root(active_settings)
     parser = argparse.ArgumentParser(description="Ingest local mod downloads into SQLite.")
     parser.add_argument(
         "--root",
         dest="root",
-        default=str(DEFAULT_DOWNLOADS_ROOT),
+        default=str(default_root),
         help="Root folder containing downloaded mods (default: %(default)s)",
     )
     parser.add_argument(

@@ -71,7 +71,10 @@ export function Sidebar({
   const isCharactersSelected = selectedCategory === "characters";
 
   return (
-    <div className="w-80 bg-card border-r border-border h-full flex flex-col">
+    <div
+      className="w-80 flex-shrink-0 bg-card border-r border-border h-full flex flex-col"
+      style={{ width: "20rem", minWidth: "20rem", flex: "0 0 20rem" }}
+    >
       <div className="p-6">
         <h2 className="font-semibold mb-4">Browse Categories</h2>
         <div className="space-y-1">

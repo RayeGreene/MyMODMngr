@@ -34,7 +34,7 @@
   },
   "plugins": {
     "shell": {
-      "open": "^https?://.*"
+      "open": "^(https?|nxm)://.*"
     },
     "deepLink": {
       "schemes": ["nxm"]

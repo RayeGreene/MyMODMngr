@@ -51,6 +51,7 @@ def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
     except Exception:
         pass
     conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA busy_timeout = 5000;")
     # Pragmas tuned for local app usage
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")
@@ -644,12 +645,34 @@ def _init_views(conn: sqlite3.Connection) -> None:
     cur.execute(
         """
         CREATE VIEW IF NOT EXISTS v_asset_conflicts_active AS
-        WITH active_paks AS (
+        WITH raw_active AS (
             SELECT DISTINCT
-                lower(json_each.value) AS pak_name
+                lower(trim(json_each.value)) AS pak_name
             FROM local_downloads,
                  json_each(COALESCE(local_downloads.active_paks, '[]'))
-        ), base AS (
+            WHERE json_each.value IS NOT NULL
+        ),
+        active_stems AS (
+            SELECT DISTINCT
+                CASE
+                    WHEN pak_name LIKE '%.pak' THEN substr(pak_name, 1, length(pak_name) - 4)
+                    WHEN pak_name LIKE '%.utoc' THEN substr(pak_name, 1, length(pak_name) - 5)
+                    WHEN pak_name LIKE '%.ucas' THEN substr(pak_name, 1, length(pak_name) - 5)
+                    ELSE pak_name
+                END AS stem
+            FROM raw_active
+            WHERE pak_name IS NOT NULL AND pak_name != ''
+        ),
+        active_paks AS (
+            SELECT pak_name FROM raw_active
+            UNION
+            SELECT stem || '.pak' FROM active_stems WHERE stem IS NOT NULL AND stem != ''
+            UNION
+            SELECT stem || '.utoc' FROM active_stems WHERE stem IS NOT NULL AND stem != ''
+            UNION
+            SELECT stem || '.ucas' FROM active_stems WHERE stem IS NOT NULL AND stem != ''
+        ),
+        base AS (
             SELECT
                 pa.asset_path,
                 pa.pak_name,
@@ -1524,11 +1547,32 @@ def rebuild_conflicts(conn: sqlite3.Connection, *, active_only: bool | None = No
         active_join = ""
         if active:
             active_cte = """
-            active_paks AS (
+            raw_active AS (
                 SELECT DISTINCT
-                    lower(json_each.value) AS pak_name
+                    lower(trim(json_each.value)) AS pak_name
                 FROM local_downloads,
                      json_each(COALESCE(local_downloads.active_paks, '[]'))
+                WHERE json_each.value IS NOT NULL
+            ),
+            active_stems AS (
+                SELECT DISTINCT
+                    CASE
+                        WHEN pak_name LIKE '%.pak' THEN substr(pak_name, 1, length(pak_name) - 4)
+                        WHEN pak_name LIKE '%.utoc' THEN substr(pak_name, 1, length(pak_name) - 5)
+                        WHEN pak_name LIKE '%.ucas' THEN substr(pak_name, 1, length(pak_name) - 5)
+                        ELSE pak_name
+                    END AS stem
+                FROM raw_active
+                WHERE pak_name != '' AND pak_name IS NOT NULL
+            ),
+            active_paks AS (
+                SELECT pak_name FROM raw_active
+                UNION
+                SELECT stem || '.pak' FROM active_stems WHERE stem != '' AND stem IS NOT NULL
+                UNION
+                SELECT stem || '.utoc' FROM active_stems WHERE stem != '' AND stem IS NOT NULL
+                UNION
+                SELECT stem || '.ucas' FROM active_stems WHERE stem != '' AND stem IS NOT NULL
             ),
             """
             active_join = "JOIN active_paks ap ON ap.pak_name = lower(pa.pak_name)"

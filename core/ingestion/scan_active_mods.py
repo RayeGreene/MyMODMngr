@@ -9,7 +9,8 @@ _ROOT = Path(__file__).resolve().parents[2]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from core.config.settings import SETTINGS
+from core.config import settings
+from core.config.settings import AppSettings
 from core.db import get_connection, init_schema, update_local_download_active_paks
 
 RELATIVE_MODS_PATH = Path("MarvelGame/Marvel/Content/Paks/~mods")
@@ -17,15 +18,19 @@ RELATIVE_MODS_PATH = Path("MarvelGame/Marvel/Content/Paks/~mods")
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
-def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
+def parse_args(
+    argv: List[str] | None = None,
+    current_settings: AppSettings | None = None,
+) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Scan active (installed) .pak mods and update local_downloads.active_paks")
     p.add_argument("--game-root", help="Path to game root containing MarvelGame/ (defaults to settings)")
     p.add_argument("--db", dest="db_path", default=None, help="Path to SQLite DB (defaults to mods.db in repo)")
     ns = p.parse_args(argv)
+    base_settings = current_settings or settings.SETTINGS
     if not ns.game_root:
-        if not SETTINGS.marvel_rivals_root:
+        if not base_settings.marvel_rivals_root:
             p.error("--game-root not provided and Marvel Rivals root not configured in settings")
-        ns.game_root = str(SETTINGS.marvel_rivals_root)
+        ns.game_root = str(base_settings.marvel_rivals_root)
     return ns
 
 def discover_paks(mods_root: Path) -> List[str]:
@@ -77,7 +82,8 @@ def _ts(value: Optional[datetime]) -> float:
         return _EPOCH.timestamp()
 
 def main(argv: List[str] | None = None) -> int:
-    args = parse_args(argv)
+    active_settings = settings.reload_settings()
+    args = parse_args(argv, active_settings)
     game_root = Path(args.game_root).expanduser().resolve()
     mods_root = game_root / RELATIVE_MODS_PATH
     conn = get_connection(args.db_path)

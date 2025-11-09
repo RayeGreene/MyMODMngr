@@ -11,14 +11,13 @@ import {
   ApiError,
   addMod,
   uploadModFile,
-  listNxmHandoffs,
   ingestNxmHandoff,
   submitNxmHandoff,
   type ApiUploadModResponse,
-  type ApiNxmHandoffSummary,
 } from "../lib/api";
 import { toast } from "sonner";
 import { openInBrowser } from "../lib/tauri-utils";
+import { waitForMatchingHandoff } from "../lib/nxmHelpers";
 
 const formatBytes = (size: number) => {
   if (!Number.isFinite(size) || size <= 0) return "0 B";
@@ -50,11 +49,6 @@ export function AddModModal({
   const [uploadInfo, setUploadInfo] = useState<ApiUploadModResponse | null>(
     null
   );
-
-  const sleep = (ms: number) =>
-    new Promise<void>((resolve) => {
-      setTimeout(resolve, ms);
-    });
 
   const parseNexusModLink = (raw: string) => {
     try {
@@ -99,48 +93,6 @@ export function AddModModal({
     } catch (err) {
       return null;
     }
-  };
-
-  const waitForMatchingHandoff = async (
-    modId: number,
-    fileId: number | null,
-    timeoutMs = 45000,
-    intervalMs = 1500
-  ): Promise<ApiNxmHandoffSummary | null> => {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      let handoffs: ApiNxmHandoffSummary[] = [];
-      try {
-        handoffs = await listNxmHandoffs();
-      } catch (err) {
-        console.warn("Failed to list Nexus handoffs", err);
-      }
-      if (handoffs.length > 0) {
-        const matches = handoffs.filter((handoff) => {
-          const request = handoff.request;
-          const requestModId =
-            request && typeof request.mod_id === "number"
-              ? request.mod_id
-              : null;
-          if (requestModId !== modId) return false;
-          if (fileId == null) return true;
-          const requestFileId =
-            request && typeof request.file_id === "number"
-              ? request.file_id
-              : null;
-          if (requestFileId == null) return false;
-          return requestFileId === fileId;
-        });
-        if (matches.length > 0) {
-          const sorted = [...matches].sort(
-            (a, b) => (b.created_at ?? 0) - (a.created_at ?? 0)
-          );
-          return sorted[0];
-        }
-      }
-      await sleep(intervalMs);
-    }
-    return null;
   };
 
   const resetInputs = () => {
