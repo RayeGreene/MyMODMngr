@@ -5,10 +5,9 @@ conflict detection, NexusMods NXM integration, and a fast local database.
 
 ## Badges
 
-[![Release](https://img.shields.io/github/v/release/Rounak77382/Project_ModManager_Rivals?logo=github&sort=semver)](https://github.com/Rounak77382/Project_ModManager_Rivals/releases)
-[![Last commit](https://img.shields.io/github/last-commit/Rounak77382/Project_ModManager_Rivals)](https://github.com/Rounak77382/Project_ModManager_Rivals/commits/main)
-[![Open issues](https://img.shields.io/github/issues/Rounak77382/Project_ModManager_Rivals?logo=github)](https://github.com/Rounak77382/Project_ModManager_Rivals/issues)
 [![Windows](https://img.shields.io/badge/platform-Windows-blue?logo=windows)](#quickstart)
+[![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)](https://python.org)
+[![React](https://img.shields.io/badge/React-18+-61DAFB?logo=react&logoColor=black)](https://reactjs.org)
 [![Tauri](https://img.shields.io/badge/Built%20with-Tauri-24C8DB?logo=tauri&logoColor=black)](https://tauri.app)
 [![Vite](https://img.shields.io/badge/Vite-6.x-646CFF?logo=vite&logoColor=white)](https://vitejs.dev)
 
