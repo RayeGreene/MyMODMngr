@@ -1,4 +1,4 @@
-# RivalNxt — Marvel Rivals
+# RivalNxt — Marvel Rivals Mod Manager
 
 One desktop app to manage, activate, and validate Marvel Rivals mods with
 conflict detection, NexusMods NXM integration, and a fast local database.
@@ -38,7 +38,7 @@ conflict detection, NexusMods NXM integration, and a fast local database.
 
 That’s it—no Node, Rust, or Python required for normal use.
 
-### For Developers
+## For Developers
 
 #### 🏗️ Architecture Overview
 
