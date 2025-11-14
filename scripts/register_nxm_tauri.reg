@@ -10,9 +10,9 @@ Windows Registry Editor Version 5.00
 
 [HKEY_CURRENT_USER\Software\Classes\nxm\DefaultIcon]
 ; TODO: Update this path to your actual Tauri .exe location
-; Production: C:\\Users\\YourName\\AppData\\Local\\Programs\\project-modmanager-rivals\\project-modmanager-rivals.exe
-; Development: C:\\Path\\To\\Project\\src-tauri\\target\\release\\project-modmanager-rivals.exe
-@="\"C:\\Users\\rouna\\AppData\\Local\\Programs\\project-modmanager-rivals\\project-modmanager-rivals.exe\",0"
+; Production: C:\\Users\\YourName\\AppData\\Local\\Programs\\RivalNxt\\RivalNxt.exe
+; Development: C:\\Path\\To\\Project\\src-tauri\\target\\release\\rivalnxt.exe
+@="\"C:\\Users\\rouna\\AppData\\Local\\Programs\\RivalNxt\\RivalNxt.exe\",0"
 
 [HKEY_CURRENT_USER\Software\Classes\nxm\shell]
 
@@ -22,11 +22,11 @@ Windows Registry Editor Version 5.00
 ; CRITICAL: This MUST point to the Tauri .exe, NOT python.exe
 ; The "%1" placeholder will be replaced with the actual nxm:// URL
 ; TODO: Update this path to your actual Tauri .exe location
-@="\"C:\\Users\\rouna\\AppData\\Local\\Programs\\project-modmanager-rivals\\project-modmanager-rivals.exe\" \"%1\""
+@="\"C:\\Users\\rouna\\AppData\\Local\\Programs\\RivalNxt\\RivalNxt.exe\" \"%1\""
 
 ; HOW TO USE:
 ; 1. Find your Tauri .exe location:
-;    - Production: Usually in %LOCALAPPDATA%\Programs\project-modmanager-rivals\
+;    - Production: Usually in %LOCALAPPDATA%\Programs\RivalNxt\
 ;    - Development: src-tauri\target\debug\ or src-tauri\target\release\
 ; 
 ; 2. Update BOTH paths above (DefaultIcon and command) with your actual .exe path

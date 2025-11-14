@@ -17,6 +17,8 @@ interface DownloadsPageProps {
   selectedCharacters: string[];
   onModAdded?: () => Promise<void> | void;
   onConflictStateChanged?: () => void;
+  viewMode: "grid" | "list";
+  onViewModeChange: (mode: "grid" | "list") => void;
 }
 
 export function DownloadsPage({
@@ -28,10 +30,12 @@ export function DownloadsPage({
   selectedCharacters,
   onModAdded,
   onConflictStateChanged,
+  viewMode,
+  onViewModeChange,
 }: DownloadsPageProps) {
   const [searchQuery, setSearchQuery] = useState("");
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [sortBy, setSortBy] = useState<string>("Recent");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [selectedMod, setSelectedMod] = useState<Mod | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
@@ -98,6 +102,11 @@ export function DownloadsPage({
     const time = Date.parse(value);
     return Number.isNaN(time) ? MISSING_TIME : time;
   };
+  const toNullableTimestamp = (value?: string | null): number | null => {
+    if (!value) return null;
+    const time = Date.parse(value);
+    return Number.isNaN(time) ? null : time;
+  };
   const hasApiSource = (mod: Mod) => mod.backendModId != null;
   const releaseSortKey = (mod: Mod) => {
     const release = toTimestamp(mod.releaseDate);
@@ -126,39 +135,60 @@ export function DownloadsPage({
     if (b.timestamp !== a.timestamp) return b.timestamp - a.timestamp;
     return 0;
   };
+  const applyOrder = (val: number) => (sortOrder === "asc" ? -val : val);
+
+  // Comparator factory for nullable timestamps that must place NULLs last
+  const makeTimestampComparator = (
+    getter: (m: Mod) => number | null
+  ) => {
+    return (a: Mod, b: Mod) => {
+      const ta = getter(a);
+      const tb = getter(b);
+      if (ta == null && tb == null) return 0;
+      if (ta == null) return 1; // a after b
+      if (tb == null) return -1; // a before b
+      if (ta === tb) return 0;
+      return sortOrder === "asc" ? ta - tb : tb - ta;
+    };
+  };
+
   switch (sortBy) {
     case "Popular":
-      filteredMods.sort((a, b) => (b.downloads || 0) - (a.downloads || 0));
+      filteredMods.sort((a, b) => applyOrder((b.downloads || 0) - (a.downloads || 0)));
       break;
     case "Recent":
-      filteredMods.sort((a, b) =>
-        compareSortKey(releaseSortKey(a), releaseSortKey(b))
+      // Sort by local_downloads.created_at (mapped to installDate)
+      filteredMods.sort(
+        makeTimestampComparator((m) => toNullableTimestamp(m.installDate))
       );
       break;
     case "Updated":
-      filteredMods.sort((a, b) =>
-        compareSortKey(updatedSortKey(a), updatedSortKey(b))
+      // Sort by mods.updated_at (mapped to lastUpdatedRaw / lastUpdated); NULLs always last
+      filteredMods.sort(
+        makeTimestampComparator((m) =>
+          toNullableTimestamp(m.lastUpdatedRaw ?? m.lastUpdated ?? null)
+        )
       );
       break;
     case "Rating":
-      filteredMods.sort((a, b) => (b.rating || 0) - (a.rating || 0));
+      filteredMods.sort((a, b) => applyOrder((b.rating || 0) - (a.rating || 0)));
       break;
     case "Downloads":
-      filteredMods.sort((a, b) => (b.downloads || 0) - (a.downloads || 0));
+      filteredMods.sort((a, b) => applyOrder((b.downloads || 0) - (a.downloads || 0)));
       break;
     case "Performance":
       filteredMods.sort(
-        (a, b) => (b.performanceImpact || 0) - (a.performanceImpact || 0)
+        (a, b) => applyOrder((b.performanceImpact || 0) - (a.performanceImpact || 0))
       );
       break;
     case "Name":
-      filteredMods.sort((a, b) => a.name.localeCompare(b.name));
+      filteredMods.sort((a, b) => applyOrder(a.name.localeCompare(b.name)));
       break;
     case "Category":
       filteredMods.sort((a, b) => {
         const categoryA = a.categoryTags?.[0] ?? a.category ?? "";
         const categoryB = b.categoryTags?.[0] ?? b.category ?? "";
-        return categoryA.localeCompare(categoryB);
+        return applyOrder(categoryA.localeCompare(categoryB));
       });
       break;
     default:
@@ -173,19 +203,35 @@ export function DownloadsPage({
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
           viewMode={viewMode}
-          onViewModeChange={setViewMode}
+          onViewModeChange={onViewModeChange}
           sortBy={sortBy}
           onSortChange={setSortBy}
+          sortOrder={sortOrder}
+          onSortOrderChange={setSortOrder}
           onModAdded={onModAdded}
         />
 
         {/* Mods grid/list */}
-        <style>{`.downloads-hide-scrollbar::-webkit-scrollbar{display:none;}`}</style>
+        <style>{`.custom-scrollbar::-webkit-scrollbar {
+            width: 8px;
+          }
+          .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+          }
+          .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(100, 100, 100, 0.5);
+            border-radius: 4px;
+          }
+          .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgba(100, 100, 100, 0.7);
+          }
+          .custom-scrollbar {
+            scrollbar-color: rgba(100, 100, 100, 0.5) transparent;
+            scrollbar-width: thin;
+          }`}</style>
         <div
-          className="flex-1 overflow-auto downloads-hide-scrollbar"
+          className="flex-1 overflow-auto custom-scrollbar"
           style={{
-            scrollbarWidth: "none",
-            msOverflowStyle: "none",
             overflowY: "auto",
           }}
         >

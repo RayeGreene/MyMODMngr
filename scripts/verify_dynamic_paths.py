@@ -20,7 +20,12 @@ def test_database_path():
     print("=" * 70)
     
     # Simulate Tauri environment
-    test_app_data = Path.home() / "AppData" / "Roaming" / "com.rounak77382.modmanager"
+    test_app_data = (
+        Path.home()
+        / "AppData"
+        / "Roaming"
+        / "com.rivalnxt.modmanager"
+    )
     os.environ["MODMANAGER_DATA_DIR"] = str(test_app_data)
     
     # Import after setting environment variable
@@ -100,10 +105,12 @@ def test_simulated_users():
         else:
             simulated_home = Path(f"/home/{username}")
             simulated_appdata = simulated_home / ".local" / "share"
-        
-        expected_db = simulated_appdata / "com.rounak77382.modmanager" / "mods.db"
-        expected_downloads = simulated_home / "Documents" / "Marvel_Rivals_Mods" / "downloads"
-        
+
+        expected_db = simulated_appdata / "com.rivalnxt.modmanager" / "mods.db"
+        expected_downloads = (
+            simulated_home / "Documents" / "Marvel_Rivals_Mods" / "downloads"
+        )
+
         print(f"\nUser: {username}")
         print(f"  Database: {expected_db}")
         print(f"  Downloads: {expected_downloads}")

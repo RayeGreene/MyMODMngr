@@ -23,7 +23,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Set, Tuple, Union
 
@@ -45,6 +45,7 @@ from core.api.services.handoffs import (
 	register_handoff,
 	serialize_handoff,
 	snapshot_metadata,
+	update_handoff_progress,
 )
 from core.db import (
 	bulk_upsert_pak_assets,
@@ -59,6 +60,7 @@ from core.db import (
 	next_local_download_id,
 	mod_with_local_and_latest,
 	rebuild_conflicts,
+	resolve_created_at,
 	fetch_pak_version_status,
 	replace_mod_changelogs,
 	replace_mod_files,
@@ -1018,6 +1020,33 @@ def _normalize_contents_for_compare(values: Iterable[Any]) -> List[str]:
 	return sorted(items)
 
 
+_CREATED_AT_KEYS = (
+	"created_at",
+	"createdAt",
+	"uploaded_at",
+	"uploadedAt",
+	"uploaded_time",
+	"uploadedTime",
+	"uploaded_timestamp",
+	"uploadedTimestamp",
+	"file_uploaded_at",
+	"fileUploadedAt",
+)
+
+
+def _extract_created_at_hint(source: Optional[Dict[str, Any]]) -> Optional[Any]:
+	if not isinstance(source, dict):
+		return None
+	for key in _CREATED_AT_KEYS:
+		value = source.get(key)
+		if value is None:
+			continue
+		if isinstance(value, str) and not value.strip():
+			continue
+		return value
+	return None
+
+
 def _duplicate_detail_from_error(error: DuplicateDownloadError) -> Dict[str, Any]:
 	name_hint = error.candidate_name or error.existing_name
 	version_hint = error.candidate_version or error.existing_version
@@ -1054,6 +1083,7 @@ def _ingest_resolved_download(
 	source_url: Optional[str] = None,
 	metadata_snapshot: Optional[Dict[str, Any]] = None,
 	filtered_metadata: Optional[Dict[str, Any]] = None,
+	created_at_hint: Optional[Any] = None,
 ) -> Dict[str, Any]:
 	"""Ingest a resolved local archive/pak into ``local_downloads`` and related tables."""
 
@@ -1151,10 +1181,15 @@ def _ingest_resolved_download(
 			)
 
 		local_download_id = next_local_download_id(conn)
+		created_at_hints: List[Any] = []
+		if created_at_hint is not None:
+			created_at_hints.append(created_at_hint)
+		created_at_iso = resolve_created_at(path=path, hints=created_at_hints)
+
 		cur.execute(
 			"""
-			INSERT INTO local_downloads(path, id, name, mod_id, version, contents, active_paks)
-			VALUES(?, ?, ?, ?, ?, ?, ?)
+			INSERT INTO local_downloads(path, id, name, mod_id, version, contents, active_paks, created_at)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?)
 			""",
 			(
 				normalized_path,
@@ -1164,6 +1199,7 @@ def _ingest_resolved_download(
 				version,
 				json.dumps(contents, ensure_ascii=False),
 				json.dumps([], ensure_ascii=False),
+				created_at_iso,
 			),
 		)
 		conn.commit()
@@ -1798,6 +1834,7 @@ def add_mod(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 			version = derived_version
 		else:
 			version = ""
+		created_at_hint = _extract_created_at_hint(payload)
 		try:
 			return _ingest_resolved_download(
 				path,
@@ -1805,6 +1842,7 @@ def add_mod(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 				mod_id=mod_id_int,
 				version=version,
 				source_url=source_url,
+				created_at_hint=created_at_hint,
 			)
 		except DuplicateDownloadError as exc:
 			raise HTTPException(status_code=409, detail=_duplicate_detail_from_error(exc))
@@ -2143,6 +2181,23 @@ def check_mod_update(mod_id: int) -> Dict[str, Any]:
 		synced = metadata_info.get("synced_mod_id")
 		if synced is not None:
 			result["synced_mod_id"] = synced
+
+		# Persist a record of the most recent update-check time so the
+		# frontend can display an authoritative "Last Check" timestamp.
+		try:
+			from pathlib import Path as _Path
+			_last_check_path = _Path(SETTINGS.data_dir) / "last_update_check.json"
+			_last_iso = datetime.utcnow().isoformat() + "Z"
+			try:
+				_last_check_path.write_text(json.dumps({"last_check": _last_iso}), encoding="utf-8")
+			except TypeError:
+				# Python <3.11 Path.write_text doesn't accept encoding kw in some envs
+				_last_check_path.write_text(json.dumps({"last_check": _last_iso}))
+		except Exception:
+			# Non-fatal: log and continue
+			logging.getLogger("modmanager.api.checks").exception(
+				"Failed to persist last update-check timestamp"
+			)
 		return result
 	finally:
 		try:
@@ -2156,6 +2211,14 @@ def ingest_nxm_handoff(handoff_id: str, payload: Optional[Dict[str, Any]] = Body
 	if not handoff_id:
 		raise HTTPException(status_code=400, detail="handoff_id is required")
 	record = get_handoff_or_404(handoff_id)
+	handoff_identifier = record.get("id") if isinstance(record.get("id"), str) else None
+	if handoff_identifier:
+		update_handoff_progress(
+			handoff_identifier,
+			stage="preparing",
+			message="Preparing download…",
+			bytes_downloaded=0,
+		)
 	options = payload or {}
 	requested_file_id = options.get("file_id")
 	if requested_file_id is not None:
@@ -2180,11 +2243,25 @@ def ingest_nxm_handoff(handoff_id: str, payload: Optional[Dict[str, Any]] = Body
 		requested_file_id = req_file_id
 	selected_entry = _select_file_entry(files_summary, requested_file_id)
 	if not selected_entry:
+		if handoff_identifier:
+			update_handoff_progress(
+				handoff_identifier,
+				stage="failed",
+				error="Unable to resolve target file from Nexus metadata",
+				message="Unable to resolve target file from Nexus metadata",
+			)
 		raise HTTPException(status_code=404, detail="Unable to resolve target file from Nexus metadata")
 	file_id = selected_entry["file_id"]
 	req_data = record.get("request", {})
 	mod_id = req_data.get("mod_id")
 	if not isinstance(mod_id, int):
+		if handoff_identifier:
+			update_handoff_progress(
+				handoff_identifier,
+				stage="failed",
+				error="nxm handoff missing mod id",
+				message="NXM handoff missing mod id",
+			)
 		raise HTTPException(status_code=400, detail="nxm handoff missing mod id")
 	logger.info(
 		"[nxm_handoff] resolving mod_id=%s file_id=%s handoff=%s via nxm redirect", mod_id, file_id, record.get("id")
@@ -2195,6 +2272,13 @@ def ingest_nxm_handoff(handoff_id: str, payload: Optional[Dict[str, Any]] = Body
 	)
 	version = selected_entry.get("version") or selected_entry.get("mod_version") or ""
 	remote_name = selected_entry.get("file_name") or selected_entry.get("name") or download_path.name
+	file_created_at_hint = _extract_created_at_hint(selected_entry)
+	if handoff_identifier:
+		update_handoff_progress(
+			handoff_identifier,
+			stage="ingesting",
+			message="Processing download…",
+		)
 	try:
 		ingest_result = _ingest_resolved_download(
 			download_path,
@@ -2204,8 +2288,16 @@ def ingest_nxm_handoff(handoff_id: str, payload: Optional[Dict[str, Any]] = Body
 			source_url=resolved_url,
 			metadata_snapshot=raw_metadata,
 			filtered_metadata=filtered_metadata,
+			created_at_hint=file_created_at_hint,
 		)
 	except DuplicateDownloadError as exc:
+		if handoff_identifier:
+			update_handoff_progress(
+				handoff_identifier,
+				stage="failed",
+				error=str(exc),
+				message="Duplicate download detected",
+			)
 		raise HTTPException(status_code=409, detail=_duplicate_detail_from_error(exc))
 	new_download_id = ingest_result.get("download_id")
 	if not isinstance(new_download_id, int):
@@ -2276,6 +2368,19 @@ def ingest_nxm_handoff(handoff_id: str, payload: Optional[Dict[str, Any]] = Body
 				deactivation_warnings.append(f"{old_id}: {e.detail}")
 			except Exception as e:
 				deactivation_warnings.append(f"{old_id}: {e}")
+
+	if handoff_identifier:
+		try:
+			final_size = download_path.stat().st_size if download_path.exists() else None
+		except Exception:
+			final_size = None
+		update_handoff_progress(
+			handoff_identifier,
+			stage="complete",
+			message="Mod downloaded successfully",
+			bytes_downloaded=final_size or 0,
+			bytes_total=final_size,
+		)
 
 	delete_handoff(handoff_id)
 	response: Dict[str, Any] = {
@@ -2696,6 +2801,7 @@ def update_mod(mod_id: int, payload: Optional[Dict[str, Any]] = Body(default=Non
 			mod_id=mod_id,
 			version=latest_version,
 			source_url=download_url,
+			created_at_hint=latest_uploaded_at,
 		)
 	except DuplicateDownloadError as exc:
 		raise HTTPException(status_code=409, detail=_duplicate_detail_from_error(exc))
@@ -3370,6 +3476,141 @@ def list_downloads(limit: int = 500) -> List[Dict[str, Any]]:
 			pass
 
 
+@app.get("/api/downloads/summary")
+def downloads_summary() -> Dict[str, Any]:
+	"""Return aggregated summary for local downloads.
+
+	Response fields:
+	  - total_size_bytes: int
+	  - total_size_human: str
+	  - download_count: int
+	  - missing_paths: list[str]
+	  - last_check: ISO-8601 timestamp (UTC) or None
+	"""
+	import logging
+	logger = logging.getLogger("modmanager.api.downloads.summary")
+
+	conn = get_db()
+	cur = conn.cursor()
+	try:
+		rows = cur.execute(
+			"SELECT id, path, created_at FROM local_downloads ORDER BY created_at DESC"
+		).fetchall()
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+	downloads_root = _downloads_root_from_env()
+	total_bytes = 0
+	missing: List[str] = []
+	latest_mtime: Optional[float] = None
+	any_existing = False
+	count = 0
+
+	for _id, raw_path, created_at in rows:
+		try:
+			# Resolve with the same helper the server uses elsewhere
+			candidate = _resolve_download_source_path(str(raw_path or ""))
+			p = Path(candidate)
+		except Exception:
+			missing.append(str(raw_path or ""))
+			continue
+
+		try:
+			if p.exists():
+				any_existing = True
+				# If directory, sum files recursively; if file, take stat
+				if p.is_dir():
+					for root, _dirs, files in os.walk(p):
+						for fn in files:
+							try:
+								fp = Path(root) / fn
+								size = fp.stat().st_size
+								total_bytes += int(size)
+								m = fp.stat().st_mtime
+								if latest_mtime is None or m > latest_mtime:
+									latest_mtime = m
+							except Exception:
+								continue
+				else:
+					try:
+						size = p.stat().st_size
+						total_bytes += int(size)
+						m = p.stat().st_mtime
+						if latest_mtime is None or m > latest_mtime:
+							latest_mtime = m
+					except Exception:
+						pass
+			else:
+				missing.append(str(raw_path or ""))
+		except Exception:
+			missing.append(str(raw_path or ""))
+		count += 1
+
+	def _human(n: int) -> str:
+		# Simple human readable formatter
+		try:
+			if n < 1024:
+				return f"{n} B"
+			for unit in ("KB", "MB", "GB", "TB"):
+				n = float(n) / 1024.0
+				if n < 1024.0:
+					return f"{n:.2f} {unit}"
+			return f"{n:.2f} PB"
+		except Exception:
+			return str(n)
+
+	# Prefer a persisted last-check timestamp written by update-check operations.
+	last_check_iso = None
+	try:
+		from pathlib import Path as _Path
+		_last_check_file = _Path(SETTINGS.data_dir) / "last_update_check.json"
+		logger.debug(f"[downloads_summary] looking for persisted last_check at {_last_check_file}")
+		if _last_check_file.exists():
+			logger.debug("[downloads_summary] persisted last_check file exists")
+			try:
+				_payload = json.loads(_last_check_file.read_text(encoding="utf-8"))
+			except TypeError:
+				_payload = json.loads(_last_check_file.read_text())
+			logger.debug(f"[downloads_summary] read persisted payload: {_payload}")
+			if isinstance(_payload, dict) and _payload.get("last_check"):
+				last_check_iso = _payload.get("last_check")
+	except Exception:
+		# ignore read errors and fall back to mtime/created_at
+		last_check_iso = None
+
+	# If no persisted timestamp, fall back to filesystem latest modified time
+	if last_check_iso is None:
+		if latest_mtime is not None:
+			last_check_iso = datetime.fromtimestamp(latest_mtime, tz=timezone.utc).isoformat()
+		else:
+			# fallback: use newest created_at from DB rows if present
+			if rows:
+				try:
+					# rows are ordered by created_at DESC
+					newest_created = rows[0][2]
+					if isinstance(newest_created, str) and newest_created:
+						# assume ISO already
+						last_check_iso = newest_created
+					elif isinstance(newest_created, (int, float)):
+						last_check_iso = datetime.fromtimestamp(float(newest_created), tz=timezone.utc).isoformat()
+				except Exception:
+					last_check_iso = None
+
+	result: Dict[str, Any] = {
+		"ok": True,
+		"total_size_bytes": int(total_bytes),
+		"total_size_human": _human(int(total_bytes)),
+		"download_count": int(count),
+		"missing_paths": missing,
+		"last_check": last_check_iso,
+	}
+	logger.info(f"[downloads_summary] count={count} total_bytes={total_bytes} missing={len(missing)} last_check={last_check_iso}")
+	return result
+
+
 # --- Activation endpoints ---
 
 def _mods_folder_from_env() -> Path:
@@ -3595,7 +3836,12 @@ def _nxm_required_detail(
 	return detail
 
 
-def _download_remote_archive(url: str, *, force: bool = False) -> Path:
+def _download_remote_archive(
+	url: str,
+	*,
+	force: bool = False,
+	progress_callback: Optional[Callable[[int, Optional[int]], None]] = None,
+) -> Path:
 	downloads_root = _downloads_root_from_env()
 	_ensure_dir(downloads_root)
 	parsed = urllib.parse.urlparse(url)
@@ -3633,9 +3879,35 @@ def _download_remote_archive(url: str, *, force: bool = False) -> Path:
 		else:
 			return dest.resolve()
 	req = urllib.request.Request(url, headers={"User-Agent": "MarvelRivalsModManager/0.1"})
+	def _emit_progress(downloaded: int, total: Optional[int]) -> None:
+		if progress_callback is None:
+			return
+		try:
+			progress_callback(downloaded, total)
+		except Exception:
+			pass
+
 	try:
 		with urllib.request.urlopen(req, timeout=120) as response, dest.open("wb") as out:
-			shutil.copyfileobj(response, out)
+			total_bytes: Optional[int] = getattr(response, "length", None)
+			if total_bytes is None:
+				try:
+					headers = getattr(response, "headers", None)
+					if headers is not None:
+						header_value = headers.get("Content-Length")
+						total_bytes = int(header_value) if header_value else None
+				except Exception:
+					total_bytes = None
+			downloaded = 0
+			chunk_size = 1024 * 1024
+			_emit_progress(downloaded, total_bytes)
+			while True:
+				chunk = response.read(chunk_size)
+				if not chunk:
+					break
+				out.write(chunk)
+				downloaded += len(chunk)
+				_emit_progress(downloaded, total_bytes)
 	except Exception as e:
 		if dest.exists():
 			try:
@@ -3801,6 +4073,14 @@ def _download_archive_via_nxm(
 	file_id: int,
 ) -> Tuple[Path, str]:
 	download_errors: List[str] = []
+	handoff_id = record.get("id") if isinstance(record.get("id"), str) else None
+	if handoff_id:
+		update_handoff_progress(
+			handoff_id,
+			stage="resolving",
+			message="Resolving Nexus CDN mirrors…",
+			bytes_downloaded=0,
+		)
 	candidates = _resolve_nexus_download_candidates(record, game_domain, file_id)
 	for download_url, label in candidates:
 		host = urllib.parse.urlparse(download_url).netloc
@@ -3810,22 +4090,74 @@ def _download_archive_via_nxm(
 			label or "",
 			file_id,
 		)
+		progress_message = f"Downloading from {label or host}" if (label or host) else "Downloading from Nexus CDN"
+		progress_fn: Optional[Callable[[int, Optional[int]], None]] = None
+		if handoff_id:
+			update_handoff_progress(
+				handoff_id,
+				stage="downloading",
+				message=progress_message,
+				bytes_downloaded=0,
+			)
+			def _on_progress(downloaded: int, total: Optional[int]) -> None:
+				update_handoff_progress(
+					handoff_id,
+					stage="downloading",
+					message=progress_message,
+					bytes_downloaded=downloaded,
+					bytes_total=total,
+				)
+			progress_fn = _on_progress
 		try:
-			download_path = _download_remote_archive(download_url, force=True)
+			download_path = _download_remote_archive(
+				download_url,
+				force=True,
+				progress_callback=progress_fn,
+			)
 			logger.info(
 				"[nxm_handoff] download succeeded host=%s saved_as=%s",
 				host,
 				download_path.name,
 			)
+			if handoff_id:
+				size = download_path.stat().st_size if download_path.exists() else None
+				update_handoff_progress(
+					handoff_id,
+					stage="downloaded",
+					message="Download complete",
+					bytes_downloaded=size or 0,
+					bytes_total=size,
+				)
 			return download_path, download_url
 		except HTTPException as exc:
 			detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
 			download_errors.append(detail)
+			if handoff_id:
+				update_handoff_progress(
+					handoff_id,
+					stage="retrying",
+					message=detail,
+					error=detail,
+				)
 			logger.warning("[nxm_handoff] download attempt failed url=%s detail=%s", download_url, detail)
 		except Exception as exc:
 			download_errors.append(str(exc))
+			if handoff_id:
+				update_handoff_progress(
+					handoff_id,
+					stage="retrying",
+					message=str(exc),
+					error=str(exc),
+				)
 			logger.warning("[nxm_handoff] download attempt failed url=%s detail=%s", download_url, exc)
 	message = "; ".join(download_errors) if download_errors else "unknown error"
+	if handoff_id:
+		update_handoff_progress(
+			handoff_id,
+			stage="failed",
+			error=message,
+			message="Failed to download from Nexus CDN",
+		)
 	raise HTTPException(status_code=502, detail=f"Failed to download from Nexus CDN: {message}")
 
 

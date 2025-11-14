@@ -1,5 +1,5 @@
 {
-  "name": "project-modmanager-rivals",
+  "name": "rivalnxt",
   "version": "0.1.0",
   "private": true,
   "dependencies": {
@@ -62,8 +62,8 @@
     "build": "vite build",
     "activate-mods": "python -X utf8 -m scripts.activate_mods",
     "deactivate-mods": "python -X utf8 -m scripts.deactivate_mods",
-    "py:build": "python -m PyInstaller --noconfirm --clean --onefile --exclude-module PyQt5 --exclude-module PyQt6 --collect-data core.db.migrations --name modmanager_backend src-python/run_server.py",
-    "py:copy": "node -e \"require('fs').copyFileSync('dist/modmanager_backend.exe', 'src-tauri/sidecars/modmanager_backend-x86_64-pc-windows-msvc.exe')\"",
+    "py:build": "python -m PyInstaller --noconfirm --clean --onefile --exclude-module PyQt5 --exclude-module PyQt6 --collect-data core.db.migrations --name rivalnxt_backend src-python/run_server.py",
+    "py:copy": "node -e \"require('fs').copyFileSync('dist/rivalnxt_backend.exe', 'src-tauri/sidecars/rivalnxt_backend-x86_64-pc-windows-msvc.exe')\"",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "desktop:dev": "yarn tauri:dev",

@@ -36,7 +36,7 @@ def get_tauri_executable() -> Optional[Path]:
         if parent and parent.name().lower().endswith('.exe'):
             parent_exe = Path(parent.exe())
             # Verify it looks like our Tauri app
-            if parent_exe.exists() and 'mod' in parent_exe.stem.lower():
+            if parent_exe.exists() and any(token in parent_exe.stem.lower() for token in ('rival', 'mod')):
                 return parent_exe
     except (ImportError, Exception):
         pass  # psutil not available or error
@@ -46,6 +46,7 @@ def get_tauri_executable() -> Optional[Path]:
     if local_app_data.exists():
         # Look for the app in Programs directory
         possible_paths = [
+            local_app_data / "Programs" / "RivalNxt" / "RivalNxt.exe",
             local_app_data / "Programs" / "project-modmanager-rivals" / "project-modmanager-rivals.exe",
             local_app_data / "Programs" / "mod-manager" / "Mod Manager.exe",
             local_app_data / "mod-manager" / "Mod Manager.exe",
@@ -59,7 +60,7 @@ def get_tauri_executable() -> Optional[Path]:
     try:
         backend_dir = Path(__file__).parent.parent  # Go up to project root
         for build_type in ['debug', 'release']:
-            dev_exe = backend_dir / 'src-tauri' / 'target' / build_type / 'project-modmanager-rivals.exe'
+            dev_exe = backend_dir / 'src-tauri' / 'target' / build_type / 'rivalnxt.exe'
             if dev_exe.exists():
                 return dev_exe
     except:

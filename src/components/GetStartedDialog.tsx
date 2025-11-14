@@ -15,7 +15,6 @@ import {
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
-import { Textarea } from "./ui/textarea";
 import {
   AlertCircle,
   CheckCircle,
@@ -30,6 +29,7 @@ import type {
 } from "../lib/api";
 import { validatePath } from "../lib/api";
 import type { SettingsFormValues } from "./SettingsDialog";
+import { TaskOutputSummary } from "./TaskOutputSummary";
 
 const EMPTY_VALUES: SettingsFormValues = {
   data_dir: "",
@@ -81,9 +81,7 @@ export function GetStartedDialog({
   const [pathCheckResults, setPathCheckResults] = useState<
     Record<string, { ok: boolean; message: string }>
   >({});
-  const [validatingFields, setValidatingFields] = useState<Set<string>>(
-    new Set()
-  );
+  const [, setValidatingFields] = useState<Set<string>>(new Set());
 
   // Debounce timer refs for each field
   const debounceTimers = useState<Record<string, NodeJS.Timeout>>(
@@ -357,7 +355,7 @@ export function GetStartedDialog({
         >
           <DialogHeader>
             <DialogTitle className="text-2xl font-semibold">
-              Welcome to Mod Manager
+              Welcome to RivalNxt
             </DialogTitle>
             <DialogDescription className="text-sm text-muted-foreground">
               Configure the core folders and tools, then build the local
@@ -724,11 +722,10 @@ export function GetStartedDialog({
               {jobOutput ? (
                 <div className="space-y-2">
                   <Label>Last run output</Label>
-                  <Textarea
-                    readOnly
-                    className="h-40 resize-y font-mono text-xs"
-                    value={jobOutput}
-                    spellCheck={false}
+                  <TaskOutputSummary
+                    task={job?.task ?? "bootstrap_rebuild"}
+                    output={jobOutput}
+                    fallbackMinHeight="h-40"
                   />
                 </div>
               ) : null}
@@ -783,18 +780,12 @@ export function GetStartedDialog({
               </div>
               <div className="space-y-2">
                 <Label>Task output</Label>
-                {jobOutput ? (
-                  <Textarea
-                    readOnly
-                    className="h-64 resize-y font-mono text-xs"
-                    value={jobOutput}
-                    spellCheck={false}
-                  />
-                ) : (
-                  <div className="h-64 rounded-md border border-dashed border-border/40 bg-muted/5 p-4 text-sm text-muted-foreground">
-                    Waiting for output…
-                  </div>
-                )}
+                <TaskOutputSummary
+                  task={job?.task ?? "bootstrap_rebuild"}
+                  output={jobOutput}
+                  isRunning={jobRunning}
+                  fallbackMinHeight="h-64"
+                />
               </div>
             </div>
           ) : null}
@@ -821,18 +812,11 @@ export function GetStartedDialog({
               </div>
               <div className="space-y-2">
                 <Label>Task output</Label>
-                {jobOutput ? (
-                  <Textarea
-                    readOnly
-                    className="h-64 resize-y font-mono text-xs"
-                    value={jobOutput}
-                    spellCheck={false}
-                  />
-                ) : (
-                  <div className="rounded-md border border-dashed border-border/40 bg-muted/5 p-4 text-sm text-muted-foreground">
-                    No output captured.
-                  </div>
-                )}
+                <TaskOutputSummary
+                  task={job?.task ?? "bootstrap_rebuild"}
+                  output={jobOutput}
+                  fallbackMinHeight="h-64"
+                />
               </div>
               <div
                 style={{

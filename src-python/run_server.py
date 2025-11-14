@@ -62,17 +62,26 @@ def main() -> None:
     args = _parse_args()
     
     # For production builds, also log to a file for debugging
-    log_handlers = [logging.StreamHandler()]
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(getattr(logging, args.log_level))
+    log_handlers = [stream_handler]
     if getattr(sys, "frozen", False):
         # Running as PyInstaller executable
         try:
-            log_dir = Path.home() / "AppData" / "Roaming" / "com.rounak77382.modmanager" / "logs"
+            log_dir = (
+                Path.home()
+                / "AppData"
+                / "Roaming"
+                / "com.rivalnxt.modmanager"
+                / "logs"
+            )
             log_dir.mkdir(parents=True, exist_ok=True)
             log_file = log_dir / "backend.log"
             file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
             file_handler.setFormatter(logging.Formatter(
                 "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
             ))
+            file_handler.setLevel(logging.WARNING)
             log_handlers.append(file_handler)
         except Exception:
             pass  # If log file creation fails, just use console

@@ -2,33 +2,33 @@
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 import os
 
-datas = []
-datas += collect_data_files('core.db.migrations')
+_datas = []
+_datas += collect_data_files('core.db.migrations')
 
 # Include character_ids.json for entity tagging
 character_ids_path = os.path.join('.', 'character_ids.json')
 if os.path.exists(character_ids_path):
-    datas.append((character_ids_path, '.'))
+    _datas.append((character_ids_path, '.'))
 
 # Collect all core submodules
-hiddenimports = collect_submodules('core')
-hiddenimports += collect_submodules('scripts')
+_hiddenimports = collect_submodules('core')
+_hiddenimports += collect_submodules('scripts')
 
 # Add the project root to pathex so PyInstaller can find the modules
-project_root = os.path.abspath('.')
+_project_root = os.path.abspath('.')
 
 # Bundle repak.exe and retoc_cli.exe with the executable
-binaries = [
-    (os.path.join(project_root, 'repak.exe'), '.'),
-    (os.path.join(project_root, 'retoc_cli.exe'), '.'),
+_binaries = [
+    (os.path.join(_project_root, 'repak.exe'), '.'),
+    (os.path.join(_project_root, 'retoc_cli.exe'), '.'),
 ]
 
 a = Analysis(
     ['src-python\\run_server.py'],
-    pathex=[project_root],
-    binaries=binaries,
-    datas=datas,
-    hiddenimports=hiddenimports,
+    pathex=[_project_root],
+    binaries=_binaries,
+    datas=_datas,
+    hiddenimports=_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -44,7 +44,8 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='modmanager_backend',
+    name='rivalnxt_backend',
+    icon=os.path.join(_project_root, 'src-tauri', 'icons', 'backendicon.ico'),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

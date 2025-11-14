@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppHeader } from "./components/AppHeader";
+// AppHeader migrated into TabHeader; remove separate AppHeader import
 import { GetStartedDialog } from "./components/GetStartedDialog";
 import {
   SettingsDialog,
@@ -9,11 +9,16 @@ import { TabHeader } from "./components/TabHeader";
 import { DownloadsSidebar } from "./components/DownloadsSidebar";
 import { DownloadsPage } from "./components/DownloadsPage";
 import { ActiveModsView } from "./components/ActiveModsView";
+import { ServerStartupOverlay } from "./components/ServerStartupOverlay";
 import { toast } from "sonner";
 import { Toaster } from "./components/ui/sonner";
 import { ThemeProvider } from "./components/ThemeProvider";
 import { openInBrowser } from "./lib/tauri-utils";
-import { waitForMatchingHandoff } from "./lib/nxmHelpers";
+import {
+  waitForMatchingHandoff,
+  createNxmProgressController,
+  type NxmProgressController,
+} from "./lib/nxmHelpers";
 import {
   refreshConflicts,
   listDownloads,
@@ -30,6 +35,7 @@ import {
   runSettingsTask,
   getSettingsTaskJob,
   getBootstrapStatus,
+  getHealth,
   type ApiSettings,
   type ApiSettingsTaskResponse,
   type SettingsTask,
@@ -54,10 +60,58 @@ const SETTINGS_TASK_LABELS: Record<SettingsTask, string> = {
   bootstrap_rebuild: "Initial Database Build",
 };
 
+const PROGRESS_STAGE_FILTERS = [
+  /downloading/i,
+  /processing/i,
+  /resolving/i,
+  /queued/i,
+];
+
+const SUPPRESSED_BACKEND_ERROR_PATTERNS = [
+  "failed to fetch",
+  "networkerror when attempting to fetch resource",
+  "network error when attempting to fetch resource",
+  "load failed",
+];
+
+function shouldSuppressBackendError(value?: string | null): boolean {
+  if (!value) {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return SUPPRESSED_BACKEND_ERROR_PATTERNS.some((pattern) =>
+    normalized.includes(pattern)
+  );
+}
+
+function sanitizeProgressDescription(value?: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const segments = value
+    .split("·")
+    .map((segment) => segment.trim())
+    .filter(Boolean)
+    .filter(
+      (segment) =>
+        !PROGRESS_STAGE_FILTERS.some((pattern) => pattern.test(segment))
+    );
+  const sanitized = segments.join(" · ").trim();
+  return sanitized.length > 0 ? sanitized : undefined;
+}
+
 type NxmEntry = {
   summary: ApiNxmHandoffSummary;
   preview?: ApiNxmPreview | null;
   error?: string | null;
+};
+
+type BackendStatusState = {
+  state: "starting" | "ready";
+  lastError?: string | null;
 };
 
 export default function App() {
@@ -68,6 +122,7 @@ export default function App() {
   );
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [selectedCharacters, setSelectedCharacters] = useState<string[]>([]);
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [nxmEntries, setNxmEntries] = useState<Record<string, NxmEntry>>({});
   const nxmEntriesRef = useRef<Record<string, NxmEntry>>({});
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -87,6 +142,12 @@ export default function App() {
   const [bootstrapJob, setBootstrapJob] =
     useState<ApiSettingsTaskResponse | null>(null);
   const [bootstrapRunning, setBootstrapRunning] = useState(false);
+  const [backendStatus, setBackendStatus] = useState<BackendStatusState>({
+    state: "starting",
+    lastError: null,
+  });
+
+  const backendReady = backendStatus.state === "ready";
 
   const notifyConflictsDirty = useCallback(() => {
     setConflictsReloadToken((token) => token + 1);
@@ -95,6 +156,77 @@ export default function App() {
   useEffect(() => {
     nxmEntriesRef.current = nxmEntries;
   }, [nxmEntries]);
+
+  useEffect(() => {
+    let isCancelled = false;
+    let attempts = 0;
+    let timeoutId: number | null = null;
+
+    const pollHealth = async () => {
+      if (isCancelled) {
+        return;
+      }
+      attempts += 1;
+      try {
+        const health = await getHealth();
+        if (isCancelled) {
+          return;
+        }
+        if (health?.ok) {
+          if (timeoutId != null) {
+            window.clearTimeout(timeoutId);
+            timeoutId = null;
+          }
+          setBackendStatus({ state: "ready", lastError: null });
+          return;
+        }
+        const rawError = typeof health?.error === "string" ? health.error : "";
+        const trimmedError = rawError.trim();
+        const suppress = shouldSuppressBackendError(trimmedError);
+        setBackendStatus({
+          state: "starting",
+          lastError: suppress ? null : trimmedError || null,
+        });
+      } catch (error) {
+        if (isCancelled) {
+          return;
+        }
+        const rawMessage =
+          error instanceof Error
+            ? error.message
+            : typeof error === "string"
+            ? error
+            : "";
+        const trimmedMessage = rawMessage.trim();
+        const suppress = shouldSuppressBackendError(trimmedMessage);
+        setBackendStatus({
+          state: "starting",
+          lastError: suppress
+            ? null
+            : trimmedMessage || "Unable to reach backend",
+        });
+      }
+
+      if (isCancelled) {
+        return;
+      }
+
+      const delay = Math.min(2500, 600 + attempts * 200);
+      if (timeoutId != null) {
+        window.clearTimeout(timeoutId);
+      }
+      timeoutId = window.setTimeout(pollHealth, delay);
+    };
+
+    pollHealth();
+
+    return () => {
+      isCancelled = true;
+      if (timeoutId != null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, []);
 
   const updateNxmEntry = useCallback((id: string, patch: Partial<NxmEntry>) => {
     setNxmEntries((prev) => {
@@ -255,14 +387,20 @@ export default function App() {
   }, [updateNxmEntry]);
 
   useEffect(() => {
+    if (!backendReady) {
+      return undefined;
+    }
     void fetchNxmQueue();
     const interval = window.setInterval(() => {
       void fetchNxmQueue();
     }, 10000);
     return () => window.clearInterval(interval);
-  }, [fetchNxmQueue]);
+  }, [backendReady, fetchNxmQueue]);
 
   useEffect(() => {
+    if (!backendReady) {
+      return undefined;
+    }
     let cancelled = false;
     (async () => {
       console.log("[App] Checking bootstrap status...");
@@ -306,12 +444,36 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [fetchBootstrapStatus, fetchSettings, settingsData, settingsLoading]);
+  }, [
+    backendReady,
+    fetchBootstrapStatus,
+    fetchSettings,
+    settingsData,
+    settingsLoading,
+  ]);
 
   // Get counts for header
   const installedMods = mods.filter((mod) => mod.isInstalled);
   const activeMods = installedMods.filter((mod) => mod.isActive !== false);
-  const updatesCount = installedMods.filter((mod) => mod.hasUpdate).length;
+  // Compute unique update count: dedupe by backend mod id when present, otherwise by normalized name
+  const updatesCount = (() => {
+    const seen = new Set<string>();
+    for (const mod of installedMods) {
+      if (!mod.hasUpdate) continue;
+      if (
+        typeof mod.backendModId === "number" &&
+        Number.isFinite(mod.backendModId)
+      ) {
+        seen.add(`id:${String(mod.backendModId)}`);
+      } else if (mod.name) {
+        seen.add(`name:${String(mod.name).toLowerCase().trim()}`);
+      } else {
+        // fallback to the internal id to avoid losing track
+        seen.add(`internal:${String(mod.id)}`);
+      }
+    }
+    return seen.size;
+  })();
 
   // Get counts by category for sidebar
   const modMatchesCategory = (mod: any, categoryId: string) => {
@@ -408,6 +570,8 @@ export default function App() {
       return;
     }
 
+    const shouldActivate = target.isActive !== false;
+
     setMods((prev) =>
       prev.map((mod) =>
         mod.id === modId
@@ -422,9 +586,18 @@ export default function App() {
 
     let responseLatestVersion = target.latestVersion || target.version || "";
 
-    const applyUpdateSuccess = async (result: any) => {
+    const applyUpdateSuccess = async (
+      result: any,
+      options: { toastId?: string | number; progressDescription?: string } = {}
+    ) => {
       responseLatestVersion = result.latest_version || responseLatestVersion;
       await refreshMods({ quiet: true });
+      // Force sidebar summary refresh (downloads summary / last-check)
+      try {
+        setConflictsReloadToken((t) => t + 1);
+      } catch (e) {
+        // ignore if token state isn't available
+      }
       const message = result.already_latest
         ? `${displayName} is already on the latest version (${
             responseLatestVersion || "unknown"
@@ -433,10 +606,19 @@ export default function App() {
       const hasWarning =
         typeof result.activation_warning === "string" &&
         result.activation_warning.trim().length > 0;
+      const warningText = hasWarning
+        ? result.activation_warning?.trim()
+        : undefined;
+      const progressDescription = sanitizeProgressDescription(
+        options.progressDescription
+      );
+      const description =
+        warningText && warningText.length > 0
+          ? warningText
+          : progressDescription;
       toast.success(message, {
-        description: hasWarning
-          ? result.activation_warning ?? undefined
-          : undefined,
+        description,
+        id: options.toastId,
       });
       setMods((prev) =>
         prev.map((mod) =>
@@ -452,7 +634,9 @@ export default function App() {
     };
 
     try {
-      const response = await updateMod(backendModId, { activate: true });
+      const response = await updateMod(backendModId, {
+        activate: shouldActivate,
+      });
       await applyUpdateSuccess(response);
       return;
     } catch (error) {
@@ -546,26 +730,42 @@ export default function App() {
             }
           }
 
+          let controller: NxmProgressController | null = null;
           try {
             const expectedModId = nexusModId ?? backendModId;
             if (expectedModId == null) {
               throw new Error("Missing Nexus mod id for the handoff.");
             }
+
             const handoff = await waitForMatchingHandoff(
               expectedModId,
               expectedFileId
             );
             if (!handoff) {
               throw new Error(
-                "Timed out waiting for the Mod Manager download handoff."
+                "Timed out waiting for the RivalNxt download handoff."
               );
             }
+
+            if (handoff.id) {
+              controller = createNxmProgressController(handoff.id, {
+                label: `Updating ${displayName}`,
+                initialMessage: instructions,
+              });
+            }
+
             const followUp = await updateMod(backendModId, {
-              activate: true,
+              activate: shouldActivate,
               handoffId: handoff.id,
               ...(expectedFileId != null ? { fileId: expectedFileId } : {}),
             });
-            await applyUpdateSuccess(followUp);
+            const progressDescription = controller?.getLastDescription();
+            const toastId = controller?.toastId;
+            controller?.stop();
+            await applyUpdateSuccess(followUp, {
+              toastId,
+              progressDescription,
+            });
             void fetchNxmQueue();
             return;
           } catch (handoffErr) {
@@ -573,10 +773,24 @@ export default function App() {
               handoffErr instanceof Error && handoffErr.message
                 ? handoffErr.message
                 : String(handoffErr ?? "Unknown handoff error");
+            const toastId = controller?.toastId;
+            const description =
+              controller?.getLastDescription() || instructions || undefined;
+            controller?.stop();
             setUpdateError(`${instructions} (${message})`);
-            toast.error(
-              `Failed to resume Nexus download for ${displayName}: ${message}`
-            );
+            if (toastId != null) {
+              toast.error(
+                `Failed to resume Nexus download for ${displayName}: ${message}`,
+                {
+                  id: toastId,
+                  description,
+                }
+              );
+            } else {
+              toast.error(
+                `Failed to resume Nexus download for ${displayName}: ${message}`
+              );
+            }
             void fetchNxmQueue();
             return;
           }
@@ -840,6 +1054,9 @@ export default function App() {
 
   // On mount, try to get mods from API (doesn't replace mock cards yet, just signals connectivity)
   useEffect(() => {
+    if (!backendReady) {
+      return;
+    }
     (async () => {
       try {
         const deduped = await fetchServerMods();
@@ -849,7 +1066,7 @@ export default function App() {
         // ignore, stay on mock data
       }
     })();
-  }, []);
+  }, [backendReady]);
 
   function extractMemberId(value: unknown): number | undefined {
     if (value == null) return undefined;
@@ -1236,16 +1453,8 @@ export default function App() {
 
   return (
     <ThemeProvider defaultTheme="dark">
-      <div className="h-screen bg-background flex flex-col">
-        {/* Header */}
-        <AppHeader
-          downloadsCount={installedMods.length}
-          updatesCount={updatesCount}
-          activeModsCount={activeMods.length}
-          onRefresh={handleRefresh}
-          onOpenSettings={handleOpenSettings}
-          onOpenBootstrap={handleOpenBootstrap}
-        />
+      <div className="relative h-screen bg-background flex flex-col">
+        {/* Header - AppHeader UI migrated into TabHeader (see TabHeader props below) */}
 
         {/* Main Content */}
         <div className="flex-1 overflow-hidden flex">
@@ -1269,6 +1478,11 @@ export default function App() {
               onTabChange={setActiveTab}
               downloadsCount={installedMods.length}
               activeCount={activeMods.length}
+              updatesCount={updatesCount}
+              activeModsCount={activeMods.length}
+              onRefresh={handleRefresh}
+              onOpenSettings={handleOpenSettings}
+              onOpenBootstrap={handleOpenBootstrap}
             />
 
             {/* Tab Content */}
@@ -1283,6 +1497,8 @@ export default function App() {
                   selectedCharacters={selectedCharacters}
                   onModAdded={handleModAdded}
                   onConflictStateChanged={notifyConflictsDirty}
+                  viewMode={viewMode}
+                  onViewModeChange={setViewMode}
                 />
               ) : (
                 <ActiveModsView
@@ -1296,6 +1512,8 @@ export default function App() {
                   selectedCategory={selectedCategory}
                   selectedCharacters={selectedCharacters}
                   onConflictStateChanged={notifyConflictsDirty}
+                  viewMode={viewMode}
+                  onViewModeChange={setViewMode}
                 />
               )}
             </div>
@@ -1349,6 +1567,10 @@ export default function App() {
           onRefresh={handleSettingsRefresh}
           onSubmit={handleSettingsSubmit}
           onRunTask={handleRunSettingsTask}
+        />
+        <ServerStartupOverlay
+          visible={!backendReady}
+          lastError={backendStatus.lastError}
         />
         <Toaster />
       </div>

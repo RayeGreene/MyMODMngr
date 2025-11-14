@@ -67,7 +67,7 @@ coverage.xml
 *.tsbuildinfo
 
 # Desktop sidecar artifacts
-src-tauri/sidecars/modmanager_backend.exe
+src-tauri/sidecars/rivalnxt_backend.exe
 
 # Editor / IDE
 .vscode/
@@ -130,6 +130,9 @@ temp_conflict_view_debug.py
 
 # PowerShell scripts
 *.ps1
+
+# codeviz files
+*.codeviz
 
 
 

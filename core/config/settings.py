@@ -11,11 +11,11 @@ def _default_data_dir() -> Path:
 	Determine the default data directory with platform-specific logic.
 	
 	Uses platform-specific app data directory (NOT temp directory):
-	   - Windows: %APPDATA%/com.rounak77382.modmanager
-	   - macOS: ~/Library/Application Support/com.rounak77382.modmanager
-	   - Linux: ~/.local/share/com.rounak77382.modmanager
-	
-	Falls back to ~/.com.rounak77382.modmanager if platform detection fails.
+	   - Windows: %APPDATA%/com.rivalnxt.modmanager
+	   - macOS: ~/Library/Application Support/com.rivalnxt.modmanager
+	   - Linux: ~/.local/share/com.rivalnxt.modmanager
+
+	Falls back to ~/.com.rivalnxt.modmanager if platform detection fails.
 	
 	Returns:
 		Path: The resolved data directory
@@ -29,23 +29,23 @@ def _default_data_dir() -> Path:
 		# Windows: Use %APPDATA% (Roaming)
 		appdata = os.environ.get("APPDATA")
 		if appdata:
-			appdata_path = Path(appdata) / "com.rounak77382.modmanager"
+			appdata_path = Path(appdata) / "com.rivalnxt.modmanager"
 		else:
-			appdata_path = Path.home() / "AppData" / "Roaming" / "com.rounak77382.modmanager"
+			appdata_path = Path.home() / "AppData" / "Roaming" / "com.rivalnxt.modmanager"
 	elif system == "Darwin":
 		# macOS: Use ~/Library/Application Support
-		appdata_path = Path.home() / "Library" / "Application Support" / "com.rounak77382.modmanager"
+		appdata_path = Path.home() / "Library" / "Application Support" / "com.rivalnxt.modmanager"
 	else:
 		# Linux/Unix: Use XDG_DATA_HOME or ~/.local/share
 		xdg_data = os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))
-		appdata_path = Path(xdg_data) / "com.rounak77382.modmanager"
+		appdata_path = Path(xdg_data) / "com.rivalnxt.modmanager"
 	
 	# Create the directory if it doesn't exist
 	try:
 		appdata_path.mkdir(parents=True, exist_ok=True)
 	except Exception:
 		# Fallback to home directory
-		appdata_path = Path.home() / ".com.rounak77382.modmanager"
+		appdata_path = Path.home() / ".com.rivalnxt.modmanager"
 		try:
 			appdata_path.mkdir(parents=True, exist_ok=True)
 		except Exception:

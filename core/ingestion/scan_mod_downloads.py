@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -171,6 +172,11 @@ def build_download_row(
     if forced_mod_id is not None:
         mod_id = str(forced_mod_id)
     contents = _enumerate_archive_contents(resolved)
+    try:
+        created_at_iso = datetime.fromtimestamp(resolved.stat().st_mtime, timezone.utc).isoformat()
+    except Exception:
+        created_at_iso = None
+
     rel_path = resolved.name
     if relative_to is not None:
         try:
@@ -184,6 +190,8 @@ def build_download_row(
         "path": normalize_download_path(rel_path),
         "contents": contents,
         "active_paks": [],
+        "absolute_path": str(resolved),
+        "created_at": created_at_iso,
     }
 
 

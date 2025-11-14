@@ -231,7 +231,7 @@ async fn launch_backend(app_handle: AppHandle, backend_state: BackendChild) -> R
         
         // Production mode or fallback: use compiled sidecar
         println!("[PRODUCTION MODE] Using compiled sidecar");
-        match app_handle.shell().sidecar("modmanager_backend") {
+    match app_handle.shell().sidecar("rivalnxt_backend") {
             Ok(command) => {
                 let mut command = command
                     .env("MM_BACKEND_HOST", "127.0.0.1")

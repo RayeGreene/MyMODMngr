@@ -19,7 +19,6 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Switch } from "./ui/switch";
 import { ScrollArea } from "./ui/scroll-area";
-import { Textarea } from "./ui/textarea";
 import { Loader2, RefreshCw, Play } from "lucide-react";
 
 import {
@@ -28,6 +27,7 @@ import {
   type SettingsTask,
 } from "../lib/api";
 import { NxmProtocolSettings } from "./NxmProtocolSettings";
+import { TaskOutputSummary } from "./TaskOutputSummary";
 export type SettingsFormValues = {
   data_dir: string;
   marvel_rivals_root: string;
@@ -632,7 +632,6 @@ export function SettingsDialog({
                           ).toFixed(2);
                         }
                         const outputText = result?.output ?? "";
-                        const hasOutput = outputText.trim().length > 0;
                         const exitCodeText =
                           typeof result?.exit_code === "number"
                             ? ` (exit ${result.exit_code})`
@@ -768,22 +767,12 @@ export function SettingsDialog({
                                   }}
                                 >
                                   <Label className="text-xs">Output</Label>
-                                  {hasOutput ? (
-                                    <Textarea
-                                      readOnly
-                                      className="h-24 resize-y font-mono text-[11px]"
-                                      value={outputText}
-                                      spellCheck={false}
-                                    />
-                                  ) : isRunning ? (
-                                    <div className="text-xs text-muted-foreground italic">
-                                      (Awaiting output…)
-                                    </div>
-                                  ) : (
-                                    <div className="text-xs text-muted-foreground italic">
-                                      (No output captured)
-                                    </div>
-                                  )}
+                                  <TaskOutputSummary
+                                    task={task.key}
+                                    output={outputText}
+                                    isRunning={isRunning}
+                                    fallbackMinHeight="h-24"
+                                  />
                                 </div>
                               </div>
                             ) : null}

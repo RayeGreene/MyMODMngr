@@ -64,10 +64,11 @@ CATEGORY_RULES = [
     ("vfx", lambda p, fn: ("/vfx/" in p) or ("/fx/" in p) or ("/niagara/" in p) or re.match(r"^(ns_|ps_|fx_)", fn)),
     ("animation", lambda p, fn: ("/animations/" in p) or ("/anims/" in p) or ("/animsequence/" in p) or ("/montages/" in p) or re.match(r"^(a_|am_)", fn)),
     ("mesh", lambda p, fn: ("/meshes/" in p) or ("/skeletalmeshes/" in p) or ("/staticmeshes/" in p) or re.match(r"^(sk_|sm_)", fn)),
+    ("environment", lambda p, fn: ("/environment/" in p) or ("/environments/" in p) or ("/env/" in p) or ("/maps/" in p) or ("/levels/" in p) or ("/world/" in p)),
+    ("map", lambda p, fn: fn.endswith(('.umap', '.world'))),
     ("texture", lambda p, fn: ("/textures/" in p) or re.match(r"^(t_)", fn)),
     ("material", lambda p, fn: ("/materials/" in p) or ("/materialfunctions/" in p) or ("/materialinstances/" in p) or re.match(r"^(m_|mi_|mf_)", fn)),
     ("blueprint", lambda p, fn: ("/blueprints/" in p) or re.match(r"^(bp_)", fn)),
-    ("map", lambda p, fn: ("/maps/" in p) or ("/levels/" in p) or fn.endswith(('.umap', '.world'))),
 ]
 
 # ---------- Entity detection ----------

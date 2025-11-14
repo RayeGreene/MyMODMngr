@@ -5,13 +5,23 @@ import {
   DialogHeader,
   DialogTitle,
 } from "./ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "./ui/alert-dialog";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Separator } from "./ui/separator";
 import { ScrollArea } from "./ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
-import { Download, Star, Heart, Calendar, File } from "lucide-react";
+import { Download, Star, Heart, Calendar, File, Trash2 } from "lucide-react";
 import type { Mod } from "./ModCard";
 import {
   useCallback,
@@ -34,6 +44,7 @@ import {
   getLocalDownload,
   getPakVersionStatus,
   refreshConflicts,
+  deleteLocalDownloads,
   type ApiPakVersionStatus,
 } from "../lib/api";
 import { toast } from "sonner";
@@ -118,6 +129,22 @@ const normalizeVersion = (version?: string | null): string => {
   return trimmed;
 };
 
+const getDownloadDisplayName = (entry: DownloadEntry): string => {
+  if (!entry) {
+    return "Download";
+  }
+  if (entry.name && entry.name.trim().length > 0) {
+    return entry.name.trim();
+  }
+  if (entry.path && entry.path.trim().length > 0) {
+    const base = toBasename(entry.path.trim());
+    if (base.length > 0) {
+      return base;
+    }
+  }
+  return `Download #${entry.id}`;
+};
+
 interface ModModalProps {
   mod: Mod | null;
   isOpen: boolean;
@@ -159,6 +186,11 @@ export function ModModal({
   const [pakStatusByDownload, setPakStatusByDownload] = useState<
     Record<number, Record<string, ApiPakVersionStatus>>
   >({});
+  const [deletingDownloadId, setDeletingDownloadId] = useState<number | null>(
+    null
+  );
+  const [deleteDialogEntry, setDeleteDialogEntry] =
+    useState<DownloadEntry | null>(null);
 
   const overviewTags = useMemo(() => {
     const tags: string[] = [];
@@ -207,7 +239,6 @@ export function ModModal({
           serverModId,
           debugInfo
         );
-        // Send to backend for production debugging
         try {
           await fetch("http://127.0.0.1:8000/api/debug/log", {
             method: "POST",
@@ -493,6 +524,99 @@ export function ModModal({
     ]
   );
 
+  const handleDeleteDownload = useCallback(
+    async (entry: DownloadEntry): Promise<boolean> => {
+      if (!entry) {
+        return false;
+      }
+      if (isApplying && deletingDownloadId == null) {
+        toast.warning("Please wait for the current operation to finish.");
+        return false;
+      }
+      if (deletingDownloadId != null && deletingDownloadId !== entry.id) {
+        toast.warning("Please wait for the current deletion to finish.");
+        return false;
+      }
+
+      const downloadId = entry.id;
+      const displayName = getDownloadDisplayName(entry);
+      const toastId = `delete-download-${downloadId}`;
+      setDeletingDownloadId(downloadId);
+      setIsApplying(true);
+      toast.loading(`Deleting ${displayName}…`, { id: toastId });
+
+      let success = false;
+      try {
+        const backendModId =
+          typeof mod?.backendModId === "number" &&
+          Number.isFinite(mod.backendModId)
+            ? mod.backendModId
+            : undefined;
+        await deleteLocalDownloads([downloadId], backendModId);
+        await scanActive();
+        try {
+          await refreshConflicts();
+        } catch (refreshError) {
+          console.warn(
+            "[mod-modal] refreshConflicts after delete failed",
+            refreshError
+          );
+        }
+        const refreshed = await hydrateDownloads({ skipScan: true });
+        setDownloadEntries(refreshed);
+        setActiveByDownload(toActiveMap(refreshed));
+        const lookup = await fetchPakStatuses();
+        setPakStatusByDownload(lookup);
+        toast.success(`Deleted ${displayName}`, { id: toastId });
+        onConflictStateChanged?.();
+        success = true;
+      } catch (error) {
+        const message =
+          error instanceof Error && error.message
+            ? error.message
+            : String(error ?? "Unknown error");
+        toast.error(`Failed to delete ${displayName}: ${message}`, {
+          id: toastId,
+        });
+      } finally {
+        setDeletingDownloadId(null);
+        setIsApplying(false);
+      }
+      return success;
+    },
+    [
+      deletingDownloadId,
+      fetchPakStatuses,
+      hydrateDownloads,
+      isApplying,
+      mod?.backendModId,
+      onConflictStateChanged,
+    ]
+  );
+
+  const handleDeleteDialogChange = useCallback(
+    (open: boolean) => {
+      if (open) {
+        return;
+      }
+      if (deletingDownloadId != null) {
+        return;
+      }
+      setDeleteDialogEntry(null);
+    },
+    [deletingDownloadId]
+  );
+
+  const handleConfirmDelete = useCallback(async () => {
+    if (!deleteDialogEntry) {
+      return;
+    }
+    const result = await handleDeleteDownload(deleteDialogEntry);
+    if (result) {
+      setDeleteDialogEntry(null);
+    }
+  }, [deleteDialogEntry, handleDeleteDownload]);
+
   if (!mod) return null;
 
   const formatNumber = (num: number) => {
@@ -530,6 +654,13 @@ export function ModModal({
       : trimmed.replace(/\r?\n/g, "<br />");
     return sanitizeHtml(normalized);
   };
+
+  const pendingDeleteLabel = deleteDialogEntry
+    ? getDownloadDisplayName(deleteDialogEntry)
+    : "";
+  const pendingDeletePath = deleteDialogEntry?.path ?? "";
+  const isDeletingSelectedEntry =
+    deleteDialogEntry != null && deletingDownloadId === deleteDialogEntry.id;
 
   // Comments tab removed per request
 
@@ -730,12 +861,12 @@ export function ModModal({
                               <div
                                 dangerouslySetInnerHTML={{
                                   __html: sanitizeHtml(
-                                    details.mod.description || ""
+                                    details?.mod?.description || ""
                                   ),
                                 }}
                               />
                             ) : details?.mod?.summary ? (
-                              <p>{details.mod.summary}</p>
+                              <p>{details?.mod?.summary}</p>
                             ) : (
                               <p className="italic">
                                 No description available.
@@ -743,9 +874,6 @@ export function ModModal({
                             )}
                           </div>
                         </div>
-
-                        {/* Requirements (Mod Names & Notes, original style retained) */}
-                        {/* Requirements section removed per request */}
                       </div>
                     </div>
                   </ScrollArea>
@@ -792,7 +920,10 @@ export function ModModal({
                             const isFolder = !isArchive && !isSinglePak;
                             const canApply =
                               isArchive || isSinglePak || isFolder;
-                            const switchDisabled = isApplying || !canApply;
+                            const switchDisabled =
+                              isApplying ||
+                              deletingDownloadId === entry.id ||
+                              !canApply;
                             const statusMap =
                               pakStatusByDownload[entry.id] ?? {};
                             const statusValues = Object.values(statusMap);
@@ -836,6 +967,29 @@ export function ModModal({
                                     >
                                       {isActive ? "Active" : "Inactive"}
                                     </Badge>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => {
+                                        if (
+                                          isApplying ||
+                                          deletingDownloadId != null
+                                        ) {
+                                          return;
+                                        }
+                                        setDeleteDialogEntry(entry);
+                                      }}
+                                      disabled={
+                                        isApplying ||
+                                        deletingDownloadId === entry.id
+                                      }
+                                      className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                                      aria-label={`Delete ${entryLabel}`}
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </Button>
                                   </div>
                                 </div>
 
@@ -959,6 +1113,44 @@ export function ModModal({
             </Button>
           </DialogClose>
         </div>
+
+        <AlertDialog
+          open={deleteDialogEntry != null}
+          onOpenChange={handleDeleteDialogChange}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                Delete {pendingDeleteLabel || "this download"}?
+              </AlertDialogTitle>
+              <AlertDialogDescription asChild>
+                <div className="space-y-2 text-sm">
+                  <p>
+                    This removes the archive or folder from disk and deletes its
+                    entry from the RivalNxt database. This action cannot be
+                    undone.
+                  </p>
+                  {pendingDeletePath ? (
+                    <p className="text-muted-foreground break-all text-xs">
+                      {pendingDeletePath}
+                    </p>
+                  ) : null}
+                </div>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isDeletingSelectedEntry}>
+                Cancel
+              </AlertDialogCancel>
+              <AlertDialogAction
+                onClick={handleConfirmDelete}
+                disabled={isDeletingSelectedEntry}
+              >
+                {isDeletingSelectedEntry ? "Deleting..." : "Delete"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </DialogContent>
     </Dialog>
   );

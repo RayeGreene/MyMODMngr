@@ -103,6 +103,23 @@ export function ModConflictModal({
           </div>
         </DialogHeader>
 
+        <style>{`.custom-scrollbar::-webkit-scrollbar {
+            width: 8px;
+          }
+          .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+          }
+          .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(100, 100, 100, 0.5);
+            border-radius: 4px;
+          }
+          .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgba(100, 100, 100, 0.7);
+          }
+          .custom-scrollbar {
+            scrollbar-color: rgba(100, 100, 100, 0.5) transparent;
+            scrollbar-width: thin;
+          }`}</style>
         <div className="mt-2 flex-1 min-h-0 h-[calc(90vh-120px)] max-h-[calc(90vh-120px)] overflow-y-auto space-y-6 px-6 pb-2 custom-scrollbar bg-card">
           {items.length === 0 ? (
             <div className="text-center text-muted-foreground py-12 text-base font-medium">

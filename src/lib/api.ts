@@ -82,6 +82,16 @@ export type ApiConflict = {
   participants: ApiConflictParticipant[];
 };
 
+export type ApiNxmDownloadProgress = {
+  stage?: string;
+  message?: string | null;
+  bytes_downloaded?: number;
+  bytes_total?: number | null;
+  percent?: number | null;
+  error?: string | null;
+  updated_at?: number | null;
+};
+
 export type ApiNxmHandoffSummary = {
   id: string;
   created_at?: number | null;
@@ -97,6 +107,7 @@ export type ApiNxmHandoffSummary = {
     mod_info?: Record<string, unknown> | null;
     fetched_at?: number | null;
   } | null;
+  progress?: ApiNxmDownloadProgress | null;
 };
 
 export type ApiNxmHandoffList = {
@@ -228,6 +239,14 @@ export type ApiBootstrapStatus = {
   mods_count: number;
   schema_migrations: number;
   needs_bootstrap: boolean;
+};
+
+export type ApiHealthResponse = {
+  ok: boolean;
+  mods?: number;
+  paks?: number;
+  assets?: number;
+  error?: string;
 };
 
 const BASE_URL =
@@ -382,6 +401,10 @@ export async function listConflicts(
 ): Promise<ApiConflict[]> {
   const path = active ? "/api/conflicts/active" : "/api/conflicts";
   return getJson<ApiConflict[]>(`${path}?limit=${limit}`);
+}
+
+export async function getHealth(): Promise<ApiHealthResponse> {
+  return getJson<ApiHealthResponse>("/health");
 }
 
 export async function addMod(
@@ -652,6 +675,19 @@ export async function listDownloads(limit = 500): Promise<ApiDownload[]> {
   return getJson<ApiDownload[]>(`/api/downloads?limit=${limit}`);
 }
 
+export type ApiDownloadsSummary = {
+  ok: boolean;
+  total_size_bytes: number;
+  total_size_human: string;
+  download_count: number;
+  missing_paths: string[];
+  last_check?: string | null;
+};
+
+export async function getDownloadsSummary(): Promise<ApiDownloadsSummary> {
+  return getJson<ApiDownloadsSummary>(`/api/downloads/summary`);
+}
+
 export async function setActivePaks(downloadId: number, active_paks: string[]) {
   return postJson<{ active_paks: string[] }, { ok: boolean }>(
     `/api/local_downloads/${downloadId}/set-active`,
@@ -815,6 +851,15 @@ export async function deleteLocalDownloads(
 export async function listNxmHandoffs(): Promise<ApiNxmHandoffSummary[]> {
   const response = await getJson<ApiNxmHandoffList>(`/api/nxm/handoffs`);
   return Array.isArray(response?.handoffs) ? response.handoffs : [];
+}
+
+export async function getNxmHandoff(
+  handoffId: string
+): Promise<{ ok: boolean; handoff: ApiNxmHandoffSummary }> {
+  const encoded = encodeURIComponent(handoffId);
+  return getJson<{ ok: boolean; handoff: ApiNxmHandoffSummary }>(
+    `/api/nxm/handoff/${encoded}`
+  );
 }
 
 export async function previewNxmHandoff(

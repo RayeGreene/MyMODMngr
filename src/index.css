@@ -2770,3 +2770,33 @@ html {
       rotate(var(--tw-exit-rotate, 0));
   }
 }
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.animate-spin {
+  animation: spin 0.85s linear infinite;
+}
+
+.animate-pulse {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-spin {
+    animation-duration: 1.6s;
+  }
+
+  .animate-pulse {
+    animation-duration: 2.4s;
+  }
+}

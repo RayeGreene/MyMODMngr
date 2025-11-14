@@ -17,19 +17,11 @@ import {
 } from "../lib/api";
 import { toast } from "sonner";
 import { openInBrowser } from "../lib/tauri-utils";
-import { waitForMatchingHandoff } from "../lib/nxmHelpers";
-
-const formatBytes = (size: number) => {
-  if (!Number.isFinite(size) || size <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const index = Math.min(
-    Math.floor(Math.log(size) / Math.log(1024)),
-    units.length - 1
-  );
-  const value = size / Math.pow(1024, index);
-  const precision = value >= 10 || index === 0 ? 0 : 1;
-  return `${value.toFixed(precision)} ${units[index]}`;
-};
+import {
+  waitForMatchingHandoff,
+  createNxmProgressController,
+  formatBytes,
+} from "../lib/nxmHelpers";
 
 interface AddModModalProps {
   open: boolean;
@@ -101,7 +93,11 @@ export function AddModModal({
     setUploadInfo(null);
   };
 
-  const handleNxmError = (err: unknown, context?: string) => {
+  const handleNxmError = (
+    err: unknown,
+    context?: string,
+    toastId?: string | number
+  ): string => {
     let message: string;
     if (err instanceof ApiError) {
       const detail = err.detail;
@@ -124,7 +120,13 @@ export function AddModModal({
     } else {
       message = String(err ?? "Unknown error");
     }
-    toast.error(context ? `${context}: ${message}` : message);
+    const fullMessage = context ? `${context}: ${message}` : message;
+    if (toastId != null) {
+      toast.error(fullMessage, { id: toastId });
+    } else {
+      toast.error(fullMessage);
+    }
+    return fullMessage;
   };
 
   const finalizeSuccess = async () => {
@@ -141,24 +143,50 @@ export function AddModModal({
       const response = await submitNxmHandoff(nxmUri);
       const handoff = response?.handoff;
       if (!handoff || !handoff.id) {
-        toast.error("Backend did not accept the Mod Manager link.");
+        toast.error("Backend did not accept the RivalNxt link.");
         return;
       }
-      const ingest = await ingestNxmHandoff(handoff.id, {
-        activate: true,
-        deactivateExisting: false,
+      const modLabel =
+        (handoff.request?.mod_id != null
+          ? `Mod #${handoff.request?.mod_id}`
+          : null) ?? "Nexus download";
+      const controller = createNxmProgressController(handoff.id, {
+        label: `Downloading ${modLabel}`,
       });
-      const modName =
-        typeof ingest.mod_name === "string" && ingest.mod_name.trim().length > 0
-          ? ingest.mod_name
-          : `Mod #${ingest.mod_id}`;
-      toast.success(`Added ${modName}`);
-      if (ingest.activation_warning) {
-        toast.warning(ingest.activation_warning);
+      try {
+        const ingest = await ingestNxmHandoff(handoff.id, {
+          activate: false,
+          deactivateExisting: false,
+        });
+        controller.stop();
+        const modName =
+          typeof ingest.mod_name === "string" &&
+          ingest.mod_name.trim().length > 0
+            ? ingest.mod_name
+            : `Mod #${ingest.mod_id}`;
+        const fileName =
+          ingest.selected_file &&
+          typeof ingest.selected_file["name"] === "string"
+            ? (ingest.selected_file["name"] as string)
+            : undefined;
+        toast.success(`Added ${modName}`, {
+          id: controller.toastId,
+          description: fileName ?? controller.getLastDescription(),
+        });
+        if (ingest.activation_warning) {
+          toast.warning(ingest.activation_warning);
+        }
+        await finalizeSuccess();
+      } catch (err) {
+        controller.stop();
+        handleNxmError(
+          err,
+          "Failed to process RivalNxt link",
+          controller.toastId
+        );
       }
-      await finalizeSuccess();
     } catch (err) {
-      handleNxmError(err, "Failed to process Mod Manager link");
+      handleNxmError(err, "Failed to process RivalNxt link");
     } finally {
       setBusy(false);
     }
@@ -187,7 +215,7 @@ export function AddModModal({
 
       const nxmPreview = `nxm://${game}/mods/${modId}/files/${fileId}`;
 
-      toast.info("Opening Nexus Mods to start the Mod Manager handoff", {
+      toast.info("Opening Nexus Mods to start the RivalNxt handoff", {
         description: `${nxmPreview}`,
       });
 
@@ -212,30 +240,51 @@ export function AddModModal({
       const handoff = await waitForMatchingHandoff(modId, fileId);
       if (!handoff) {
         toast.error(
-          "Did not receive a Mod Manager handoff. Approve the download in the Nexus tab, then try again."
+          "Did not receive a RivalNxt handoff. Approve the download in the Nexus tab, then try again."
         );
         return;
       }
 
-      const ingest = await ingestNxmHandoff(handoff.id, {
-        activate: true,
-        deactivateExisting: false,
+      const modLabel =
+        handoff.request?.mod_id != null
+          ? `Mod #${handoff.request.mod_id}`
+          : "Nexus download";
+      const controller = createNxmProgressController(handoff.id, {
+        label: `Downloading ${modLabel}`,
       });
-      const modName =
-        typeof ingest.mod_name === "string" && ingest.mod_name?.trim()
-          ? ingest.mod_name
-          : `Mod #${ingest.mod_id}`;
-      const fileName =
-        ingest.selected_file && typeof ingest.selected_file["name"] === "string"
-          ? (ingest.selected_file["name"] as string)
-          : undefined;
-      toast.success(`Added ${modName}`, {
-        description: fileName,
-      });
-      if (ingest.activation_warning) {
-        toast.warning(ingest.activation_warning);
+
+      try {
+        const ingest = await ingestNxmHandoff(handoff.id, {
+          activate: false,
+          deactivateExisting: false,
+        });
+        controller.stop();
+        const modName =
+          typeof ingest.mod_name === "string" && ingest.mod_name?.trim()
+            ? ingest.mod_name
+            : `Mod #${ingest.mod_id}`;
+        const fileName =
+          ingest.selected_file &&
+          typeof ingest.selected_file["name"] === "string"
+            ? (ingest.selected_file["name"] as string)
+            : undefined;
+        toast.success(`Added ${modName}`, {
+          id: controller.toastId,
+          description: fileName ?? controller.getLastDescription(),
+        });
+        if (ingest.activation_warning) {
+          toast.warning(ingest.activation_warning);
+        }
+        await finalizeSuccess();
+      } catch (err) {
+        controller.stop();
+        handleNxmError(
+          err,
+          "Failed to ingest Nexus download",
+          controller.toastId
+        );
+        return;
       }
-      await finalizeSuccess();
     } catch (err) {
       handleNxmError(err, "Failed to ingest Nexus download");
     } finally {

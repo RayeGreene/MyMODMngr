@@ -16,6 +16,7 @@ from .db import (
     bulk_upsert_pak_assets,
     upsert_pak_assets_json,
     rebuild_conflicts,
+    resolve_created_at,
 )
 from . import queries as _queries
 
@@ -49,6 +50,7 @@ __all__ = [
     'bulk_upsert_pak_assets',
     'upsert_pak_assets_json',
     'rebuild_conflicts',
+    'resolve_created_at',
     # queries
     'get_mod',
     'get_latest_file',

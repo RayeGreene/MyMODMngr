@@ -18,6 +18,7 @@ from core.db import (
     get_connection,
     init_schema,
     next_local_download_id,
+    resolve_created_at,
     upsert_mod_pak,
     upsert_pak_assets_json,
 )
@@ -33,6 +34,7 @@ def parse_args(argv=None):
     p.add_argument("--name", dest="name", default=None, help="Display name to insert into local_downloads when missing")
     p.add_argument("--db", dest="db_path", default=None)
     p.add_argument("--aes-key", dest="aes_key", default=os.environ.get("AES_KEY_HEX"))
+    p.add_argument("--created-at", dest="created_at", default=None, help="Optional timestamp (ISO-8601 or epoch) to use for created_at")
     return p.parse_args(argv)
 
 
@@ -74,10 +76,12 @@ def main(argv=None) -> int:
         conn.commit()
     else:
         local_download_id = next_local_download_id(conn)
+        created_at_iso = resolve_created_at(path=arc, hints=[args.created_at])
+
         cur.execute(
             """
-            INSERT INTO local_downloads(path, id, name, mod_id, version, contents, active_paks)
-            VALUES(?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO local_downloads(path, id, name, mod_id, version, contents, active_paks, created_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 path_key,
@@ -87,6 +91,7 @@ def main(argv=None) -> int:
                 "",
                 json.dumps([], ensure_ascii=False),
                 json.dumps([], ensure_ascii=False),
+                created_at_iso,
             ),
         )
         conn.commit()

@@ -178,7 +178,7 @@ export function NxmProtocolSettings() {
         <CardHeader>
           <CardTitle>NXM Protocol Registration</CardTitle>
           <CardDescription>
-            Manage Nexus Mod Manager (nxm://) protocol association
+            Manage RivalNxt handler for nxm:// protocol links
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -196,7 +196,7 @@ export function NxmProtocolSettings() {
         <CardHeader>
           <CardTitle>NXM Protocol Registration</CardTitle>
           <CardDescription>
-            Manage Nexus Mod Manager (nxm://) protocol association
+            Manage RivalNxt handler for nxm:// protocol links
           </CardDescription>
         </CardHeader>
         <CardContent>

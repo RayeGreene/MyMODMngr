@@ -11,7 +11,7 @@ import sys
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from core.db.db import get_connection, init_schema, next_local_download_id
+from core.db.db import get_connection, init_schema, next_local_download_id, resolve_created_at
 from scripts import activate_mods as activate_script
 from scripts import deactivate_mods as deactivate_script
 
@@ -36,10 +36,12 @@ def setup_fixture(name: str) -> dict:
         # Remove any previous row with same name
         cur.execute("DELETE FROM local_downloads WHERE name = ?", (name,))
         new_id = next_local_download_id(conn)
+        created_at_iso = resolve_created_at(path=pak_path)
+
         cur.execute(
             """
-            INSERT INTO local_downloads(path, id, name, mod_id, version, contents, active_paks)
-            VALUES(?, ?, ?, NULL, '', ?, ?)
+            INSERT INTO local_downloads(path, id, name, mod_id, version, contents, active_paks, created_at)
+            VALUES(?, ?, ?, NULL, '', ?, ?, ?)
             """,
             (
                 str(pak_path.resolve()),
@@ -47,6 +49,7 @@ def setup_fixture(name: str) -> dict:
                 name,
                 json.dumps([pak_name], ensure_ascii=False),
                 json.dumps([], ensure_ascii=False),
+                created_at_iso,
             ),
         )
         conn.commit()

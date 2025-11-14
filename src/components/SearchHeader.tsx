@@ -1,6 +1,6 @@
 import { Button } from "./ui/button";
 import { AddModModal } from "./AddModModal";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Input } from "./ui/input";
 import {
   Search,
@@ -8,7 +8,7 @@ import {
   Grid3X3,
   List,
   Plus,
-  Settings,
+  ArrowUpDown,
   Moon,
   Sun,
 } from "lucide-react";
@@ -22,6 +22,10 @@ interface SearchHeaderProps {
   onViewModeChange: (mode: "grid" | "list") => void;
   sortBy: string;
   onSortChange: (sort: string) => void;
+  /** optional controlled sort order: 'asc' or 'desc' */
+  sortOrder?: "asc" | "desc";
+  /** optional callback when sort order changes */
+  onSortOrderChange?: (order: "asc" | "desc") => void;
   onModAdded?: () => Promise<void> | void;
 }
 
@@ -32,6 +36,8 @@ export function SearchHeader({
   onViewModeChange,
   sortBy,
   onSortChange,
+  sortOrder,
+  onSortOrderChange,
   onModAdded,
 }: SearchHeaderProps) {
   const { theme, toggleTheme } = useTheme();
@@ -44,6 +50,21 @@ export function SearchHeader({
   const handleSortClick = () => {
     const nextIndex = (currentSortIndex + 1) % sortOptions.length;
     onSortChange(sortOptions[nextIndex]);
+  };
+
+  // Manage ascending/descending sort order (controlled if prop provided)
+  const [orderState, setOrderState] = useState<"asc" | "desc">(
+    sortOrder ?? "desc"
+  );
+
+  useEffect(() => {
+    if (sortOrder) setOrderState(sortOrder);
+  }, [sortOrder]);
+
+  const toggleOrder = () => {
+    const next = orderState === "asc" ? "desc" : "asc";
+    setOrderState(next);
+    if (onSortOrderChange) onSortOrderChange(next);
   };
 
   return (
@@ -65,6 +86,22 @@ export function SearchHeader({
         <Button variant="outline" className="gap-2" onClick={handleSortClick}>
           <SlidersHorizontal className="w-4 h-4" />
           Sort: {sortBy}
+        </Button>
+
+        {/* Sort order toggle (asc/desc) placed to the right of Sort button */}
+        <Button
+          variant="outline"
+          size="sm"
+          className="gap-2"
+          onClick={toggleOrder}
+          title={`Toggle sort order (currently ${orderState})`}
+          aria-label={`Toggle sort order (currently ${orderState})`}
+        >
+          <ArrowUpDown
+            className={`w-4 h-4 transition-transform ${
+              orderState === "asc" ? "rotate-180" : ""
+            }`}
+          />
         </Button>
 
         {/* View Mode Toggle */}
@@ -100,10 +137,6 @@ export function SearchHeader({
 
         <Button variant="outline" size="sm" onClick={toggleTheme}>
           {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-        </Button>
-
-        <Button variant="outline" size="sm">
-          <Settings className="w-4 h-4" />
         </Button>
       </div>
       {/* Add Mods Modal */}

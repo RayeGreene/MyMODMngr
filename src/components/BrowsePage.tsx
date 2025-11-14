@@ -22,6 +22,7 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
   const [selectedCharacters, setSelectedCharacters] = useState<string[]>([]);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [sortBy, setSortBy] = useState("Popular");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [selectedMod, setSelectedMod] = useState<Mod | null>(null);
 
   // Build filtered mods from live data (no mock helpers)
@@ -72,6 +73,11 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
     const time = Date.parse(value);
     return Number.isNaN(time) ? MISSING_TIME : time;
   };
+  const toNullableTimestamp = (value?: string | null): number | null => {
+    if (!value) return null;
+    const time = Date.parse(value);
+    return Number.isNaN(time) ? null : time;
+  };
   const hasApiSource = (mod: Mod) => mod.backendModId != null;
   const releaseSortKey = (mod: Mod) => {
     const release = toTimestamp(mod.releaseDate);
@@ -100,37 +106,57 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
     if (b.timestamp !== a.timestamp) return b.timestamp - a.timestamp;
     return 0;
   };
+  const applyOrder = (val: number) => (sortOrder === "asc" ? -val : val);
+
+  const makeTimestampComparator = (
+    getter: (m: Mod) => number | null
+  ) => {
+    return (a: Mod, b: Mod) => {
+      const ta = getter(a);
+      const tb = getter(b);
+      if (ta == null && tb == null) return 0;
+      if (ta == null) return 1;
+      if (tb == null) return -1;
+      if (ta === tb) return 0;
+      return sortOrder === "asc" ? ta - tb : tb - ta;
+    };
+  };
+
   switch (sortBy) {
     case "Popular":
     case "Downloads":
-      filteredMods.sort((a, b) => (b.downloads || 0) - (a.downloads || 0));
+      filteredMods.sort((a, b) => applyOrder((b.downloads || 0) - (a.downloads || 0)));
       break;
     case "Recent":
-      filteredMods.sort((a, b) =>
-        compareSortKey(releaseSortKey(a), releaseSortKey(b))
+      // Recent: sort by installDate (local_downloads.created_at)
+      filteredMods.sort(
+        makeTimestampComparator((m) => toNullableTimestamp(m.installDate))
       );
       break;
     case "Updated":
-      filteredMods.sort((a, b) =>
-        compareSortKey(updatedSortKey(a), updatedSortKey(b))
+      // Updated: sort by mods.updated_at (lastUpdatedRaw/lastUpdated), NULLs last
+      filteredMods.sort(
+        makeTimestampComparator((m) =>
+          toNullableTimestamp(m.lastUpdatedRaw ?? m.lastUpdated ?? null)
+        )
       );
       break;
     case "Rating":
-      filteredMods.sort((a, b) => (b.rating || 0) - (a.rating || 0));
+      filteredMods.sort((a, b) => applyOrder((b.rating || 0) - (a.rating || 0)));
       break;
     case "Performance":
       filteredMods.sort(
-        (a, b) => (b.performanceImpact || 0) - (a.performanceImpact || 0)
+        (a, b) => applyOrder((b.performanceImpact || 0) - (a.performanceImpact || 0))
       );
       break;
     case "Name":
-      filteredMods.sort((a, b) => a.name.localeCompare(b.name));
+      filteredMods.sort((a, b) => applyOrder(a.name.localeCompare(b.name)));
       break;
     case "Category":
       filteredMods.sort((a, b) => {
         const categoryA = a.categoryTags?.[0] ?? a.category ?? "";
         const categoryB = b.categoryTags?.[0] ?? b.category ?? "";
-        return categoryA.localeCompare(categoryB);
+        return applyOrder(categoryA.localeCompare(categoryB));
       });
       break;
     default:
@@ -187,6 +213,8 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
           onViewModeChange={setViewMode}
           sortBy={sortBy}
           onSortChange={setSortBy}
+          sortOrder={sortOrder}
+          onSortOrderChange={setSortOrder}
         />
 
         {/* Content Area */}

@@ -1,11 +1,17 @@
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
+import { Bell, Settings, RefreshCw, Rocket } from "lucide-react";
 
 interface TabHeaderProps {
   activeTab: "downloads" | "active";
   onTabChange: (tab: "downloads" | "active") => void;
   downloadsCount: number;
   activeCount: number;
+  updatesCount?: number;
+  activeModsCount?: number;
+  onRefresh?: () => void;
+  onOpenSettings?: () => void;
+  onOpenBootstrap?: () => void;
 }
 
 export function TabHeader({
@@ -13,10 +19,15 @@ export function TabHeader({
   onTabChange,
   downloadsCount,
   activeCount,
+  updatesCount = 0,
+  activeModsCount = 0,
+  onRefresh,
+  onOpenSettings,
+  onOpenBootstrap,
 }: TabHeaderProps) {
   return (
     <div className="border-b border-border bg-card">
-      <div className="flex items-center p-4">
+      <div className="flex items-center p-4 justify-between">
         <div className="flex gap-1">
           <Button
             variant={activeTab === "downloads" ? "secondary" : "ghost"}
@@ -39,6 +50,60 @@ export function TabHeader({
               {activeCount}
             </Badge>
           </Button>
+        </div>
+
+        {/* Right-side: AppHeader status indicators + actions (migrated) */}
+        <div className="flex items-center gap-6">
+          <div className="flex items-center gap-4 text-sm">
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground">Installed:</span>
+              <Badge variant="secondary">{downloadsCount}</Badge>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground">Active:</span>
+              <Badge variant="secondary">{activeModsCount}</Badge>
+            </div>
+            {updatesCount > 0 && (
+              <div className="flex items-center gap-2">
+                <Bell className="w-4 h-4 text-destructive" />
+                <span className="text-destructive">
+                  {updatesCount} update{updatesCount !== 1 ? "s" : ""}
+                </span>
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            {onOpenBootstrap && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onOpenBootstrap}
+                className="gap-2"
+              >
+                <Rocket className="w-4 h-4" />
+                Setup
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onRefresh}
+              className="gap-2"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Refresh
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              onClick={onOpenSettings}
+            >
+              <Settings className="w-4 h-4" />
+              Settings
+            </Button>
+          </div>
         </div>
       </div>
     </div>

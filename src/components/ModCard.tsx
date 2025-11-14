@@ -1,10 +1,11 @@
+import React, { useMemo } from "react";
 import type { SyntheticEvent } from "react";
 import { Card, CardContent } from "./ui/card";
 import { Button } from "./ui/button";
-import { Badge } from "./ui/badge";
+// Badge is used by TagList; not needed directly here
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Download, Star, Eye, Calendar, User, Heart } from "lucide-react";
-import { computeTagDisplay } from "../lib/tagDisplay";
+import TagList from "./TagList";
 
 export interface Mod {
   id: string;
@@ -58,59 +59,65 @@ interface ModCardProps {
   onView: (mod: Mod) => void;
 }
 
-export function ModCard({
+function ModCardInner({
   mod,
   viewMode,
   onInstall,
   onFavorite,
   onView,
 }: ModCardProps) {
-  // const [imageLoaded, setImageLoaded] = useState(false);
+  // Memoize computed tag display to avoid recalculating on every parent render
+  // Tag rendering is delegated to `TagList` which will compute and re-render
+  // itself when necessary (including on resize). This keeps heavy tag math
+  // localized and avoids re-rendering the whole `ModCard`.
 
-  const { visible: displayTags, extra: hiddenTagCount } = computeTagDisplay(
-    mod.tags,
-    mod.categoryTags?.[0] ?? mod.category
-  );
-
-  const fallbackAvatarSrc =
-    mod.authorMemberId != null
-      ? `https://avatars.nexusmods.com/${mod.authorMemberId}/100`
-      : undefined;
-  const pngAvatarSrc =
-    mod.authorMemberId != null
-      ? `https://avatars.nexusmods.com/${mod.authorMemberId}/100.png`
-      : undefined;
-
-  const avatarCandidates = Array.from(
-    new Set(
-      [mod.authorAvatar, fallbackAvatarSrc, pngAvatarSrc].filter(
-        (value): value is string => Boolean(value)
+  const { avatarCandidates, authorAvatarSrc } = useMemo(() => {
+    const fallbackAvatarSrc =
+      mod.authorMemberId != null
+        ? `https://avatars.nexusmods.com/${mod.authorMemberId}/100`
+        : undefined;
+    const pngAvatarSrc =
+      mod.authorMemberId != null
+        ? `https://avatars.nexusmods.com/${mod.authorMemberId}/100.png`
+        : undefined;
+    const candidates = Array.from(
+      new Set(
+        [mod.authorAvatar, fallbackAvatarSrc, pngAvatarSrc].filter(
+          (v): v is string => Boolean(v)
+        )
       )
-    )
-  );
+    );
+    return { avatarCandidates: candidates, authorAvatarSrc: candidates[0] };
+  }, [mod.authorAvatar, mod.authorMemberId]);
 
   if (typeof window !== "undefined") {
+    // Keep a lightweight debug log; don't stringify large objects
     console.debug("[avatar] ModCard candidates", {
       modId: mod.id,
       name: mod.name,
-      candidates: avatarCandidates,
+      candidates: avatarCandidates?.slice(0, 3),
     });
   }
 
-  const authorAvatarSrc = avatarCandidates[0];
+  const formatNumber = useMemo(() => {
+    return (num: number) => {
+      if (num >= 1000000) return (num / 1000000).toFixed(1) + "M";
+      if (num >= 1000) return (num / 1000).toFixed(1) + "K";
+      return num.toString();
+    };
+  }, []);
 
-  const formatNumber = (num: number) => {
-    if (num >= 1000000) return (num / 1000000).toFixed(1) + "M";
-    if (num >= 1000) return (num / 1000).toFixed(1) + "K";
-    return num.toString();
-  };
-
-  const formatDate = (dateString?: string | null) => {
-    if (!dateString) return "Unknown";
-    const date = new Date(dateString);
-    if (Number.isNaN(date.getTime())) return "Unknown";
-    return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  };
+  const formatDate = useMemo(() => {
+    return (dateString?: string | null) => {
+      if (!dateString) return "Unknown";
+      const date = new Date(dateString);
+      if (Number.isNaN(date.getTime())) return "Unknown";
+      return date.toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+      });
+    };
+  }, []);
 
   if (viewMode === "list") {
     return (
@@ -158,25 +165,9 @@ export function ModCard({
                 </div>
 
                 <div className="flex items-center gap-2 ml-4">
-                  <div className="flex items-center gap-1 overflow-hidden flex-nowrap">
-                    {displayTags.map((tag) => (
-                      <Badge
-                        key={`tag-${mod.id}-${tag}`}
-                        variant="secondary"
-                        className="text-xs whitespace-nowrap"
-                      >
-                        {tag}
-                      </Badge>
-                    ))}
-                    {hiddenTagCount > 0 && (
-                      <Badge
-                        variant="outline"
-                        className="text-xs whitespace-nowrap"
-                      >
-                        +{hiddenTagCount}
-                      </Badge>
-                    )}
-                  </div>
+                  <TagList
+                    tags={mod.tags}
+                  />
 
                   <Button
                     variant="ghost"
@@ -305,22 +296,10 @@ export function ModCard({
             </span>
           </div>
 
-          <div className="flex items-center gap-1 mb-3 overflow-hidden flex-nowrap">
-            {displayTags.map((tag) => (
-              <Badge
-                key={`tag-${mod.id}-${tag}`}
-                variant="secondary"
-                className="text-xs whitespace-nowrap"
-              >
-                {tag}
-              </Badge>
-            ))}
-            {hiddenTagCount > 0 && (
-              <Badge variant="outline" className="text-xs whitespace-nowrap">
-                +{hiddenTagCount}
-              </Badge>
-            )}
-          </div>
+          <TagList
+            tags={mod.tags}
+            className="mb-3"
+          />
 
           <div className="flex items-center justify-between text-xs text-muted-foreground mb-3">
             <div className="flex items-center gap-3">
@@ -350,3 +329,34 @@ export function ModCard({
     </Card>
   );
 }
+
+// Use React.memo with a focused comparator so ModCards only re-render when
+// meaningful fields change. This avoids large re-render storms (e.g. during
+// window resizes) when parent re-renders but mod data hasn't changed.
+function modPropsAreEqual(prev: ModCardProps, next: ModCardProps) {
+  const a = prev.mod;
+  const b = next.mod;
+  if (a.id !== b.id) return false;
+  // Compare a small set of frequently-changing fields that affect render
+  const keys: (keyof Mod)[] = [
+    "isInstalled",
+    "isFavorited",
+    "hasUpdate",
+    "isUpdating",
+    "isActive",
+    "downloads",
+    "rating",
+    "name",
+    "description",
+    "latestVersion",
+  ];
+  for (const k of keys) {
+    // @ts-ignore - index by dynamic key
+    if (a[k] !== b[k]) return false;
+  }
+  // viewMode affects layout
+  if (prev.viewMode !== next.viewMode) return false;
+  return true;
+}
+
+export const ModCard = React.memo(ModCardInner, modPropsAreEqual);

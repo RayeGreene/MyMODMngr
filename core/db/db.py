@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3, json, re, glob, os, sys
 from importlib import resources
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 from pathlib import Path
 
 from core.utils.download_paths import normalize_download_path
@@ -294,6 +294,84 @@ def init_schema(conn: sqlite3.Connection) -> None:
 
 # --- Simple BBCode to HTML converter (minimal, supports common tags) ---
 _SIZE_MAP = {1: 12, 2: 14, 3: 16, 4: 18, 5: 22, 6: 26, 7: 32}
+
+
+def _normalize_datetime_hint(value: Any) -> Optional[str]:
+    """Convert disparate timestamp representations into UTC ISO-8601 strings."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        return dt.isoformat()
+    if isinstance(value, (int, float)):
+        if value <= 0:
+            return None
+        try:
+            return datetime.fromtimestamp(float(value), timezone.utc).isoformat()
+        except Exception:
+            return None
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        # Numeric string timestamp
+        if s.isdigit():
+            try:
+                return datetime.fromtimestamp(int(s), timezone.utc).isoformat()
+            except Exception:
+                return None
+        # Common ISO variants (support trailing 'Z')
+        iso_candidate = s.replace("Z", "+00:00") if "Z" in s and "+" not in s else s
+        try:
+            dt = datetime.fromisoformat(iso_candidate)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            else:
+                dt = dt.astimezone(timezone.utc)
+            return dt.isoformat()
+        except ValueError:
+            pass
+        # Legacy Nexus style "YYYY-MM-DD HH:MM:SS"
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
+            try:
+                dt = datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+                return dt.isoformat()
+            except ValueError:
+                continue
+    return None
+
+
+def _path_mtime_iso(candidate: Optional[Union[str, Path]]) -> Optional[str]:
+    if not candidate:
+        return None
+    try:
+        p = Path(candidate)
+        if not p.exists():
+            return None
+        mtime = p.stat().st_mtime
+        return datetime.fromtimestamp(mtime, timezone.utc).isoformat()
+    except Exception:
+        return None
+
+
+def resolve_created_at(
+    *,
+    path: Optional[Union[str, Path]] = None,
+    hints: Iterable[Any] = (),
+) -> str:
+    """Resolve a created_at timestamp preferring supplied hints over filesystem mtimes."""
+    for hint in hints:
+        iso = _normalize_datetime_hint(hint)
+        if iso:
+            return iso
+    path_iso = _path_mtime_iso(path)
+    if path_iso:
+        return path_iso
+    return datetime.now(timezone.utc).isoformat()
 
 _MEMBER_ID_RE = re.compile(r"(\d+)(?:\D*$)")
 
@@ -958,20 +1036,70 @@ def replace_local_downloads(conn: sqlite3.Connection, rows: Iterable[Dict[str, A
         if assigned_id is None:
             max_id += 1
             assigned_id = max_id
+        # Resolve a filesystem candidate so we can inspect modification times when available
+        fs_path: Optional[Path] = None
+        abs_path_val = row.get("absolute_path")
+        if isinstance(abs_path_val, str) and abs_path_val.strip():
+            try:
+                candidate_path = Path(abs_path_val.strip())
+                if candidate_path.exists():
+                    fs_path = candidate_path
+            except Exception:
+                fs_path = None
+        try:
+            p = Path(path)
+            candidates: List[Path] = [p]
+            # If the normalized path is not an absolute path on disk, try known
+            # download roots (configured or guessed) so we can locate the real
+            # archive/folder and use its modification time.
+            if not p.exists():
+                try:
+                    from core.utils.download_paths import known_download_roots
+
+                    for root in known_download_roots():
+                        candidates.append(Path(root) / path)
+                except Exception:
+                    # If anything goes wrong importing or iterating roots,
+                    # fall back to the single candidate above.
+                    pass
+
+            for candidate in candidates:
+                try:
+                    if candidate.exists():
+                        fs_path = candidate
+                        break
+                except Exception:
+                    continue
+        except Exception:
+            fs_path = None
+
+        created_at_hints = [
+            row.get("created_at"),
+            row.get("createdAt"),
+            row.get("uploaded_at"),
+            row.get("uploadedAt"),
+            row.get("uploaded_time"),
+            row.get("uploadedTime"),
+            row.get("uploaded_timestamp"),
+            row.get("uploadedTimestamp"),
+        ]
+        created_at_iso = resolve_created_at(path=fs_path, hints=created_at_hints)
+
         cur.execute(
             """
-            INSERT INTO local_downloads(path, id, name, mod_id, version, contents, active_paks)
-            VALUES(?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO local_downloads(path, id, name, mod_id, version, contents, active_paks, created_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(path) DO UPDATE SET
                 id=excluded.id,
                 name=excluded.name,
                 mod_id=excluded.mod_id,
                 version=excluded.version,
                 contents=excluded.contents,
-                active_paks=excluded.active_paks
+                active_paks=excluded.active_paks,
+                created_at=COALESCE(excluded.created_at, local_downloads.created_at)
             ;
             """,
-            (path, assigned_id, name, mod_id_int, version, contents_json, active_paks_json),
+            (path, assigned_id, name, mod_id_int, version, contents_json, active_paks_json, created_at_iso),
         )
         existing[path] = assigned_id
         inserted += 1

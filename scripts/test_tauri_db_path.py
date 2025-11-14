@@ -21,7 +21,10 @@ def test_tauri_environment():
     
     # Simulate Tauri setting the environment variable
     # This matches what main.rs does: app_handle.path().app_data_dir()
-    tauri_data_dir = Path(os.environ.get("APPDATA", "~/.config")).expanduser() / "com.rounak77382.modmanager"
+    tauri_data_dir = (
+        Path(os.environ.get("APPDATA", "~/.config")).expanduser()
+        / "com.rivalnxt.modmanager"
+    )
     
     print(f"\n1. Simulating Tauri environment:")
     print(f"   Setting MODMANAGER_DATA_DIR = {tauri_data_dir}")
