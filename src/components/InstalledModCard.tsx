@@ -141,11 +141,12 @@ export function InstalledModCard({
   if (viewMode === "list") {
     return (
       <>
-        <Card className="hover:shadow-md transition-shadow">
-          <CardContent className="p-4">
-            <div className="flex gap-4 flex-wrap sm:flex-nowrap">
-              <div
-                className="w-20 h-16 bg-muted rounded-lg overflow-hidden flex-shrink-0 relative cursor-pointer"
+        <div className="hover:bg-muted/50 transition-colors border-b border-border/20 last:border-b-0 py-1">
+          <div className="p-2">
+            <div className="flex gap-3 flex-wrap sm:flex-nowrap">
+              <div className="p-1">
+                <div
+                  className="w-8 h-8 bg-muted rounded-lg overflow-hidden flex-shrink-0 relative cursor-pointer"
                 role="button"
                 tabIndex={0}
                 aria-label={`Open ${mod.name} details`}
@@ -172,105 +173,80 @@ export function InstalledModCard({
                   </div>
                 )}
               </div>
+              </div>
 
-              <div className="flex-1 min-w-0">
-                <div className="flex flex-col sm:flex-row items-start justify-between gap-2">
-                  <div className="min-w-0 flex-1 w-full">
-                    <div className="flex items-center gap-2 mb-1 flex-wrap">
-                      <h3
-                        className="font-medium truncate cursor-pointer hover:text-primary"
-                        onClick={() => onView(mod)}
-                      >
-                        {mod.name}
-                      </h3>
-                      {mod.hasUpdate && (
-                        <Badge
-                          variant="destructive"
-                          className="text-xs shrink-0"
-                        >
-                          Update Available
-                        </Badge>
-                      )}
-                    </div>
-
-                    <p className="text-sm text-muted-foreground line-clamp-1 mb-2">
-                      {mod.description}
-                    </p>
-
-                    <div className="flex items-center gap-2 sm:gap-4 text-xs text-muted-foreground flex-wrap">
-                      <div className="flex items-center gap-1 shrink-0">
-                        <User className="w-3 h-3" />
-                        <span className="truncate max-w-[120px]">
-                          {mod.author}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <Calendar className="w-3 h-3" />
-                        Installed{" "}
-                        {formatDate(mod.installDate || mod.lastUpdated)}
-                      </div>
-                      {mod.isActive && (
-                        <div className="flex items-center gap-1 shrink-0">
-                          <CheckCircle className="w-3 h-3 text-green-500" />
-                          Active
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                    <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap">
-                      <TagList
-                        tags={displayTags}
-                        className="flex items-center gap-1 overflow-hidden flex-nowrap"
-                        maxVisible={3}
-                      />
-
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => onFavorite(mod.id)}
-                      className={mod.isFavorited ? "text-red-500" : ""}
+              <div className="flex-1 min-w-0 flex items-center justify-between">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <h3
+                      className="font-normal truncate cursor-pointer hover:text-primary"
+                      onClick={() => onView(mod)}
                     >
-                      <Heart
-                        className={`w-4 h-4 ${
-                          mod.isFavorited ? "fill-current" : ""
+                      {mod.name}
+                    </h3>
+                    {mod.hasUpdate && (
+                      <Badge
+                        variant="destructive"
+                        className="text-xs shrink-0"
+                      >
+                        Update Available
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap">
+                  <TagList
+                    tags={displayTags}
+                    className="flex items-center gap-1 overflow-hidden flex-nowrap"
+                    maxVisible={3}
+                  />
+
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onFavorite(mod.id)}
+                    className={mod.isFavorited ? "text-red-500" : ""}
+                  >
+                    <Heart
+                      className={`w-4 h-4 ${
+                        mod.isFavorited ? "fill-current" : ""
+                      }`}
+                    />
+                  </Button>
+
+                  {(mod.hasUpdate || mod.isUpdating) && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => onUpdate(mod.id)}
+                      className="gap-1 shrink-0"
+                      disabled={mod.isUpdating}
+                      aria-disabled={mod.isUpdating}
+                    >
+                      <RefreshCw
+                        className={`w-3 h-3${
+                          mod.isUpdating ? " animate-spin" : ""
                         }`}
                       />
+                      {mod.isUpdating ? "Updating…" : "Update"}
                     </Button>
+                  )}
 
-                    {(mod.hasUpdate || mod.isUpdating) && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => onUpdate(mod.id)}
-                        className="gap-1 shrink-0"
-                        disabled={mod.isUpdating}
-                        aria-disabled={mod.isUpdating}
-                      >
-                        <RefreshCw
-                          className={`w-3 h-3${
-                            mod.isUpdating ? " animate-spin" : ""
-                          }`}
-                        />
-                        {mod.isUpdating ? "Updating…" : "Update"}
-                      </Button>
-                    )}
-
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setConfirmOpen(true)}
-                      disabled={isUninstalling}
-                      className="text-destructive hover:text-destructive hover:bg-destructive/10 shrink-0"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </Button>
-                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setConfirmOpen(true)}
+                    disabled={isUninstalling}
+                    className="text-destructive hover:text-destructive hover:bg-destructive/10 shrink-0"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </Button>
                 </div>
               </div>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
         {confirmDialog}
       </>
     );

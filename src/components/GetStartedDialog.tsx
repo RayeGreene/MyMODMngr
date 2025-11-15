@@ -21,7 +21,10 @@ import {
   Hammer,
   Loader2,
   RotateCcw,
+  Folder,
 } from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 import type {
   ApiBootstrapStatus,
   ApiSettings,
@@ -288,6 +291,49 @@ export function GetStartedDialog({
     onOpenChange(nextOpen);
   };
 
+  const handleFolderSelect = async (field: string) => {
+    try {
+      const result = await invoke<string>("select_folder_dialog", {
+        defaultPath: null,
+      });
+      
+      if (result) {
+        setFormValues((prev) => ({ ...prev, [field]: result }));
+        // Clear previous validation result
+        setPathCheckResults((prev) => {
+          const next = { ...prev };
+          delete next[field];
+          return next;
+        });
+      }
+    } catch (error) {
+      console.error(`Failed to select folder for ${field}:`, error);
+      if (error !== "Selection cancelled") {
+        alert(`Failed to select folder: ${error}`);
+      }
+    }
+  };
+
+  const handleFileSelect = async (field: string) => {
+    try {
+      const result = await invoke<string>("select_file_dialog", {
+        defaultPath: null,
+        filterExtensions: field === "repak_bin" || field === "retoc_cli" || field === "seven_zip_bin" 
+          ? [".exe", ".bat", ".cmd", ".msi"] 
+          : ["*.*"],
+      });
+      
+      if (result) {
+        setFormValues((prev) => ({ ...prev, [field]: result }));
+      }
+    } catch (error) {
+      console.error(`Failed to select file for ${field}:`, error);
+      if (error !== "Selection cancelled") {
+        alert(`Failed to select file: ${error}`);
+      }
+    }
+  };
+
   const bootstrapSummary = bootstrapStatus ? (
     <div className="mt-4 rounded-lg border border-border/40 bg-muted/10 p-4 text-sm">
       <div
@@ -386,7 +432,25 @@ export function GetStartedDialog({
                 files, downloads, and optional tooling. You can adjust these
                 later from the Settings panel.
               </div>
+              <style>{`.custom-scrollbar::-webkit-scrollbar {
+            width: 8px;
+          }
+          .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+          }
+          .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(100, 100, 100, 0.5);
+            border-radius: 4px;
+          }
+          .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgba(100, 100, 100, 0.7);
+          }
+          .custom-scrollbar {
+            scrollbar-color: rgba(100, 100, 100, 0.5) transparent;
+            scrollbar-width: thin;
+          }`}</style>
               <div
+                className="custom-scrollbar"
                 style={{
                   maxHeight: "28rem",
                   overflowY: "auto",
@@ -402,13 +466,25 @@ export function GetStartedDialog({
                 >
                   <div className="space-y-2">
                     <Label htmlFor="data_dir">Data directory</Label>
-                    <Input
-                      id="data_dir"
-                      placeholder="C:\\Users\\You\\AppData\\Local\\RivalsManager"
-                      value={formValues.data_dir}
-                      onChange={handleInputChange("data_dir")}
-                      className="flex-1"
-                    />
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      <Input
+                        id="data_dir"
+                        placeholder="C:\\Users\\You\\AppData\\Local\\RivalsManager"
+                        value={formValues.data_dir}
+                        onChange={handleInputChange("data_dir")}
+                        className="flex-1"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleFolderSelect("data_dir")}
+                        style={{ padding: '0.5rem', minWidth: 'auto' }}
+                        title="Select folder"
+                      >
+                        <Folder className="h-4 w-4" />
+                      </Button>
+                    </div>
                     {pathCheckResults.data_dir && (
                       <p
                         style={{
@@ -440,13 +516,25 @@ export function GetStartedDialog({
                     <Label htmlFor="marvel_rivals_root">
                       Marvel Rivals root
                     </Label>
-                    <Input
-                      id="marvel_rivals_root"
-                      placeholder="...\SteamLibrary\steamapps\common\MarvelRivals"
-                      value={formValues.marvel_rivals_root}
-                      onChange={handleInputChange("marvel_rivals_root")}
-                      className="flex-1"
-                    />
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      <Input
+                        id="marvel_rivals_root"
+                        placeholder="...\SteamLibrary\steamapps\common\MarvelRivals"
+                        value={formValues.marvel_rivals_root}
+                        onChange={handleInputChange("marvel_rivals_root")}
+                        className="flex-1"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleFolderSelect("marvel_rivals_root")}
+                        style={{ padding: '0.5rem', minWidth: 'auto' }}
+                        title="Select folder"
+                      >
+                        <Folder className="h-4 w-4" />
+                      </Button>
+                    </div>
                     {pathCheckResults.marvel_rivals_root && (
                       <p
                         style={{
@@ -478,15 +566,27 @@ export function GetStartedDialog({
                     <Label htmlFor="marvel_rivals_local_downloads_root">
                       Local downloads folder
                     </Label>
-                    <Input
-                      id="marvel_rivals_local_downloads_root"
-                      placeholder="...\Marvel_Rivals_Mods\downloads"
-                      value={formValues.marvel_rivals_local_downloads_root}
-                      onChange={handleInputChange(
-                        "marvel_rivals_local_downloads_root"
-                      )}
-                      className="flex-1"
-                    />
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      <Input
+                        id="marvel_rivals_local_downloads_root"
+                        placeholder="...\Marvel_Rivals_Mods\downloads"
+                        value={formValues.marvel_rivals_local_downloads_root}
+                        onChange={handleInputChange(
+                          "marvel_rivals_local_downloads_root"
+                        )}
+                        className="flex-1"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleFolderSelect("marvel_rivals_local_downloads_root")}
+                        style={{ padding: '0.5rem', minWidth: 'auto' }}
+                        title="Select folder"
+                      >
+                        <Folder className="h-4 w-4" />
+                      </Button>
+                    </div>
                     {pathCheckResults.marvel_rivals_local_downloads_root && (
                       <p
                         style={{
@@ -522,13 +622,25 @@ export function GetStartedDialog({
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
                       <Label htmlFor="repak_bin">repak executable</Label>
-                      <Input
-                        id="repak_bin"
-                        placeholder="...\repak.exe"
-                        value={formValues.repak_bin}
-                        onChange={handleInputChange("repak_bin")}
-                        className="flex-1"
-                      />
+                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        <Input
+                          id="repak_bin"
+                          placeholder="...\repak.exe"
+                          value={formValues.repak_bin}
+                          onChange={handleInputChange("repak_bin")}
+                          className="flex-1"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleFileSelect("repak_bin")}
+                          style={{ padding: '0.5rem', minWidth: 'auto' }}
+                          title="Select file"
+                        >
+                          <Folder className="h-4 w-4" />
+                        </Button>
+                      </div>
                       {pathCheckResults.repak_bin && (
                         <p
                           style={{
@@ -558,13 +670,25 @@ export function GetStartedDialog({
 
                     <div className="space-y-2">
                       <Label htmlFor="retoc_cli">retoc CLI</Label>
-                      <Input
-                        id="retoc_cli"
-                        placeholder="...\retoc.exe"
-                        value={formValues.retoc_cli}
-                        onChange={handleInputChange("retoc_cli")}
-                        className="flex-1"
-                      />
+                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        <Input
+                          id="retoc_cli"
+                          placeholder="...\retoc.exe"
+                          value={formValues.retoc_cli}
+                          onChange={handleInputChange("retoc_cli")}
+                          className="flex-1"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleFileSelect("retoc_cli")}
+                          style={{ padding: '0.5rem', minWidth: 'auto' }}
+                          title="Select file"
+                        >
+                          <Folder className="h-4 w-4" />
+                        </Button>
+                      </div>
                       {pathCheckResults.retoc_cli && (
                         <p
                           style={{

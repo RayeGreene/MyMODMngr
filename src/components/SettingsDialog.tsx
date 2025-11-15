@@ -17,9 +17,11 @@ import {
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
+import { open } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 import { Switch } from "./ui/switch";
 import { ScrollArea } from "./ui/scroll-area";
-import { Loader2, RefreshCw, Play } from "lucide-react";
+import { Loader2, RefreshCw, Play, Folder } from "lucide-react";
 
 import {
   type ApiSettings,
@@ -213,6 +215,43 @@ export function SettingsDialog({
     await onSubmit(formValues);
   };
 
+  const handleFolderSelect = async (field: string) => {
+    try {
+      const result = await invoke<string>("select_folder_dialog", {
+        defaultPath: null,
+      });
+      
+      if (result) {
+        setFormValues((prev) => ({ ...prev, [field]: result }));
+      }
+    } catch (error) {
+      console.error(`Failed to select folder for ${field}:`, error);
+      if (error !== "Selection cancelled") {
+        alert(`Failed to select folder: ${error}`);
+      }
+    }
+  };
+
+  const handleFileSelect = async (field: string) => {
+    try {
+      const result = await invoke<string>("select_file_dialog", {
+        defaultPath: null,
+        filterExtensions: field === "repak_bin" || field === "retoc_cli" || field === "seven_zip_bin" 
+          ? [".exe", ".bat", ".cmd", ".msi"] 
+          : ["*.*"],
+      });
+      
+      if (result) {
+        setFormValues((prev) => ({ ...prev, [field]: result }));
+      }
+    } catch (error) {
+      console.error(`Failed to select file for ${field}:`, error);
+      if (error !== "Selection cancelled") {
+        alert(`Failed to select file: ${error}`);
+      }
+    }
+  };
+
   const disableSave = saving || loading || !settings || !hasChanges;
 
   const renderValidationStatus = (key: keyof ApiSettings["validation"]) => {
@@ -328,12 +367,25 @@ export function SettingsDialog({
                           }}
                         >
                           <Label htmlFor="data_dir">Data directory</Label>
-                          <Input
-                            id="data_dir"
-                            placeholder="C:\Users\You\AppData\Local\RivalsModManager\data"
-                            value={formValues.data_dir}
-                            onChange={handleInputChange("data_dir")}
-                          />
+                          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                            <Input
+                              id="data_dir"
+                              placeholder="C:\Users\You\AppData\Local\RivalsModManager\data"
+                              value={formValues.data_dir}
+                              onChange={handleInputChange("data_dir")}
+                              className="flex-1"
+                            />
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleFolderSelect("data_dir")}
+                              style={{ padding: '0.5rem', minWidth: 'auto' }}
+                              title="Select folder"
+                            >
+                              <Folder className="h-4 w-4" />
+                            </Button>
+                          </div>
                           {renderValidationStatus("data_dir")}
                         </div>
 
@@ -347,12 +399,25 @@ export function SettingsDialog({
                           <Label htmlFor="marvel_rivals_root">
                             Marvel Rivals root
                           </Label>
-                          <Input
-                            id="marvel_rivals_root"
-                            placeholder="D:\Games\MarvelRivals"
-                            value={formValues.marvel_rivals_root}
-                            onChange={handleInputChange("marvel_rivals_root")}
-                          />
+                          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                            <Input
+                              id="marvel_rivals_root"
+                              placeholder="D:\Games\MarvelRivals"
+                              value={formValues.marvel_rivals_root}
+                              onChange={handleInputChange("marvel_rivals_root")}
+                              className="flex-1"
+                            />
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleFolderSelect("marvel_rivals_root")}
+                              style={{ padding: '0.5rem', minWidth: 'auto' }}
+                              title="Select folder"
+                            >
+                              <Folder className="h-4 w-4" />
+                            </Button>
+                          </div>
                           {renderValidationStatus("marvel_rivals_root")}
                         </div>
 
@@ -366,16 +431,29 @@ export function SettingsDialog({
                           <Label htmlFor="marvel_rivals_local_downloads_root">
                             Local downloads folder
                           </Label>
-                          <Input
-                            id="marvel_rivals_local_downloads_root"
-                            placeholder="D:\Mods\MarvelRivalsDownloads"
-                            value={
-                              formValues.marvel_rivals_local_downloads_root
-                            }
-                            onChange={handleInputChange(
-                              "marvel_rivals_local_downloads_root"
-                            )}
-                          />
+                          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                            <Input
+                              id="marvel_rivals_local_downloads_root"
+                              placeholder="D:\Mods\MarvelRivalsDownloads"
+                              value={
+                                formValues.marvel_rivals_local_downloads_root
+                              }
+                              onChange={handleInputChange(
+                                "marvel_rivals_local_downloads_root"
+                              )}
+                              className="flex-1"
+                            />
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleFolderSelect("marvel_rivals_local_downloads_root")}
+                              style={{ padding: '0.5rem', minWidth: 'auto' }}
+                              title="Select folder"
+                            >
+                              <Folder className="h-4 w-4" />
+                            </Button>
+                          </div>
                           {renderValidationStatus(
                             "marvel_rivals_local_downloads_root"
                           )}
@@ -396,12 +474,25 @@ export function SettingsDialog({
                             }}
                           >
                             <Label htmlFor="repak_bin">Repak executable</Label>
-                            <Input
-                              id="repak_bin"
-                              placeholder="C:\Tools\repak.exe"
-                              value={formValues.repak_bin}
-                              onChange={handleInputChange("repak_bin")}
-                            />
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                              <Input
+                                id="repak_bin"
+                                placeholder="C:\Tools\repak.exe"
+                                value={formValues.repak_bin}
+                                onChange={handleInputChange("repak_bin")}
+                                className="flex-1"
+                              />
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleFileSelect("repak_bin")}
+                                style={{ padding: '0.5rem', minWidth: 'auto' }}
+                                title="Select file"
+                              >
+                                <Folder className="h-4 w-4" />
+                              </Button>
+                            </div>
                             {renderValidationStatus("repak_bin")}
                           </div>
 
@@ -413,12 +504,25 @@ export function SettingsDialog({
                             }}
                           >
                             <Label htmlFor="retoc_cli">retoc CLI</Label>
-                            <Input
-                              id="retoc_cli"
-                              placeholder="C:\Tools\retoc.exe"
-                              value={formValues.retoc_cli}
-                              onChange={handleInputChange("retoc_cli")}
-                            />
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                              <Input
+                                id="retoc_cli"
+                                placeholder="C:\Tools\retoc.exe"
+                                value={formValues.retoc_cli}
+                                onChange={handleInputChange("retoc_cli")}
+                                className="flex-1"
+                              />
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleFileSelect("retoc_cli")}
+                                style={{ padding: '0.5rem', minWidth: 'auto' }}
+                                title="Select file"
+                              >
+                                <Folder className="h-4 w-4" />
+                              </Button>
+                            </div>
                             {renderValidationStatus("retoc_cli")}
                           </div>
 
@@ -433,12 +537,25 @@ export function SettingsDialog({
                             <Label htmlFor="seven_zip_bin">
                               7-Zip executable
                             </Label>
-                            <Input
-                              id="seven_zip_bin"
-                              placeholder="C:\Program Files\7-Zip\7z.exe"
-                              value={formValues.seven_zip_bin}
-                              onChange={handleInputChange("seven_zip_bin")}
-                            />
+                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                              <Input
+                                id="seven_zip_bin"
+                                placeholder="C:\Program Files\7-Zip\7z.exe"
+                                value={formValues.seven_zip_bin}
+                                onChange={handleInputChange("seven_zip_bin")}
+                                className="flex-1"
+                              />
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleFileSelect("seven_zip_bin")}
+                                style={{ padding: '0.5rem', minWidth: 'auto' }}
+                                title="Select file"
+                              >
+                                <Folder className="h-4 w-4" />
+                              </Button>
+                            </div>
                             {renderValidationStatus("seven_zip_bin")}
                           </div>
                         </div>

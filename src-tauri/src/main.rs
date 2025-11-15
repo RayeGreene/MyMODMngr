@@ -3,6 +3,7 @@
 use std::fs;
 use std::sync::{Arc, Mutex};
 
+use rfd::AsyncFileDialog;
 use tauri::{AppHandle, Manager};
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use tauri_plugin_shell::process::CommandEvent;
@@ -25,6 +26,56 @@ impl BackendChild {
     fn set(&self, child: tauri_plugin_shell::process::CommandChild) {
         if let Ok(mut guard) = self.0.lock() {
             *guard = Some(child);
+        }
+    }
+}
+
+// Tauri command to open folder selection dialog
+#[tauri::command]
+async fn select_folder_dialog(default_path: Option<String>) -> Result<String, String> {
+    println!("[Dialog] Requested folder selection with default path: {:?}", default_path);
+    
+    match AsyncFileDialog::new()
+        .set_title("Select Folder")
+        .pick_folder()
+        .await
+    {
+        Some(path) => {
+            let path_string = path.path().to_string_lossy().to_string();
+            println!("[Dialog] Selected folder: {}", path_string);
+            Ok(path_string)
+        }
+        None => {
+            println!("[Dialog] Folder selection cancelled");
+            Err("Selection cancelled".to_string())
+        }
+    }
+}
+
+// Tauri command to open file selection dialog
+#[tauri::command]
+async fn select_file_dialog(default_path: Option<String>, filter_extensions: Option<Vec<String>>) -> Result<String, String> {
+    println!("[Dialog] Requested file selection with default path: {:?}, extensions: {:?}", default_path, filter_extensions);
+    
+    let mut dialog = AsyncFileDialog::new()
+        .set_title("Select File");
+    
+    // Add filters if provided
+    if let Some(extensions) = filter_extensions {
+        for ext in extensions {
+            dialog = dialog.add_filter("Files", &[&ext]);
+        }
+    }
+    
+    match dialog.pick_file().await {
+        Some(file) => {
+            let path_string = file.path().to_string_lossy().to_string();
+            println!("[Dialog] Selected file: {}", path_string);
+            Ok(path_string)
+        }
+        None => {
+            println!("[Dialog] File selection cancelled");
+            Err("Selection cancelled".to_string())
         }
     }
 }
@@ -329,7 +380,9 @@ fn main() {
         .manage(BackendChild::new())
         .invoke_handler(tauri::generate_handler![
             get_executable_path,
-            handle_nxm_url
+            handle_nxm_url,
+            select_folder_dialog,
+            select_file_dialog
         ])
         .setup(|app| {
             // CRITICAL FIX: Register NXM protocol with proper quoting on Windows

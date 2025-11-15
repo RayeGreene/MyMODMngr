@@ -121,47 +121,28 @@ function ModCardInner({
 
   if (viewMode === "list") {
     return (
-      <Card className="hover:shadow-md transition-shadow">
-        <CardContent className="p-4">
-          <div className="flex gap-4">
-            <div className="w-20 h-16 bg-muted rounded-lg overflow-hidden flex-shrink-0">
-              <img
-                src={mod.images[0]}
-                alt={mod.name}
-                className="w-full h-full object-cover"
-              />
+      <div className="hover:bg-muted/50 transition-colors border-b border-border/20 last:border-b-0 py-1">
+        <div className="p-2">
+          <div className="flex gap-3">
+            <div className="p-1">
+              <div className="w-8 h-8 bg-muted rounded-lg overflow-hidden flex-shrink-0">
+                <img
+                  src={mod.images[0]}
+                  alt={mod.name}
+                  className="w-full h-full object-cover"
+                />
+              </div>
             </div>
 
             <div className="flex-1 min-w-0">
               <div className="flex items-start justify-between">
                 <div className="min-w-0 flex-1">
                   <h3
-                    className="font-medium truncate cursor-pointer hover:text-primary"
+                    className="font-normal truncate cursor-pointer hover:text-primary"
                     onClick={() => onView(mod)}
                   >
                     {mod.name}
                   </h3>
-                  <p className="text-sm text-muted-foreground line-clamp-1">
-                    {mod.description}
-                  </p>
-                  <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
-                    <div className="flex items-center gap-1">
-                      <User className="w-3 h-3" />
-                      {mod.author}
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Download className="w-3 h-3" />
-                      {formatNumber(mod.downloads)}
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
-                      {mod.rating.toFixed(1)}
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Calendar className="w-3 h-3" />
-                      {formatDate(mod.lastUpdated)}
-                    </div>
-                  </div>
                 </div>
 
                 <div className="flex items-center gap-2 ml-4">
@@ -195,8 +176,8 @@ function ModCardInner({
               </div>
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     );
   }
 

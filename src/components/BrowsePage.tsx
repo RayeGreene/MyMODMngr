@@ -274,7 +274,7 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
               className={
                 viewMode === "grid"
                   ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
-                  : "space-y-4"
+                  : "space-y-0"
               }
             >
               {filteredMods.map((mod) => (

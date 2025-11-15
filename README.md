@@ -32,8 +32,15 @@ conflict detection, NexusMods NXM integration, and a fast local database.
 4. Open the app's Settings and fill the required paths: set the Marvel Rivals game
    folder (`marvel_rivals_root`) and the local downloads folder
    (`marvel_rivals_local_downloads_root`). These fields are required for the app
-   to locate game files and manage mods correctly. Enter your Nexus API key in
-   Settings if you want one‑click NXM downloads (optional).
+   to locate game files and manage mods correctly.
+   
+   **Important:** In the `marvel_rivals_local_downloads_root` folder, mod archives
+   or folders should follow the naming convention: `<name>-<modid>-<version>`
+   (e.g., `CoolSkin-12345-1.0.0`). This helps the app identify and track mods
+   correctly.
+   
+   Enter your Nexus personal API key in Settings to enable automatic mod detail
+   fetching and update notifications (optional but recommended).
 5. That's it—no Node, Rust, or Python required for normal use.
 
 That’s it—no Node, Rust, or Python required for normal use.
