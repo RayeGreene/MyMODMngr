@@ -723,7 +723,7 @@ export function DownloadsSidebar({
             onClick={() => handleDonateClick("kofi")}
           >
             <img
-              src="/src/icons/kofi.svg"
+              src="/icons/kofi.svg"
               alt="Ko-fi"
               style={{ width: "40px", height: "15px" }}
             />
@@ -736,7 +736,7 @@ export function DownloadsSidebar({
             onClick={() => handleDonateClick("upi")}
           >
             <img
-              src="/src/icons/upi.svg"
+              src="/icons/upi.svg"
               alt="UPI"
               style={{ width: "40px", height: "12px" }}
             />
@@ -752,7 +752,7 @@ export function DownloadsSidebar({
           </DialogHeader>
           <div className="flex flex-col items-center space-y-3 py-2">
             <img
-              src="/src/icons/qr.png"
+              src="/icons/qr.png"
               alt="UPI QR Code"
               className="object-contain"
               style={{ width: "300px" }}

@@ -185,11 +185,14 @@ def tag_asset(path: str, entity_map: Dict[str, str]) -> str:
     cat = find_category(norm)
     id4, alpha_key = find_entity_key(segs)
     entity = resolve_entity(id4, alpha_key, entity_map)
-    # Output: if entity is unknown, return only the category; otherwise 'entity,category'
+    # Return empty string if no meaningful tags can be generated
+    # Only return tags when we have both a known entity and category, or just a meaningful category
     if entity == "unknown":
-        return (cat or "").lower()
+        # Only return category if it's meaningful (not just "ui" or empty)
+        return (cat or "").lower() if cat else ""
     if not cat:
-        return f"{entity},".lower()
+        # Don't return entity with trailing comma if no category
+        return ""
     return f"{entity},{cat}".lower()
 
 # ---------- CLI ----------

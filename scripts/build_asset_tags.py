@@ -85,12 +85,14 @@ def main(argv=None) -> int:
     skipped = 0
     for (asset_path,) in rows:
         tag = tagger.tag_asset(asset_path, entity_map).strip()
+        # Skip if no meaningful tag was generated
         if not tag:
             skipped += 1
             continue
         entity, category = split_tag(tag)
         entity = entity.strip() if isinstance(entity, str) and entity.strip() else None
         category = category.strip() if isinstance(category, str) and category.strip() else None
+        # Skip if no meaningful category was found (which should be rare now with updated logic)
         if not category:
             skipped += 1
             continue
