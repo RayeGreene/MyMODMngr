@@ -318,9 +318,9 @@ export function GetStartedDialog({
     try {
       const result = await invoke<string>("select_file_dialog", {
         defaultPath: null,
-        filterExtensions: field === "repak_bin" || field === "retoc_cli" || field === "seven_zip_bin" 
-          ? [".exe", ".bat", ".cmd", ".msi"] 
-          : ["*.*"],
+        filterExtensions: field === "repak_bin" || field === "retoc_cli" || field === "seven_zip_bin"
+          ? ["exe", "bat", "cmd", "msi"]
+          : ["*"],
       });
       
       if (result) {
@@ -464,54 +464,6 @@ export function GetStartedDialog({
                     gap: "1rem",
                   }}
                 >
-                  <div className="space-y-2">
-                    <Label htmlFor="data_dir">Data directory</Label>
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                      <Input
-                        id="data_dir"
-                        placeholder="C:\\Users\\You\\AppData\\Local\\RivalsManager"
-                        value={formValues.data_dir}
-                        onChange={handleInputChange("data_dir")}
-                        className="flex-1"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleFolderSelect("data_dir")}
-                        style={{ padding: '0.5rem', minWidth: 'auto' }}
-                        title="Select folder"
-                      >
-                        <Folder className="h-4 w-4" />
-                      </Button>
-                    </div>
-                    {pathCheckResults.data_dir && (
-                      <p
-                        style={{
-                          fontSize: "0.75rem",
-                          color: pathCheckResults.data_dir.ok
-                            ? "#059669"
-                            : "#dc2626",
-                          marginTop: "0.25rem",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "0.25rem",
-                        }}
-                      >
-                        {pathCheckResults.data_dir.ok ? (
-                          <CheckCircle
-                            style={{ width: "0.875rem", height: "0.875rem" }}
-                          />
-                        ) : (
-                          <AlertCircle
-                            style={{ width: "0.875rem", height: "0.875rem" }}
-                          />
-                        )}
-                        {pathCheckResults.data_dir.message}
-                      </p>
-                    )}
-                  </div>
-
                   <div className="space-y-2">
                     <Label htmlFor="marvel_rivals_root">
                       Marvel Rivals root
@@ -766,6 +718,19 @@ export function GetStartedDialog({
                         placeholder="hex-encoded key"
                         value={formValues.aes_key_hex}
                         onChange={handleInputChange("aes_key_hex")}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="data_dir">Data directory (Locked)</Label>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      <Input
+                        id="data_dir"
+                        placeholder="C:\\Users\\You\\AppData\\Local\\RivalsManager"
+                        value={formValues.data_dir}
+                        readOnly
+                        className="flex-1 bg-muted/50"
                       />
                     </div>
                   </div>

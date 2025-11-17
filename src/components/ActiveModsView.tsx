@@ -138,9 +138,7 @@ export function ActiveModsView({
   };
   const applyOrder = (val: number) => (sortOrder === "asc" ? -val : val);
 
-  const makeTimestampComparator = (
-    getter: (m: Mod) => number | null
-  ) => {
+  const makeTimestampComparator = (getter: (m: Mod) => number | null) => {
     return (a: Mod, b: Mod) => {
       const ta = getter(a);
       const tb = getter(b);
@@ -154,7 +152,9 @@ export function ActiveModsView({
 
   switch (sortBy) {
     case "Popular":
-      filteredMods.sort((a, b) => applyOrder((b.downloads || 0) - (a.downloads || 0)));
+      filteredMods.sort((a, b) =>
+        applyOrder((b.downloads || 0) - (a.downloads || 0))
+      );
       break;
     case "Recent":
       // Recent: sort by installDate (local_downloads.created_at)
@@ -171,14 +171,18 @@ export function ActiveModsView({
       );
       break;
     case "Rating":
-      filteredMods.sort((a, b) => applyOrder((b.rating || 0) - (a.rating || 0)));
+      filteredMods.sort((a, b) =>
+        applyOrder((b.rating || 0) - (a.rating || 0))
+      );
       break;
     case "Downloads":
-      filteredMods.sort((a, b) => applyOrder((b.downloads || 0) - (a.downloads || 0)));
+      filteredMods.sort((a, b) =>
+        applyOrder((b.downloads || 0) - (a.downloads || 0))
+      );
       break;
     case "Performance":
-      filteredMods.sort(
-        (a, b) => applyOrder((b.performanceImpact || 0) - (a.performanceImpact || 0))
+      filteredMods.sort((a, b) =>
+        applyOrder((b.performanceImpact || 0) - (a.performanceImpact || 0))
       );
       break;
     case "Name":
@@ -221,6 +225,31 @@ export function ActiveModsView({
         {/* Content */}
         <style>{`
         .activemods-hide-scrollbar::-webkit-scrollbar { display: none; }
+        .mods-grid {
+          display: grid;
+          gap: 1.5rem;
+          grid-template-columns: 1fr;
+        }
+        @media (min-width: 768px) {
+          .mods-grid {
+            grid-template-columns: repeat(2, 1fr);
+          }
+        }
+        @media (min-width: 1024px) {
+          .mods-grid {
+            grid-template-columns: repeat(3, 1fr);
+          }
+        }
+        @media (min-width: 1280px) {
+          .mods-grid {
+            grid-template-columns: repeat(4, 1fr);
+          }
+        }
+        @media (min-width: 1500px) {
+          .mods-grid {
+            grid-template-columns: repeat(5, 1fr);
+          }
+        }
       `}</style>
         <div
           className="flex-1 overflow-auto activemods-hide-scrollbar"
@@ -239,9 +268,7 @@ export function ActiveModsView({
                 </h2>
                 <div
                   className={
-                    viewMode === "grid"
-                      ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
-                      : "flex flex-col gap-0"
+                    viewMode === "grid" ? "mods-grid" : "flex flex-col gap-0"
                   }
                 >
                   {filteredActiveMods.map((mod) => (
@@ -271,7 +298,7 @@ export function ActiveModsView({
                 <div
                   className={
                     viewMode === "grid"
-                      ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 opacity-60"
+                      ? "mods-grid opacity-60"
                       : "flex flex-col gap-0 opacity-60"
                   }
                 >

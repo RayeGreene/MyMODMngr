@@ -20,6 +20,7 @@ import {
   Clock,
   CheckCircle,
   ChevronDown,
+  Heart,
 } from "lucide-react";
 
 import {
@@ -32,6 +33,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "./ui/alert-dialog";
+
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "./ui/dialog";
 
 import type { Mod } from "./ModCard";
 import {
@@ -48,6 +57,7 @@ import {
   deriveCategoryTags,
   extractNonCategoryTags,
 } from "../lib/categoryUtils";
+import { openInBrowser } from "../lib/tauri-utils";
 
 interface DownloadsSidebarProps {
   selectedCategory: string;
@@ -185,6 +195,7 @@ export function DownloadsSidebar({
   const [conflictCount, setConflictCount] = useState<number>(0);
   const showActiveOnly = true;
   const [updateConfirmOpen, setUpdateConfirmOpen] = useState(false);
+  const [upiModalOpen, setUpiModalOpen] = useState(false);
   const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
 
   const uniqueModIds = useMemo(() => {
@@ -392,14 +403,24 @@ export function DownloadsSidebar({
     participants: mc.participants,
   }));
 
+  const handleDonateClick = (platform: "kofi" | "upi") => {
+    if (platform === "kofi") {
+      // Open Ko-fi in browser
+      openInBrowser("https://ko-fi.com/rsted");
+    } else if (platform === "upi") {
+      // Show UPI modal
+      setUpiModalOpen(true);
+    }
+  };
+
   return (
     <div
-      className="w-80 bg-card border-r border-border h-full flex flex-col overflow-y-auto sidebar-hide-scrollbar"
+      className="bg-card border-r border-border h-full flex flex-col overflow-y-auto sidebar-hide-scrollbar"
       style={{
-        width: "20rem",
-        minWidth: "20rem",
-        maxWidth: "20rem",
-        flex: "0 0 20rem",
+        width: "18rem",
+        minWidth: "18rem",
+        maxWidth: "18rem",
+        flex: "0 0 18rem",
         scrollbarWidth: "none", // Firefox
         msOverflowStyle: "none", // IE 10+
         overflowY: "auto",
@@ -409,6 +430,10 @@ export function DownloadsSidebar({
       <style>{`
         .sidebar-hide-scrollbar::-webkit-scrollbar {
           display: none;
+        }
+        .donate-button {
+          height: 32px;
+          padding: 5px;
         }
       `}</style>
       <div className="p-4">
@@ -678,6 +703,72 @@ export function DownloadsSidebar({
           </div>
         </div>
       </div>
+
+      <Separator />
+
+      <div style={{ padding: "10px 10px 15px" }}>
+        <h4 className="font-medium mb-4 flex justify-center items-center gap-2">
+          <Heart
+            className="w-4 h-4 text-red-500"
+            style={{ paddingTop: "2px" }}
+          />
+          Support Development
+        </h4>
+        <div className="flex gap-4 justify-center">
+          <Button
+            className="donate-button"
+            style={{ width: "80px" }}
+            variant="outline"
+            size="sm"
+            onClick={() => handleDonateClick("kofi")}
+          >
+            <img
+              src="/src/icons/kofi.svg"
+              alt="Ko-fi"
+              style={{ width: "40px", height: "15px" }}
+            />
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="donate-button"
+            style={{ width: "80px" }}
+            onClick={() => handleDonateClick("upi")}
+          >
+            <img
+              src="/src/icons/upi.svg"
+              alt="UPI"
+              style={{ width: "40px", height: "12px" }}
+            />
+          </Button>
+        </div>
+      </div>
+
+      {/* UPI Donation Modal */}
+      <Dialog open={upiModalOpen} onOpenChange={setUpiModalOpen}>
+        <DialogContent className="sm:max-w-xs max-w-[280px]">
+          <DialogHeader>
+            <DialogTitle className="text-base">UPI Donation</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col items-center space-y-3 py-2">
+            <img
+              src="/src/icons/qr.png"
+              alt="UPI QR Code"
+              className="object-contain"
+              style={{ width: "300px" }}
+            />
+            <div className="text-center">
+              <p className="text-xs text-muted-foreground mb-1">UPI ID:</p>
+              <p className="font-mono text-sm font-semibold">
+                rounaks255@oksbi
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Scan with UPI app
+              </p>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

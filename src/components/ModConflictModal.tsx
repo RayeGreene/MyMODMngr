@@ -79,7 +79,9 @@ export function ModConflictModal({
       <DialogContent
         className="w-full bg-card border border-border rounded-2xl shadow-2xl p-0"
         style={{
-          maxWidth: "min(1200px, 95vw)",
+          maxWidth: "min(1280px, 95vw)",
+          minWidth: "1000px",
+          width: "min(1280px, 95vw)",
           height: "90vh",
           maxHeight: "90vh",
         }}
@@ -177,7 +179,14 @@ export function ModConflictModal({
                 </div>
 
                 <div className="p-5 pt-4">
-                  <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-4 gap-4 py-2 px-2">
+                  <div
+                    className="flex flex-wrap gap-4 py-2 px-2 w-full"
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      width: "100%"
+                    }}
+                  >
                     {asset.participants
                       .flatMap((p) => p.mods || [])
                       .filter(Boolean)
@@ -191,9 +200,15 @@ export function ModConflictModal({
                         return (
                           <div
                             key={`${m.mod_id}-${m.pak_file}`}
-                            className={`w-full bg-card border border-border/70 rounded-lg p-6 grid place-items-center gap-2 text-center shadow-sm ${
+                            className={`bg-card border border-border/70 rounded-lg p-6 grid place-items-center gap-2 text-center shadow-sm ${
                               m.is_current ? "ring-2 ring-primary/30" : ""
                             }`}
+                            style={{
+                              width: "230px",
+                              flex: "0 0 auto",
+                              minWidth: "230px",
+                              maxWidth: "230px"
+                            }}
                           >
                             <div className="h-32 max-w-full min-w-0 rounded-xl overflow-hidden bg-muted-foreground/10 grid place-items-center border border-muted-foreground/10">
                               <div

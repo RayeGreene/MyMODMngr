@@ -218,6 +218,31 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
         />
 
         {/* Content Area */}
+        <style>{`.mods-grid {
+            display: grid;
+            gap: 1.5rem;
+            grid-template-columns: 1fr;
+          }
+          @media (min-width: 768px) {
+            .mods-grid {
+              grid-template-columns: repeat(2, 1fr);
+            }
+          }
+          @media (min-width: 1024px) {
+            .mods-grid {
+              grid-template-columns: repeat(3, 1fr);
+            }
+          }
+          @media (min-width: 1280px) {
+            .mods-grid {
+              grid-template-columns: repeat(4, 1fr);
+            }
+          }
+          @media (min-width: 1500px) {
+            .mods-grid {
+              grid-template-columns: repeat(5, 1fr);
+            }
+          }`}</style>
         <div className="flex-1 overflow-auto p-6">
           {/* Results Info */}
           <div className="mb-6">
@@ -273,7 +298,7 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
             <div
               className={
                 viewMode === "grid"
-                  ? "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
+                  ? "mods-grid"
                   : "space-y-0"
               }
             >

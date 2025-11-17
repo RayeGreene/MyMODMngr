@@ -236,9 +236,9 @@ export function SettingsDialog({
     try {
       const result = await invoke<string>("select_file_dialog", {
         defaultPath: null,
-        filterExtensions: field === "repak_bin" || field === "retoc_cli" || field === "seven_zip_bin" 
-          ? [".exe", ".bat", ".cmd", ".msi"] 
-          : ["*.*"],
+        filterExtensions: field === "repak_bin" || field === "retoc_cli" || field === "seven_zip_bin"
+          ? ["exe", "bat", "cmd", "msi"]
+          : ["*"],
       });
       
       if (result) {
@@ -359,36 +359,6 @@ export function SettingsDialog({
                           gap: "20px",
                         }}
                       >
-                        <div
-                          style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: "10px",
-                          }}
-                        >
-                          <Label htmlFor="data_dir">Data directory</Label>
-                          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                            <Input
-                              id="data_dir"
-                              placeholder="C:\Users\You\AppData\Local\RivalsModManager\data"
-                              value={formValues.data_dir}
-                              onChange={handleInputChange("data_dir")}
-                              className="flex-1"
-                            />
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleFolderSelect("data_dir")}
-                              style={{ padding: '0.5rem', minWidth: 'auto' }}
-                              title="Select folder"
-                            >
-                              <Folder className="h-4 w-4" />
-                            </Button>
-                          </div>
-                          {renderValidationStatus("data_dir")}
-                        </div>
-
                         <div
                           style={{
                             display: "flex",
@@ -620,38 +590,44 @@ export function SettingsDialog({
                             onChange={handleInputChange("aes_key_hex")}
                           />
                         </div>
+                      </div>
+                    </section>
 
-                        {/* <div
-                          style={{
-                            display: "flex",
-                            alignItems: "flex-start",
-                            justifyContent: "space-between",
-                            gap: "24px",
-                            borderRadius: "10px",
-                            border: "1px solid #333",
-                            padding: "16px",
-                          }}
-                        >
-                          <div className="space-y-1 pr-4">
-                            <Label
-                              htmlFor="allow_direct_api_downloads"
-                              className="font-medium"
-                            >
-                              Allow direct API downloads
-                            </Label>
-                            <p className="text-sm text-muted-foreground">
-                              Enable when Nexus Mod Manager downloads should
-                              start automatically via the desktop app.
-                            </p>
-                          </div>
-                          <Switch
-                            id="allow_direct_api_downloads"
-                            checked={formValues.allow_direct_api_downloads}
-                            onCheckedChange={handleToggleChange}
-                            aria-label="Allow direct API downloads"
-                            className="shrink-0"
+                    {/* Data Directory - Locked */}
+                    <section
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "24px",
+                      }}
+                    >
+                      <div style={{ marginBottom: "8px" }}>
+                        <h3 className="text-lg font-semibold">
+                          Application Data
+                        </h3>
+                        <p className="text-sm text-muted-foreground">
+                          The data directory is automatically managed by the application.
+                        </p>
+                      </div>
+
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "10px",
+                        }}
+                      >
+                        <Label htmlFor="data_dir">Data directory (Locked)</Label>
+                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                          <Input
+                            id="data_dir"
+                            placeholder="C:\Users\You\AppData\Local\RivalsModManager\data"
+                            value={formValues.data_dir}
+                            readOnly
+                            className="flex-1 bg-muted/50"
                           />
-                        </div> */}
+                        </div>
+                        {renderValidationStatus("data_dir")}
                       </div>
                     </section>
 
