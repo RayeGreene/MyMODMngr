@@ -249,13 +249,6 @@ We welcome contributions! Please see our [Contributing Guidelines](#contribution
 - Follow existing code style
 - Validate all inputs and API parameters
 
-## 📋 Roadmap
-
-- [ ] Multi-language support
-- [ ] Automatic mod updates
-- [ ] Cloud backup integration
-- [ ] Mod profile presets
-- [ ] Performance optimization
 
 ## 🐛 Known Issues
 
