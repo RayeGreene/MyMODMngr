@@ -1139,7 +1139,7 @@ export default function App() {
   function toUiMod(d: ApiDownload) {
     // Consolidate tags and remove any stray tokens like 'data' and generic categories for robustness
     const cleanTags = (d.tags || []).filter(
-      (t) => t && !["data", "ui"].includes(t.toLowerCase())
+      (t) => t && !["data"].includes(t.toLowerCase())
     );
     const categoryTags = deriveCategoryTags(cleanTags);
     const images = d.picture_url
@@ -1180,7 +1180,7 @@ export default function App() {
       authorAvatar,
       authorMemberId,
       authorProfileUrl,
-      category: (categoryTags[0] && categoryTags[0] !== "ui") ? categoryTags[0] : (inferCategoryFromTags(cleanTags) || ""),
+      category: categoryTags[0] || inferCategoryFromTags(cleanTags) || "",
       categoryTags,
       character: inferCharacterFromTags(cleanTags),
       tags: cleanTags,

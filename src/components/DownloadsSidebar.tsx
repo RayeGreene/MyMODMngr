@@ -468,7 +468,7 @@ export function DownloadsSidebar({
                   }
                   className="w-full justify-start gap-3 h-10 min-w-0"
                   onClick={handleCategoryClick}
-                  disabled={count === 0 && category.id !== "all"}
+                  disabled={false}
                 >
                   <Icon className="h-4 w-4 shrink-0" />
                   <span className="flex-1 truncate text-left">

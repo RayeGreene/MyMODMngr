@@ -157,10 +157,36 @@ export function ActiveModsView({
       );
       break;
     case "Recent":
-      // Recent: sort by installDate (local_downloads.created_at)
-      filteredMods.sort(
-        makeTimestampComparator((m) => toNullableTimestamp(m.installDate))
-      );
+      // Recent: sort by backendModId (numeric), then by installDate for missing ids
+      filteredMods.sort((a, b) => {
+        const aId = a.backendModId;
+        const bId = b.backendModId;
+        
+        // If both have mod ids, sort by mod id
+        if (aId != null && bId != null) {
+          const idDiff = sortOrder === "asc" ? aId - bId : bId - aId;
+          if (idDiff !== 0) return idDiff;
+          // If mod ids are equal, fallback to install date
+          const aDate = toNullableTimestamp(a.installDate);
+          const bDate = toNullableTimestamp(b.installDate);
+          if (aDate == null && bDate == null) return 0;
+          if (aDate == null) return 1;
+          if (bDate == null) return -1;
+          return sortOrder === "asc" ? aDate - bDate : bDate - aDate;
+        }
+        
+        // If only one has mod id, that one comes first (regardless of sort order)
+        if (aId != null && bId == null) return -1;
+        if (aId == null && bId != null) return 1;
+        
+        // If neither has mod id, sort by install date
+        const aDate = toNullableTimestamp(a.installDate);
+        const bDate = toNullableTimestamp(b.installDate);
+        if (aDate == null && bDate == null) return 0;
+        if (aDate == null) return 1;
+        if (bDate == null) return -1;
+        return sortOrder === "asc" ? aDate - bDate : bDate - aDate;
+      });
       break;
     case "Updated":
       // Updated: sort by mods.updated_at (lastUpdatedRaw/lastUpdated), NULLs last

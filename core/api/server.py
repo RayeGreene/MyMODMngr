@@ -1583,9 +1583,9 @@ def validate_path(payload: Dict[str, Any]) -> Dict[str, Any]:
 @app.get("/api/nxm/protocol/status")
 def get_nxm_protocol_status() -> Dict[str, Any]:
 	"""Check if nxm:// protocol is registered on the system."""
-	from core.utils.nxm_protocol import get_nxm_status
+	from core.utils.nxm_protocol import check_nxm_status
 	try:
-		return get_nxm_status()
+		return check_nxm_status()
 	except Exception as e:
 		return {
 			"registered": False,
