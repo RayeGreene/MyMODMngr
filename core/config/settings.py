@@ -62,7 +62,7 @@ class AppSettings:
 	data_dir: Path = _default_data_dir()
 	marvel_rivals_root: Optional[Path] = None
 	marvel_rivals_local_downloads_root: Optional[Path] = None
-	nexus_api_key: str = ""  # User must configure their own Nexus API key
+	nexus_api_key: str = ""  
 	aes_key_hex: str = "0x0C263D8C22DCB085894899C3A3796383E9BF9DE0CBFB08C9BF2DEF2E84F29D74"
 	allow_direct_api_downloads: bool = False
 	repak_bin: Optional[Path] = None
