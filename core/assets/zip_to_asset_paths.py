@@ -38,6 +38,15 @@ def _find_repak_binary(explicit: Optional[str] = None) -> str:
         if bundled_exe.exists():
             return str(bundled_exe)
     
+    # Check if running as Tauri bundle (sidecars in the same directory as the executable)
+    try:
+        tauri_path = Path(sys.executable).parent
+        tauri_sidecar = tauri_path / exe
+        if tauri_sidecar.exists():
+            return str(tauri_sidecar)
+    except Exception:
+        pass
+    
     found = shutil.which(exe)
     if found:
         return found
@@ -67,6 +76,15 @@ def _find_retoc_binary(explicit: Optional[str] = None) -> Optional[str]:
         bundled_exe = bundle_dir / exe
         if bundled_exe.exists():
             return str(bundled_exe)
+    
+    # Check if running as Tauri bundle (sidecars in the same directory as the executable)
+    try:
+        tauri_path = Path(sys.executable).parent
+        tauri_sidecar = tauri_path / exe
+        if tauri_sidecar.exists():
+            return str(tauri_sidecar)
+    except Exception:
+        pass
     
     found = shutil.which(exe)
     if found:

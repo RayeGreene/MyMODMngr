@@ -5095,3 +5095,58 @@ def get_local_download(download_id: int) -> Dict[str, Any]:
 			conn.close()
 		except Exception:
 			pass
+
+
+@app.delete("/api/mods/{mod_id}")
+def delete_mod_endpoint(mod_id: int) -> Dict[str, Any]:
+	"""Delete all local downloads for a specific mod and clean up associated metadata.
+	
+	EXECUTION FLOW:
+	1. Find all local_downloads entries for the given mod_id
+	2. For each download being deleted:
+	   - Check if it has active_paks (is currently activated)
+	   - If active, call update_local_download_active_paks() to deactivate it first
+	   - This removes the mod files from the game's ~mods folder
+	3. Delete the local_downloads entries from the database
+	4. Clean up associated mod metadata if no downloads remain
+	5. Return success status and cleanup details
+	
+	This ensures that activated mods are properly deactivated before removal,
+	preventing orphaned files in the game's mod directory.
+	
+	Returns:
+		- ok: Boolean success status
+		- deleted: Number of downloads actually deleted
+		- removed_mod_ids: List of mod IDs that were cleaned up
+		- source_paths: List of file paths that were removed from disk
+		- message: Human-readable status message
+	"""
+	conn = get_db()
+	try:
+		# Get all download IDs for this mod first
+		cur = conn.cursor()
+		rows = cur.execute(
+			"SELECT id FROM local_downloads WHERE mod_id = ?",
+			(mod_id,),
+		).fetchall()
+		
+		if not rows:
+			return {"ok": True, "deleted": 0, "message": "No downloads found for this mod"}
+		
+		download_ids = [int(r[0]) for r in rows]
+		
+		# Use the existing delete_local_downloads function which now handles deactivation
+		deleted_count, removed_mod_ids, source_paths = delete_local_downloads(conn, download_ids)
+		
+		return {
+			"ok": True,
+			"deleted": deleted_count,
+			"removed_mod_ids": removed_mod_ids,
+			"source_paths": source_paths,
+			"message": f"Successfully deleted mod {mod_id} and its associated downloads"
+		}
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass

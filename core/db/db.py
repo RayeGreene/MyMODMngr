@@ -1167,6 +1167,57 @@ def fetch_pak_version_status(
         results.append(entry)
     return results
 
+def _get_mods_folder_for_deletion() -> Path:
+    """Get the mods folder path for file deletion operations."""
+    from core.config.settings import SETTINGS
+    return SETTINGS.marvel_rivals_root / "MarvelGame" / "~mods"
+
+
+def _remove_in_mods_by_names(mods_dir: Path, names: List[str]) -> List[str]:
+    """Remove any files in mods_dir (recursively) whose basename is in names (case-insensitive)."""
+    removed: List[str] = []
+    if not mods_dir.exists():
+        return removed
+    
+    names_lower = [n.lower() for n in names]
+    try:
+        for file_path in mods_dir.rglob("*"):
+            if file_path.is_file():
+                file_name = file_path.name.lower()
+                if file_name in names_lower:
+                    try:
+                        file_path.unlink()
+                        removed.append(str(file_path))
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    return removed
+
+
+def _remove_in_mods_by_stems(mods_dir: Path, stems: List[str]) -> List[str]:
+    """Remove any files in mods_dir (recursively) with basename matching stem + (.pak|.utoc|.ucas)."""
+    removed: List[str] = []
+    if not mods_dir.exists():
+        return removed
+    
+    stems_lower = [s.lower() for s in stems]
+    extensions = ['.pak', '.utoc', '.ucas', '.sig']
+    try:
+        for file_path in mods_dir.rglob("*"):
+            if file_path.is_file():
+                stem = file_path.stem.lower()
+                if stem in stems_lower and file_path.suffix.lower() in extensions:
+                    try:
+                        file_path.unlink()
+                        removed.append(str(file_path))
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    return removed
+
+
 def delete_local_downloads(
     conn: sqlite3.Connection,
     download_ids: Sequence[int],
@@ -1179,6 +1230,9 @@ def delete_local_downloads(
     tables as well.
     ``source_paths`` holds the normalized path value that each deleted row
     referenced, enabling callers to remove the corresponding archive from disk.
+    
+    IMPORTANT: If any downloads being deleted have active paks, they will be
+    deactivated first before deletion to ensure clean removal.
     """
     if not download_ids:
         return 0, [], []
@@ -1204,6 +1258,50 @@ def delete_local_downloads(
     ).fetchall()
     if not rows:
         return 0, [], []
+
+    # First, deactivate any active downloads and remove files from ~mods folder
+    active_rows = cur.execute(
+        f"SELECT id, active_paks, contents, name FROM local_downloads WHERE id IN ({placeholders});",
+        tuple(unique_ids),
+    ).fetchall()
+    
+    for download_id, active_paks_json, contents_json, download_name in active_rows:
+        if active_paks_json:
+            try:
+                active_paks = json.loads(active_paks_json)
+                if isinstance(active_paks, list) and active_paks:
+                    # Remove files from ~mods folder using the existing deactivation logic
+                    # We'll call the server endpoint to properly remove files
+                    mods_dir = _get_mods_folder_for_deletion()
+                    
+                    # Extract pak names from contents for proper file removal
+                    pak_names = []
+                    if contents_json:
+                        try:
+                            contents = json.loads(contents_json)
+                            if isinstance(contents, list):
+                                pak_names = [os.path.basename(c) for c in contents if isinstance(c, str) and c.lower().endswith('.pak')]
+                        except Exception:
+                            pak_names = []
+                    
+                    # Remove files by stems (handles .pak/.utoc/.ucas)
+                    removed_files = []
+                    if pak_names:
+                        stems = [os.path.splitext(p)[0] for p in pak_names]
+                        removed_files.extend(_remove_in_mods_by_stems(mods_dir, stems))
+                        # Also attempt direct/name-based removal as a safety
+                        removed_files.extend(_remove_in_mods_by_names(mods_dir, pak_names))
+                    
+                    # Update database to mark as inactive
+                    update_local_download_active_paks(conn, download_id, [])
+                    print(f"[delete_local_downloads] Deactivated download_id={download_id}, removed {len(removed_files)} files from ~mods")
+            except Exception as e:
+                # If we can't parse the active paks, try to deactivate anyway
+                try:
+                    update_local_download_active_paks(conn, download_id, [])
+                    print(f"[delete_local_downloads] Deactivated download_id={download_id} before deletion (best effort)")
+                except Exception as e2:
+                    print(f"[delete_local_downloads] Warning: Failed to deactivate download_id={download_id}: {e2}")
 
     mods_to_check: Set[int] = set()
     source_zips: Set[str] = set()

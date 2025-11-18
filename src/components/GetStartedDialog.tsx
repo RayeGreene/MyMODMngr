@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import type {
   ApiBootstrapStatus,
   ApiSettings,
@@ -109,6 +110,86 @@ export function GetStartedDialog({
         retoc_cli: settings.retoc_cli ?? "",
         seven_zip_bin: settings.seven_zip_bin ?? "",
       });
+      
+      // Auto-detect sidecars if not set
+      const autoDetectSidecars = async () => {
+        // Add a small delay to ensure backend is ready
+        setTimeout(async () => {
+          try {
+            // Try to get repak path
+            if (!settings.repak_bin || settings.repak_bin.trim() === "") {
+              try {
+                const repakResult = await invoke<string>("get_sidecar_path", { sidecarName: "repak" });
+                if (repakResult && repakResult.trim() !== "") {
+                  setFormValues((prev) => ({ ...prev, repak_bin: repakResult }));
+                  toast.success("repak.exe detected", {
+                    description: `Found bundled: ${repakResult}`,
+                    duration: 4000,
+                  });
+                }
+              } catch (error) {
+                console.log("repak sidecar detection failed:", error);
+              }
+            }
+          } catch (error) {
+            console.log("Error in repak detection:", error);
+          }
+
+          try {
+            // Try to get retoc_cli path
+            if (!settings.retoc_cli || settings.retoc_cli.trim() === "") {
+              try {
+                const retocResult = await invoke<string>("get_sidecar_path", { sidecarName: "retoc_cli" });
+                if (retocResult && retocResult.trim() !== "") {
+                  setFormValues((prev) => ({ ...prev, retoc_cli: retocResult }));
+                  toast.success("retoc_cli.exe detected", {
+                    description: `Found bundled: ${retocResult}`,
+                    duration: 4000,
+                  });
+                }
+              } catch (error) {
+                console.log("retoc_cli sidecar detection failed:", error);
+              }
+            }
+          } catch (error) {
+            console.log("Error in retoc_cli detection:", error);
+          }
+
+          // Auto-detect archive tool if seven_zip_bin is not set
+          if (!settings.seven_zip_bin || settings.seven_zip_bin.trim() === "") {
+            try {
+              const result = await invoke<{
+                success: boolean;
+                name?: string;
+                executable?: string;
+                message: string;
+                already_in_path?: boolean;
+              }>("detect_archive_tool");
+              
+              if (result.success && result.executable) {
+                setFormValues((prev) => ({ ...prev, seven_zip_bin: result.executable! }));
+                
+                if (result.already_in_path) {
+                  toast.info(`${result.name} detected`, {
+                    description: `Already in PATH: ${result.executable}`,
+                    duration: 4000,
+                  });
+                } else {
+                  toast.success(`${result.name} detected and added to PATH`, {
+                    description: `Executable: ${result.executable}`,
+                    duration: 4000,
+                  });
+                }
+              }
+            } catch (error) {
+              console.error("Archive tool auto-detect failed:", error);
+              // Silently fail - user can manually detect later
+            }
+          }
+        }, 100); // Small delay to ensure backend is ready
+      };
+
+      autoDetectSidecars();
     }
   }, [open, settings]);
 
@@ -666,6 +747,77 @@ export function GetStartedDialog({
                           {pathCheckResults.retoc_cli.message}
                         </p>
                       )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="seven_zip_bin">7-Zip executable</Label>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      <Input
+                        id="seven_zip_bin"
+                        placeholder="C:\Program Files\7-Zip\7z.exe"
+                        value={formValues.seven_zip_bin}
+                        onChange={handleInputChange("seven_zip_bin")}
+                        className="flex-1"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={async () => {
+                          try {
+                            const result = await invoke<{
+                              success: boolean;
+                              name?: string;
+                              executable?: string;
+                              message: string;
+                              already_in_path?: boolean;
+                            }>("detect_archive_tool");
+                            
+                            if (result.success && result.executable) {
+                              setFormValues((prev) => ({ ...prev, seven_zip_bin: result.executable! }));
+                              
+                              // Show toast notification
+                              if (result.already_in_path) {
+                                toast.info(`${result.name} detected`, {
+                                  description: `Already in PATH: ${result.executable}`,
+                                  duration: 4000,
+                                });
+                              } else {
+                                toast.success(`${result.name} detected and added to PATH`, {
+                                  description: `Executable: ${result.executable}`,
+                                  duration: 4000,
+                                });
+                              }
+                            } else {
+                              toast.error("Archive tool not found", {
+                                description: result.message || "Neither 7-Zip nor WinRAR installation found",
+                                duration: 4000,
+                              });
+                            }
+                          } catch (error) {
+                            console.error("Failed to detect archive tool:", error);
+                            toast.error("Detection failed", {
+                              description: String(error),
+                              duration: 4000,
+                            });
+                          }
+                        }}
+                        style={{ padding: '0.5rem', minWidth: 'auto' }}
+                        title="Auto-detect 7-Zip or WinRAR"
+                      >
+                        <RotateCcw className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleFileSelect("seven_zip_bin")}
+                        style={{ padding: '0.5rem', minWidth: 'auto' }}
+                        title="Select file"
+                      >
+                        <Folder className="h-4 w-4" />
+                      </Button>
                     </div>
                   </div>
 

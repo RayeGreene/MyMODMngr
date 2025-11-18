@@ -1,12 +1,41 @@
 """Cross-platform NXM protocol registration utilities."""
 from __future__ import annotations
 
+import json
 import os
 import platform
 import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
+
+def get_archive_tool_info() -> Optional[Dict[str, Any]]:
+    """Get archive tool information from the Tauri frontend.
+    
+    Returns a dictionary with archive tool configuration or None if unavailable.
+    """
+    if platform.system() != "Windows":
+        return None
+        
+    tauri_exe = get_tauri_executable()
+    if not tauri_exe:
+        return None
+        
+    try:
+        # Check for an environment variable set by the Tauri frontend
+        # The Tauri frontend can set RAR_TOOL_PATH environment variable
+        rar_tool_path = os.environ.get('RAR_TOOL_PATH')
+        if rar_tool_path and Path(rar_tool_path).exists():
+            return {
+                "success": True,
+                "rar_tool_path": rar_tool_path,
+                "message": f"Found RAR tool at: {rar_tool_path}"
+            }
+            
+        return None
+    except Exception as e:
+        print(f"Failed to get archive tool info: {e}")
+        return None
 
 def get_tauri_executable() -> Optional[Path]:
     """Get the path to the current Tauri executable.
@@ -48,9 +77,9 @@ def get_tauri_executable() -> Optional[Path]:
         possible_paths = [
             local_app_data / "Programs" / "RivalNxt" / "RivalNxt.exe",
             local_app_data / "Programs" / "project-modmanager-rivals" / "project-modmanager-rivals.exe",
-            local_app_data / "Programs" / "mod-manager" / "Mod Manager.exe",
-            local_app_data / "mod-manager" / "Mod Manager.exe",
+            local_app_data / "Programs" / "rivals-mod-manager" / "rivals-mod-manager.exe",
         ]
+        
         for path in possible_paths:
             if path.exists():
                 return path
@@ -58,12 +87,12 @@ def get_tauri_executable() -> Optional[Path]:
     # Method 4: Check if running from src-tauri/target (dev build)
     # The Python backend is in src-python/, Tauri exe is in src-tauri/target/debug/ or release/
     try:
-        backend_dir = Path(__file__).parent.parent  # Go up to project root
+        backend_dir = Path(__file__).resolve().parents[3]  # Go up from core/utils to repo root
         for build_type in ['debug', 'release']:
             dev_exe = backend_dir / 'src-tauri' / 'target' / build_type / 'rivalnxt.exe'
             if dev_exe.exists():
                 return dev_exe
-    except:
+    except Exception:
         pass
     
     return None
@@ -120,86 +149,49 @@ def register_nxm_windows(tauri_exe_path: Path) -> Dict[str, Any]:
             # Pass %1 (the nxm:// URL) as argument to Tauri app
             winreg.SetValueEx(key, "", 0, winreg.REG_SZ, f'"{exe_str}" "%1"')
         
-        return {"ok": True, "message": "NXM protocol registered successfully"}
+        return {"ok": True}
+        
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": f"Registration failed: {e}"}
 
 
-def unregister_nxm_windows() -> Dict[str, Any]:
-    """Unregister nxm:// protocol from Windows registry.
+def check_nxm_status() -> Dict[str, Any]:
+    """Check the current NXM protocol registration status.
     
     Returns:
-        Dict with 'ok' status and optional 'error' message
+        Dict with registration status and detected Tauri path
     """
     if platform.system() != "Windows":
-        return {"ok": False, "error": "Not on Windows"}
-    
-    try:
-        import winreg
-        
-        # Delete the entire nxm key tree
-        def delete_key_recursive(root, path):
-            try:
-                with winreg.OpenKey(root, path, 0, winreg.KEY_READ) as key:
-                    # Enumerate and delete all subkeys first
-                    subkeys = []
-                    i = 0
-                    while True:
-                        try:
-                            subkeys.append(winreg.EnumKey(key, i))
-                            i += 1
-                        except OSError:
-                            break
-                    
-                    for subkey in subkeys:
-                        delete_key_recursive(root, f"{path}\\{subkey}")
-                
-                # Now delete the key itself
-                winreg.DeleteKey(root, path)
-            except OSError:
-                pass  # Key doesn't exist or can't be deleted
-        
-        delete_key_recursive(winreg.HKEY_CURRENT_USER, r"Software\Classes\nxm")
-        return {"ok": True, "message": "NXM protocol unregistered successfully"}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-
-def get_nxm_status() -> Dict[str, Any]:
-    """Get the current NXM protocol registration status.
-    
-    Returns:
-        Dict with 'registered' boolean and 'tauri_path' if detected
-    """
-    system = platform.system()
-    
-    if system == "Windows":
-        registered = is_nxm_registered_windows()
-        tauri_path = get_tauri_executable()
-        
-        # Get the currently registered path
-        registered_path = None
-        if registered:
-            try:
-                import winreg
-                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\nxm\shell\open\command", 0, winreg.KEY_READ) as key:
-                    value, _ = winreg.QueryValueEx(key, "")
-                    # Extract path from command (remove quotes and %1)
-                    if value:
-                        registered_path = value.split('"')[1] if '"' in value else value.split()[0]
-            except:
-                pass
-        
-        return {
-            "registered": registered,
-            "tauri_path": str(tauri_path) if tauri_path else None,
-            "registered_path": registered_path,
-            "system": system
-        }
-    else:
-        # macOS/Linux support can be added later
         return {
             "registered": False,
-            "error": f"NXM protocol registration not yet supported on {system}",
-            "system": system
+            "tauri_path": None,
+            "registered_path": None,
+            "error": "Not on Windows"
         }
+    
+    registered = is_nxm_registered_windows()
+    tauri_path = get_tauri_executable()
+    registered_path = None
+    
+    # Try to extract the registered path from registry for comparison
+    if registered:
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\nxm\shell\open\command", 0, winreg.KEY_READ) as key:
+                value, _ = winreg.QueryValueEx(key, "")
+                # Extract path from command (remove quotes and %1)
+                if value:
+                    # Simple extraction - take everything between first and last quotes
+                    import re
+                    match = re.search(r'"([^"]*)"', value)
+                    if match:
+                        registered_path = match.group(1)
+        except Exception:
+            pass
+    
+    return {
+        "registered": registered,
+        "tauri_path": str(tauri_path) if tauri_path else None,
+        "registered_path": registered_path,
+        "status": "registered" if registered else "not registered"
+    }

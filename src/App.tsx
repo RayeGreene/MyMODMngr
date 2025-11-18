@@ -537,6 +537,16 @@ export default function App() {
     }
 
     try {
+      // If the mod is active, deactivate it first
+      if (mod.isActive !== false) {
+        setMods((prev) =>
+          prev.map((m) =>
+            m.id === modId ? { ...m, isActive: false } : m
+          )
+        );
+        toast.info(`${mod.name} deactivated before removal`);
+      }
+
       await deleteLocalDownloads(downloadIds, backendModId);
       const deduped = await fetchServerMods();
       setMods(deduped);

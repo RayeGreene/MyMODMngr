@@ -80,6 +80,325 @@ async fn select_file_dialog(default_path: Option<String>, filter_extensions: Opt
     }
 }
 
+#[cfg(target_os = "windows")]
+use std::path::Path;
+#[cfg(target_os = "windows")]
+use std::env;
+
+// Windows-specific: Find installation directory from registry
+#[cfg(target_os = "windows")]
+fn find_install_dir(display_name_part: &str) -> Option<String> {
+    let display_name_part = display_name_part.to_lowercase();
+    let uninstall_keys = [
+        (HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (HKEY_LOCAL_MACHINE, r"SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (HKEY_CURRENT_USER, r"SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+    ];
+
+    for (root_key, subkey_path) in &uninstall_keys {
+        if let Ok(key) = RegKey::predef(*root_key).open_subkey(subkey_path) {
+            for i in 0.. {
+                match key.enum_keys().nth(i as usize) {
+                    Some(Ok(subkey_name)) => {
+                        if let Ok(subkey) = key.open_subkey(&subkey_name) {
+                            // Get DisplayName
+                            if let Ok(name) = subkey.get_value::<String, &str>("DisplayName") {
+                                if name.to_lowercase().contains(&display_name_part) {
+                                    // Try InstallLocation first
+                                    if let Ok(install_loc) = subkey.get_value::<String, &str>("InstallLocation") {
+                                        if !install_loc.is_empty() && Path::new(&install_loc).exists() {
+                                            return Some(install_loc);
+                                        }
+                                    }
+                                    
+                                    // Fallback: use UninstallString and strip exe
+                                    if let Ok(uninstall_str) = subkey.get_value::<String, &str>("UninstallString") {
+                                        let path = uninstall_str.trim_matches('"');
+                                        if let Some(dir_path) = Path::new(path).parent() {
+                                            let dir_str = dir_path.to_string_lossy().to_string();
+                                            if Path::new(&dir_str).exists() {
+                                                return Some(dir_str);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Some(Err(_)) => continue,
+                    None => break,
+                }
+            }
+        }
+    }
+    None
+}
+
+// Windows-specific: Add directory to user PATH
+#[cfg(target_os = "windows")]
+fn persist_add_to_user_path(dir_path: &str) -> Result<(bool, String), String> {
+    if !Path::new(dir_path).exists() {
+        return Ok((false, "Invalid directory path".to_string()));
+    }
+
+    let key_path = r"Environment";
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    
+    let key = hkcu.open_subkey_with_flags(key_path, KEY_READ | KEY_SET_VALUE)
+        .map_err(|e| format!("Failed to open Environment key: {}", e))?;
+    
+    let current: String = match key.get_value("Path") {
+        Ok(path) => path,
+        Err(_) => String::new(),
+    };
+    
+    let paths: Vec<&str> = if current.is_empty() {
+        Vec::new()
+    } else {
+        current.split(';').collect()
+    };
+    
+    if paths.contains(&dir_path) {
+        return Ok((true, "Already in user PATH".to_string()));
+    }
+    
+    let new_value = if current.is_empty() {
+        dir_path.to_string()
+    } else {
+        format!("{};{}", dir_path, current)
+    };
+    
+    key.set_value("Path", &new_value)
+        .map_err(|e| format!("Failed to set PATH: {}", e))?;
+
+    Ok((false, "Added to user PATH".to_string()))
+}
+
+// Tauri command to detect archive tool (7-Zip or WinRAR) - Pure Rust implementation
+#[tauri::command]
+async fn detect_archive_tool() -> Result<serde_json::Value, String> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        return Ok(serde_json::json!({
+            "success": false,
+            "message": "Archive tool detection is only supported on Windows",
+            "already_in_path": false
+        }));
+    }
+    
+    #[cfg(target_os = "windows")]
+    {
+        // Try WinRAR first (preferred)
+        if let Some(winrar_dir) = find_install_dir("winrar") {
+            let rar_exe = Path::new(&winrar_dir).join("rar.exe");
+            let winrar_exe = Path::new(&winrar_dir).join("WinRAR.exe");
+            
+            let executable = if rar_exe.exists() {
+                rar_exe.to_string_lossy().to_string()
+            } else if winrar_exe.exists() {
+                winrar_exe.to_string_lossy().to_string()
+            } else {
+                return Ok(serde_json::json!({
+                    "success": false,
+                    "message": "WinRAR installation found but executables not detected",
+                    "already_in_path": false
+                }));
+            };
+            
+            match persist_add_to_user_path(&winrar_dir) {
+                Ok((already_in_path, _message)) => {
+                    let path_status = if already_in_path {
+                        "already in user PATH".to_string()
+                    } else {
+                        "added to user PATH (persistent)".to_string()
+                    };
+                    
+                    return Ok(serde_json::json!({
+                        "success": true,
+                        "name": "WinRAR",
+                        "path": winrar_dir,
+                        "executable": executable,
+                        "already_in_path": already_in_path,
+                        "path_status": path_status,
+                        "message": format!("WinRAR detected at {} and {}", winrar_dir, path_status)
+                    }));
+                }
+                Err(e) => {
+                    return Ok(serde_json::json!({
+                        "success": false,
+                        "message": format!("WinRAR found but PATH update failed: {}", e),
+                        "already_in_path": false
+                    }));
+                }
+            }
+        }
+        
+        // Try 7-Zip as fallback
+        if let Some(sevenzip_dir) = find_install_dir("7-zip") {
+            let sevenzip_exe = Path::new(&sevenzip_dir).join("7z.exe");
+            
+            if sevenzip_exe.exists() {
+                match persist_add_to_user_path(&sevenzip_dir) {
+                    Ok((already_in_path, _message)) => {
+                        let path_status = if already_in_path {
+                            "already in user PATH".to_string()
+                        } else {
+                            "added to user PATH (persistent)".to_string()
+                        };
+                        
+                        return Ok(serde_json::json!({
+                            "success": true,
+                            "name": "7-Zip",
+                            "path": sevenzip_dir,
+                            "executable": sevenzip_exe.to_string_lossy().to_string(),
+                            "already_in_path": already_in_path,
+                            "path_status": path_status,
+                            "message": format!("7-Zip detected at {} and {}", sevenzip_dir, path_status)
+                        }));
+                    }
+                    Err(e) => {
+                        return Ok(serde_json::json!({
+                            "success": false,
+                            "message": format!("7-Zip found but PATH update failed: {}", e),
+                            "already_in_path": false
+                        }));
+                    }
+                }
+            } else {
+                return Ok(serde_json::json!({
+                    "success": false,
+                    "message": "7-Zip installation found but 7z.exe not detected",
+                    "already_in_path": false
+                }));
+            }
+        }
+        
+        // Not found
+        Ok(serde_json::json!({
+            "success": false,
+            "message": "Neither 7-Zip nor WinRAR installation found",
+            "already_in_path": false
+        }))
+    }
+}
+
+// Tauri command to get archive tool information for Python backend
+#[tauri::command]
+fn get_archive_tool_info() -> Result<serde_json::Value, String> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        return Ok(serde_json::json!({
+            "success": false,
+            "message": "Archive tool detection is only supported on Windows",
+            "rar_tool_path": None::<String>
+        }));
+    }
+    
+    #[cfg(target_os = "windows")]
+    {
+        // Reuse the same logic as detect_archive_tool but return the executable path
+        if let Some(winrar_dir) = find_install_dir("winrar") {
+            let rar_exe = Path::new(&winrar_dir).join("rar.exe");
+            let winrar_exe = Path::new(&winrar_dir).join("WinRAR.exe");
+            
+            let executable = if rar_exe.exists() {
+                rar_exe.to_string_lossy().to_string()
+            } else if winrar_exe.exists() {
+                winrar_exe.to_string_lossy().to_string()
+            } else {
+                return Ok(serde_json::json!({
+                    "success": false,
+                    "message": "WinRAR installation found but executables not detected",
+                    "rar_tool_path": None::<String>
+                }));
+            };
+            
+            // Try to add to PATH if not already there (don't fail if it can't)
+            let _ = persist_add_to_user_path(&winrar_dir);
+            
+            return Ok(serde_json::json!({
+                "success": true,
+                "name": "WinRAR",
+                "path": winrar_dir,
+                "executable": executable,
+                "rar_tool_path": executable,
+                "message": format!("WinRAR found at: {}", executable)
+            }));
+        }
+        
+        // Try 7-Zip as fallback
+        if let Some(sevenzip_dir) = find_install_dir("7-zip") {
+            let sevenzip_exe = Path::new(&sevenzip_dir).join("7z.exe");
+            
+            if sevenzip_exe.exists() {
+                // Try to add to PATH if not already there (don't fail if it can't)
+                let _ = persist_add_to_user_path(&sevenzip_dir);
+                
+                return Ok(serde_json::json!({
+                    "success": true,
+                    "name": "7-Zip",
+                    "path": sevenzip_dir,
+                    "executable": sevenzip_exe.to_string_lossy().to_string(),
+                    "rar_tool_path": sevenzip_exe.to_string_lossy().to_string(),
+                    "message": format!("7-Zip found at: {}", sevenzip_exe.to_string_lossy())
+                }));
+            } else {
+                return Ok(serde_json::json!({
+                    "success": false,
+                    "message": "7-Zip installation found but 7z.exe not detected",
+                    "rar_tool_path": None::<String>
+                }));
+            }
+        }
+        
+        // Not found
+        Ok(serde_json::json!({
+            "success": false,
+            "message": "Neither 7-Zip nor WinRAR installation found",
+            "rar_tool_path": None::<String>
+        }))
+    }
+}
+// Tauri command to get sidecar paths
+#[tauri::command]
+fn get_sidecar_path(sidecar_name: String) -> Result<String, String> {
+    let exe_path = std::env::current_exe()
+        .map_err(|e| format!("Failed to get executable path: {}", e))?;
+    
+    let exe_dir = exe_path.parent()
+        .ok_or_else(|| "Failed to get executable directory".to_string())?;
+    
+    // Look in the sidecars subdirectory as per tauri.conf.json
+    let sidecars_dir = exe_dir.join("sidecars");
+    
+    match sidecar_name.as_str() {
+        "repak" => {
+            // Try multiple possible names for the repak executable
+            let names = ["repak.exe", "repak-x86_64-pc-windows-msvc.exe", "repak.exe.exe"];
+            for name in &names {
+                let path = sidecars_dir.join(name);
+                if path.exists() {
+                    return Ok(path.to_string_lossy().to_string());
+                }
+            }
+            return Err("repak executable not found".to_string());
+        }
+        "retoc_cli" => {
+            // Try multiple possible names for the retoc_cli executable
+            let names = ["retoc_cli.exe", "retoc_cli-x86_64-pc-windows-msvc.exe", "retoc_cli.exe.exe"];
+            for name in &names {
+                let path = sidecars_dir.join(name);
+                if path.exists() {
+                    return Ok(path.to_string_lossy().to_string());
+                }
+            }
+            return Err("retoc_cli executable not found".to_string());
+        }
+        _ => return Err(format!("Unknown sidecar: {}", sidecar_name)),
+    };
+}
+
 // Tauri command to get the current executable path
 #[tauri::command]
 fn get_executable_path() -> Result<String, String> {
@@ -181,6 +500,23 @@ async fn launch_backend(app_handle: AppHandle, backend_state: BackendChild) -> R
         // Set environment variable so Python backend can find the Tauri executable
         let exe_path = std::env::current_exe()
             .map_err(|e| format!("Failed to get executable path: {}", e))?;
+        
+        // Detect archive tools and set environment variables for Python backend
+        #[cfg(target_os = "windows")]
+        {
+            // Try to get archive tool info
+            match get_archive_tool_info() {
+                Ok(archive_info) => {
+                    if let Some(rar_tool_path) = archive_info.get("rar_tool_path").and_then(|v| v.as_str()) {
+                        std::env::set_var("RAR_TOOL_PATH", rar_tool_path);
+                        println!("[Archive Tool] Set RAR_TOOL_PATH={}", rar_tool_path);
+                    }
+                }
+                Err(e) => {
+                    println!("[Archive Tool] Failed to detect archive tools: {}", e);
+                }
+            }
+        }
         std::env::set_var("TAURI_APP_PATH", exe_path.to_string_lossy().to_string());
         
         // In debug mode, use Python directly for live code updates
@@ -382,7 +718,18 @@ fn main() {
             get_executable_path,
             handle_nxm_url,
             select_folder_dialog,
-            select_file_dialog
+            select_file_dialog,
+            detect_archive_tool,
+            get_archive_tool_info,
+            get_sidecar_path
+        ])
+        .invoke_handler(tauri::generate_handler![
+            get_executable_path,
+            handle_nxm_url,
+            select_folder_dialog,
+            select_file_dialog,
+            detect_archive_tool,
+            get_sidecar_path
         ])
         .setup(|app| {
             // CRITICAL FIX: Register NXM protocol with proper quoting on Windows

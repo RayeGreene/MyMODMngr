@@ -16,7 +16,9 @@
     "resources": [
       "../public/icons/kofi.svg",
       "../public/icons/upi.svg",
-      "../public/icons/qr.png"
+      "../public/icons/qr.png",
+      "sidecars/repak.exe",
+      "sidecars/retoc_cli.exe"
     ],
     "externalBin": ["sidecars/rivalnxt_backend"],
     "windows": {}

@@ -15,6 +15,65 @@ import rarfile
 
 from core.config.settings import SETTINGS
 
+# Configure rarfile to use WinRAR if available
+def _configure_rarfile() -> None:
+    """Configure rarfile to use the appropriate RAR tool."""
+    try:
+        # First check if we have a custom RAR tool path in settings
+        if hasattr(SETTINGS, 'rar_tool_path') and SETTINGS.rar_tool_path:
+            rarfile.UNRAR_TOOL = SETTINGS.rar_tool_path
+            print(f"Using custom RAR tool: {SETTINGS.rar_tool_path}")
+            return
+        
+        # Check environment variable
+        env_rar_tool = os.environ.get('RAR_TOOL_PATH')
+        if env_rar_tool and Path(env_rar_tool).exists():
+            rarfile.UNRAR_TOOL = env_rar_tool
+            print(f"Using RAR tool from environment: {env_rar_tool}")
+        
+        # Try to get archive tool info from Tauri frontend
+        try:
+            from core.utils.nxm_protocol import get_archive_tool_info
+            archive_info = get_archive_tool_info()
+            if archive_info and archive_info.get('success'):
+                rar_tool_path = archive_info.get('rar_tool_path')
+                if rar_tool_path and Path(rar_tool_path).exists():
+                    rarfile.UNRAR_TOOL = rar_tool_path
+                    print(f"Using RAR tool from Tauri: {rar_tool_path}")
+                    return
+        except ImportError:
+            pass  # nxm_protocol not available
+            return
+            
+        # Try common WinRAR locations
+        winrar_paths = [
+            r"C:\Program Files\WinRAR\rar.exe",
+            r"C:\Program Files (x86)\WinRAR\rar.exe",
+            r"C:\WinRAR\rar.exe",
+        ]
+        
+        for path in winrar_paths:
+            if Path(path).exists():
+                rarfile.UNRAR_TOOL = path
+                print(f"Using WinRAR at: {path}")
+                return
+        
+        # Check if rar.exe is in PATH
+        rar_exe = shutil.which('rar.exe') or shutil.which('rar')
+        if rar_exe:
+            rarfile.UNRAR_TOOL = rar_exe
+            print(f"Using RAR tool from PATH: {rar_exe}")
+            return
+            
+        print("Warning: No RAR tool found, RAR extraction may not work")
+        
+    except Exception as e:
+        print(f"Warning: Failed to configure rarfile: {e}")
+
+
+# Configure rarfile on module import
+_configure_rarfile()
+
 
 def _archive_type(archive_path: str) -> str:
     lower = archive_path.lower()
@@ -45,6 +104,14 @@ def list_entries(archive_path: str) -> List[str]:
         try:
             with rarfile.RarFile(archive_path, "r") as rf:
                 return [f.filename for f in rf.infolist() if not f.is_dir()]
+        except Exception as e:
+            # Reconfigure rarfile and retry
+            _configure_rarfile()
+            try:
+                with rarfile.RarFile(archive_path, "r") as rf:
+                    return [f.filename for f in rf.infolist() if not f.is_dir()]
+            except Exception as e2:
+                raise RuntimeError(f"rar list failed after reconfiguration: {e2}")
         except Exception as e:
             raise RuntimeError(f"rar list failed: {e}")
     else:
@@ -83,6 +150,18 @@ def extract_archive(archive_path: str, dest_dir: str) -> List[str]:
                     if not f.is_dir():
                         extracted.append(f.filename)
             return extracted
+        except Exception as e:
+            # Reconfigure rarfile and retry
+            _configure_rarfile()
+            try:
+                with rarfile.RarFile(archive_path, "r") as rf:
+                    rf.extractall(dest_dir)
+                    for f in rf.infolist():
+                        if not f.is_dir():
+                            extracted.append(f.filename)
+                return extracted
+            except Exception as e2:
+                raise RuntimeError(f"rar extract failed after reconfiguration: {e2}")
         except Exception as e:
             raise RuntimeError(f"rar extract failed: {e}")
     else:
@@ -196,17 +275,37 @@ def extract_member(archive_path: str, member_path: str, dest_path: str) -> None:
     elif typ == "rar":
         with rarfile.RarFile(archive_path, "r") as rf:
             member = None
-            for f in rf.infolist():
-                if f.filename.lower() == member_path.lower() or os.path.basename(f.filename).lower() == target_base.lower():
-                    member = f.filename
-                    break
-            if not member:
-                raise RuntimeError("member not found in rar")
-            rf.extract(member, dstdir)
-            src_path = dstdir / member
-            if not src_path.exists():
-                raise RuntimeError("extracted member not found in rar")
-            shutil.move(str(src_path), dest_path)
-            return
+            try:
+                for f in rf.infolist():
+                    if f.filename.lower() == member_path.lower() or os.path.basename(f.filename).lower() == target_base.lower():
+                        member = f.filename
+                        break
+                if not member:
+                    raise RuntimeError("member not found in rar")
+                rf.extract(member, dstdir)
+                src_path = dstdir / member
+                if not src_path.exists():
+                    raise RuntimeError("extracted member not found in rar")
+                shutil.move(str(src_path), dest_path)
+                return
+            except Exception as e:
+                # Reconfigure rarfile and retry
+                _configure_rarfile()
+                try:
+                    with rarfile.RarFile(archive_path, "r") as rf:
+                        for f in rf.infolist():
+                            if f.filename.lower() == member_path.lower() or os.path.basename(f.filename).lower() == target_base.lower():
+                                member = f.filename
+                                break
+                        if not member:
+                            raise RuntimeError("member not found in rar after reconfiguration")
+                        rf.extract(member, dstdir)
+                        src_path = dstdir / member
+                        if not src_path.exists():
+                            raise RuntimeError("extracted member not found in rar after reconfiguration")
+                        shutil.move(str(src_path), dest_path)
+                        return
+                except Exception as e2:
+                    raise RuntimeError(f"rar member extraction failed after reconfiguration: {e2}")
     else:
         raise RuntimeError(f"Unsupported archive type for member extraction: {archive_path}")
