@@ -262,12 +262,13 @@ Consider adding an SPDX-compatible `LICENSE` file (MIT, Apache 2.0, GPL, etc.).
 
 Built with amazing open-source tools:
 
+- [repak-rivals](https://github.com/natimerry/repak-rivals) - PAK extraction tools
 - [Tauri](https://tauri.app/) - Lightweight desktop runtime
 - [FastAPI](https://fastapi.tiangolo.com/) - Modern Python web framework
 - [React](https://reactjs.org/) + [Vite](https://vitejs.dev/) - Fast frontend tooling
 - [Radix UI](https://www.radix-ui.com/) - Accessible component primitives
 - [NexusMods](https://www.nexusmods.com/) - Modding community platform
-- [repak-rivals](https://github.com/natimerry/repak-rivals) - PAK extraction tools
+
 
 ---
 
