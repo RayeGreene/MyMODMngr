@@ -15,6 +15,15 @@ _One desktop app to manage, activate, and validate Marvel Rivals mods with confl
 
 </div>
 
+---
+
+### ⚠️ Beta Testing Phase
+
+> **This software is currently in beta and not production-ready.**  
+> RivalNxt v0.1.0 has been tested with a small group of users. You may encounter bugs or unexpected behavior. Please [report any issues](https://github.com/Rounak77382/Project_ModManager_Rivals/issues) you find to help improve the software.
+
+---
+
 ## ✨ Features
 
 **🎯 Core Functionality**
