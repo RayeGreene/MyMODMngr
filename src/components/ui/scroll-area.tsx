@@ -24,6 +24,23 @@ function ScrollArea({
       </ScrollAreaPrimitive.Viewport>
       <ScrollBar />
       <ScrollAreaPrimitive.Corner />
+      <style>{`.custom-scrollbar::-webkit-scrollbar {
+            width: 8px;
+          }
+          .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
+          }
+          .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(100, 100, 100, 0.5);
+            border-radius: 4px;
+          }
+          .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgba(100, 100, 100, 0.7);
+          }
+          .custom-scrollbar {
+            scrollbar-color: rgba(100, 100, 100, 0.5) transparent;
+            scrollbar-width: thin;
+          }`}</style>
     </ScrollAreaPrimitive.Root>
   );
 }
@@ -38,18 +55,18 @@ function ScrollBar({
       data-slot="scroll-area-scrollbar"
       orientation={orientation}
       className={cn(
-        "flex touch-none p-px transition-colors select-none",
+        "flex touch-none transition-colors select-none",
         orientation === "vertical" &&
-          "h-full w-2.5 border-l border-l-transparent",
+          "h-full w-2 border-l border-l-transparent custom-scrollbar",
         orientation === "horizontal" &&
-          "h-2.5 flex-col border-t border-t-transparent",
+          "h-2 flex-col border-t border-t-transparent custom-scrollbar",
         className
       )}
       {...props}
     >
       <ScrollAreaPrimitive.ScrollAreaThumb
         data-slot="scroll-area-thumb"
-        className="bg-border relative flex-1 rounded-full"
+        className="relative flex-1 rounded-full custom-scrollbar"
       />
     </ScrollAreaPrimitive.ScrollAreaScrollbar>
   );

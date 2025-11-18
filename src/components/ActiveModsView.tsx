@@ -249,39 +249,52 @@ export function ActiveModsView({
         />
 
         {/* Content */}
-        <style>{`
-        .activemods-hide-scrollbar::-webkit-scrollbar { display: none; }
-        .mods-grid {
-          display: grid;
-          gap: 1.5rem;
-          grid-template-columns: 1fr;
-        }
-        @media (min-width: 768px) {
-          .mods-grid {
-            grid-template-columns: repeat(2, 1fr);
+        <style>{`.custom-scrollbar::-webkit-scrollbar {
+            width: 8px;
           }
-        }
-        @media (min-width: 1024px) {
-          .mods-grid {
-            grid-template-columns: repeat(3, 1fr);
+          .custom-scrollbar::-webkit-scrollbar-track {
+            background: transparent;
           }
-        }
-        @media (min-width: 1280px) {
-          .mods-grid {
-            grid-template-columns: repeat(4, 1fr);
+          .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(100, 100, 100, 0.5);
+            border-radius: 4px;
           }
-        }
-        @media (min-width: 1500px) {
-          .mods-grid {
-            grid-template-columns: repeat(5, 1fr);
+          .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgba(100, 100, 100, 0.7);
           }
-        }
-      `}</style>
+          .custom-scrollbar {
+            scrollbar-color: rgba(100, 100, 100, 0.5) transparent;
+            scrollbar-width: thin;
+          }
+          .mods-grid {
+            display: grid;
+            gap: 1.5rem;
+            grid-template-columns: 1fr;
+          }
+          @media (min-width: 768px) {
+            .mods-grid {
+              grid-template-columns: repeat(2, 1fr);
+            }
+          }
+          @media (min-width: 1024px) {
+            .mods-grid {
+              grid-template-columns: repeat(3, 1fr);
+            }
+          }
+          @media (min-width: 1280px) {
+            .mods-grid {
+              grid-template-columns: repeat(4, 1fr);
+            }
+          }
+          @media (min-width: 1500px) {
+            .mods-grid {
+              grid-template-columns: repeat(5, 1fr);
+            }
+          }
+        `}</style>
         <div
-          className="flex-1 overflow-auto activemods-hide-scrollbar"
+          className="flex-1 overflow-auto custom-scrollbar"
           style={{
-            scrollbarWidth: "none",
-            msOverflowStyle: "none",
             overflowY: "auto",
           }}
         >

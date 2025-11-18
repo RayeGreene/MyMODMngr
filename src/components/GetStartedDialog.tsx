@@ -110,7 +110,7 @@ export function GetStartedDialog({
         retoc_cli: settings.retoc_cli ?? "",
         seven_zip_bin: settings.seven_zip_bin ?? "",
       });
-      
+
       // Auto-detect sidecars if not set
       const autoDetectSidecars = async () => {
         // Add a small delay to ensure backend is ready
@@ -119,9 +119,14 @@ export function GetStartedDialog({
             // Try to get repak path
             if (!settings.repak_bin || settings.repak_bin.trim() === "") {
               try {
-                const repakResult = await invoke<string>("get_sidecar_path", { sidecarName: "repak" });
+                const repakResult = await invoke<string>("get_sidecar_path", {
+                  sidecarName: "repak",
+                });
                 if (repakResult && repakResult.trim() !== "") {
-                  setFormValues((prev) => ({ ...prev, repak_bin: repakResult }));
+                  setFormValues((prev) => ({
+                    ...prev,
+                    repak_bin: repakResult,
+                  }));
                   toast.success("repak.exe detected", {
                     description: `Found bundled: ${repakResult}`,
                     duration: 4000,
@@ -139,9 +144,14 @@ export function GetStartedDialog({
             // Try to get retoc_cli path
             if (!settings.retoc_cli || settings.retoc_cli.trim() === "") {
               try {
-                const retocResult = await invoke<string>("get_sidecar_path", { sidecarName: "retoc_cli" });
+                const retocResult = await invoke<string>("get_sidecar_path", {
+                  sidecarName: "retoc_cli",
+                });
                 if (retocResult && retocResult.trim() !== "") {
-                  setFormValues((prev) => ({ ...prev, retoc_cli: retocResult }));
+                  setFormValues((prev) => ({
+                    ...prev,
+                    retoc_cli: retocResult,
+                  }));
                   toast.success("retoc_cli.exe detected", {
                     description: `Found bundled: ${retocResult}`,
                     duration: 4000,
@@ -165,10 +175,13 @@ export function GetStartedDialog({
                 message: string;
                 already_in_path?: boolean;
               }>("detect_archive_tool");
-              
+
               if (result.success && result.executable) {
-                setFormValues((prev) => ({ ...prev, seven_zip_bin: result.executable! }));
-                
+                setFormValues((prev) => ({
+                  ...prev,
+                  seven_zip_bin: result.executable!,
+                }));
+
                 if (result.already_in_path) {
                   toast.info(`${result.name} detected`, {
                     description: `Already in PATH: ${result.executable}`,
@@ -188,6 +201,39 @@ export function GetStartedDialog({
           }
         }, 100); // Small delay to ensure backend is ready
       };
+
+      // Auto-detect Marvel Rivals path if not set
+      const detectMarvelRivalsPath = async () => {
+        if (
+          !settings.marvel_rivals_root ||
+          settings.marvel_rivals_root.trim() === ""
+        ) {
+          try {
+            const result = await invoke<{
+              success: boolean;
+              path?: string;
+              message: string;
+            }>("detect_marvel_rivals_path");
+
+            if (result.success && result.path) {
+              setFormValues((prev) => ({
+                ...prev,
+                marvel_rivals_root: result.path!,
+              }));
+              toast.success("Marvel Rivals detected", {
+                description: `Found at: ${result.path}`,
+                duration: 4000,
+              });
+            }
+          } catch (error) {
+            console.log("Marvel Rivals detection failed:", error);
+            // Silently fail - user can manually detect later
+          }
+        }
+      };
+
+      // Run detection
+      detectMarvelRivalsPath();
 
       autoDetectSidecars();
     }
@@ -377,7 +423,7 @@ export function GetStartedDialog({
       const result = await invoke<string>("select_folder_dialog", {
         defaultPath: null,
       });
-      
+
       if (result) {
         setFormValues((prev) => ({ ...prev, [field]: result }));
         // Clear previous validation result
@@ -399,11 +445,14 @@ export function GetStartedDialog({
     try {
       const result = await invoke<string>("select_file_dialog", {
         defaultPath: null,
-        filterExtensions: field === "repak_bin" || field === "retoc_cli" || field === "seven_zip_bin"
-          ? ["exe", "bat", "cmd", "msi"]
-          : ["*"],
+        filterExtensions:
+          field === "repak_bin" ||
+          field === "retoc_cli" ||
+          field === "seven_zip_bin"
+            ? ["exe", "bat", "cmd", "msi"]
+            : ["*"],
       });
-      
+
       if (result) {
         setFormValues((prev) => ({ ...prev, [field]: result }));
       }
@@ -473,13 +522,22 @@ export function GetStartedDialog({
         }}
       >
         <div
+          className="getstarted-dialog-scroll"
           style={{
             flex: 1,
             overflowY: "auto",
             padding: "2rem",
             boxSizing: "border-box",
+            // Traditional CSS to hide scrollbars while keeping functionality
+            msOverflowStyle: "none", // IE and Edge
+            scrollbarWidth: "none", // Firefox
           }}
         >
+          <style>{`
+            .getstarted-dialog-scroll::-webkit-scrollbar {
+              display: none;
+            }
+          `}</style>
           <DialogHeader>
             <DialogTitle className="text-2xl font-semibold">
               Welcome to RivalNxt
@@ -514,24 +572,14 @@ export function GetStartedDialog({
                 later from the Settings panel.
               </div>
               <style>{`.custom-scrollbar::-webkit-scrollbar {
-            width: 8px;
-          }
-          .custom-scrollbar::-webkit-scrollbar-track {
-            background: transparent;
-          }
-          .custom-scrollbar::-webkit-scrollbar-thumb {
-            background: rgba(100, 100, 100, 0.5);
-            border-radius: 4px;
-          }
-          .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-            background: rgba(100, 100, 100, 0.7);
+            display: none;
           }
           .custom-scrollbar {
-            scrollbar-color: rgba(100, 100, 100, 0.5) transparent;
-            scrollbar-width: thin;
+            msOverflowStyle: none;
+            scrollbar-width: none;
           }`}</style>
               <div
-                className="custom-scrollbar"
+                className="custom-scrollbar getstarted-form-scroll"
                 style={{
                   maxHeight: "28rem",
                   overflowY: "auto",
@@ -546,60 +594,16 @@ export function GetStartedDialog({
                   }}
                 >
                   <div className="space-y-2">
-                    <Label htmlFor="marvel_rivals_root">
-                      Marvel Rivals root
-                    </Label>
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                      <Input
-                        id="marvel_rivals_root"
-                        placeholder="...\SteamLibrary\steamapps\common\MarvelRivals"
-                        value={formValues.marvel_rivals_root}
-                        onChange={handleInputChange("marvel_rivals_root")}
-                        className="flex-1"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleFolderSelect("marvel_rivals_root")}
-                        style={{ padding: '0.5rem', minWidth: 'auto' }}
-                        title="Select folder"
-                      >
-                        <Folder className="h-4 w-4" />
-                      </Button>
-                    </div>
-                    {pathCheckResults.marvel_rivals_root && (
-                      <p
-                        style={{
-                          fontSize: "0.75rem",
-                          color: pathCheckResults.marvel_rivals_root.ok
-                            ? "#059669"
-                            : "#dc2626",
-                          marginTop: "0.25rem",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "0.25rem",
-                        }}
-                      >
-                        {pathCheckResults.marvel_rivals_root.ok ? (
-                          <CheckCircle
-                            style={{ width: "0.875rem", height: "0.875rem" }}
-                          />
-                        ) : (
-                          <AlertCircle
-                            style={{ width: "0.875rem", height: "0.875rem" }}
-                          />
-                        )}
-                        {pathCheckResults.marvel_rivals_root.message}
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
                     <Label htmlFor="marvel_rivals_local_downloads_root">
                       Local downloads folder
                     </Label>
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: "0.5rem",
+                        alignItems: "center",
+                      }}
+                    >
                       <Input
                         id="marvel_rivals_local_downloads_root"
                         placeholder="...\Marvel_Rivals_Mods\downloads"
@@ -613,8 +617,12 @@ export function GetStartedDialog({
                         type="button"
                         variant="outline"
                         size="sm"
-                        onClick={() => handleFolderSelect("marvel_rivals_local_downloads_root")}
-                        style={{ padding: '0.5rem', minWidth: 'auto' }}
+                        onClick={() =>
+                          handleFolderSelect(
+                            "marvel_rivals_local_downloads_root"
+                          )
+                        }
+                        style={{ padding: "0.5rem", minWidth: "auto" }}
                         title="Select folder"
                       >
                         <Folder className="h-4 w-4" />
@@ -652,10 +660,157 @@ export function GetStartedDialog({
                     )}
                   </div>
 
+                  <div className="space-y-2">
+                    <Label htmlFor="nexus_api_key">Nexus API key</Label>
+                    <Input
+                      id="nexus_api_key"
+                      type="password"
+                      placeholder="•••••••••••••••"
+                      value={formValues.nexus_api_key}
+                      onChange={handleInputChange("nexus_api_key")}
+                    />
+                    {settings?.validation?.nexus_api_key ? (
+                      <p
+                        style={{
+                          fontSize: "0.75rem",
+                          color: settings.validation.nexus_api_key.ok
+                            ? "#059669"
+                            : settings.validation.nexus_api_key.reason ===
+                              "not_configured"
+                            ? "#6b7280"
+                            : "#dc2626",
+                          marginTop: "0.25rem",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "0.25rem",
+                        }}
+                      >
+                        {settings.validation.nexus_api_key.ok ? (
+                          <CheckCircle
+                            style={{ width: "0.875rem", height: "0.875rem" }}
+                          />
+                        ) : (
+                          <AlertCircle
+                            style={{ width: "0.875rem", height: "0.875rem" }}
+                          />
+                        )}
+                        {settings.validation.nexus_api_key.message?.trim() ||
+                          ""}
+                      </p>
+                    ) : null}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="marvel_rivals_root">
+                      Marvel Rivals root
+                    </Label>
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: "0.5rem",
+                        alignItems: "center",
+                      }}
+                    >
+                      <Input
+                        id="marvel_rivals_root"
+                        placeholder="...\SteamLibrary\steamapps\common\MarvelRivals"
+                        value={formValues.marvel_rivals_root}
+                        onChange={handleInputChange("marvel_rivals_root")}
+                        className="flex-1"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={async () => {
+                          try {
+                            const result = await invoke<{
+                              success: boolean;
+                              path?: string;
+                              message: string;
+                            }>("detect_marvel_rivals_path");
+
+                            if (result.success && result.path) {
+                              setFormValues((prev) => ({
+                                ...prev,
+                                marvel_rivals_root: result.path!,
+                              }));
+                              toast.success("Marvel Rivals detected", {
+                                description: `Found at: ${result.path}`,
+                                duration: 4000,
+                              });
+                            } else {
+                              toast.error("Marvel Rivals not found", {
+                                description:
+                                  result.message ||
+                                  "Installation not detected. Please install via Steam or Epic Games Store.",
+                                duration: 4000,
+                              });
+                            }
+                          } catch (error) {
+                            console.error(
+                              "Failed to detect Marvel Rivals:",
+                              error
+                            );
+                            toast.error("Detection failed", {
+                              description: String(error),
+                              duration: 4000,
+                            });
+                          }
+                        }}
+                        style={{ padding: "0.5rem", minWidth: "auto" }}
+                        title="Auto-detect Marvel Rivals installation"
+                      >
+                        <RotateCcw className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleFolderSelect("marvel_rivals_root")}
+                        style={{ padding: "0.5rem", minWidth: "auto" }}
+                        title="Select folder"
+                      >
+                        <Folder className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    {pathCheckResults.marvel_rivals_root && (
+                      <p
+                        style={{
+                          fontSize: "0.75rem",
+                          color: pathCheckResults.marvel_rivals_root.ok
+                            ? "#059669"
+                            : "#dc2626",
+                          marginTop: "0.25rem",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "0.25rem",
+                        }}
+                      >
+                        {pathCheckResults.marvel_rivals_root.ok ? (
+                          <CheckCircle
+                            style={{ width: "0.875rem", height: "0.875rem" }}
+                          />
+                        ) : (
+                          <AlertCircle
+                            style={{ width: "0.875rem", height: "0.875rem" }}
+                          />
+                        )}
+                        {pathCheckResults.marvel_rivals_root.message}
+                      </p>
+                    )}
+                  </div>
+
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
                       <Label htmlFor="repak_bin">repak executable</Label>
-                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: "0.5rem",
+                          alignItems: "center",
+                        }}
+                      >
                         <Input
                           id="repak_bin"
                           placeholder="...\repak.exe"
@@ -668,7 +823,7 @@ export function GetStartedDialog({
                           variant="outline"
                           size="sm"
                           onClick={() => handleFileSelect("repak_bin")}
-                          style={{ padding: '0.5rem', minWidth: 'auto' }}
+                          style={{ padding: "0.5rem", minWidth: "auto" }}
                           title="Select file"
                         >
                           <Folder className="h-4 w-4" />
@@ -703,7 +858,13 @@ export function GetStartedDialog({
 
                     <div className="space-y-2">
                       <Label htmlFor="retoc_cli">retoc CLI</Label>
-                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: "0.5rem",
+                          alignItems: "center",
+                        }}
+                      >
                         <Input
                           id="retoc_cli"
                           placeholder="...\retoc.exe"
@@ -716,7 +877,7 @@ export function GetStartedDialog({
                           variant="outline"
                           size="sm"
                           onClick={() => handleFileSelect("retoc_cli")}
-                          style={{ padding: '0.5rem', minWidth: 'auto' }}
+                          style={{ padding: "0.5rem", minWidth: "auto" }}
                           title="Select file"
                         >
                           <Folder className="h-4 w-4" />
@@ -752,7 +913,13 @@ export function GetStartedDialog({
 
                   <div className="space-y-2">
                     <Label htmlFor="seven_zip_bin">7-Zip executable</Label>
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: "0.5rem",
+                        alignItems: "center",
+                      }}
+                    >
                       <Input
                         id="seven_zip_bin"
                         placeholder="C:\Program Files\7-Zip\7z.exe"
@@ -773,10 +940,13 @@ export function GetStartedDialog({
                               message: string;
                               already_in_path?: boolean;
                             }>("detect_archive_tool");
-                            
+
                             if (result.success && result.executable) {
-                              setFormValues((prev) => ({ ...prev, seven_zip_bin: result.executable! }));
-                              
+                              setFormValues((prev) => ({
+                                ...prev,
+                                seven_zip_bin: result.executable!,
+                              }));
+
                               // Show toast notification
                               if (result.already_in_path) {
                                 toast.info(`${result.name} detected`, {
@@ -784,26 +954,34 @@ export function GetStartedDialog({
                                   duration: 4000,
                                 });
                               } else {
-                                toast.success(`${result.name} detected and added to PATH`, {
-                                  description: `Executable: ${result.executable}`,
-                                  duration: 4000,
-                                });
+                                toast.success(
+                                  `${result.name} detected and added to PATH`,
+                                  {
+                                    description: `Executable: ${result.executable}`,
+                                    duration: 4000,
+                                  }
+                                );
                               }
                             } else {
                               toast.error("Archive tool not found", {
-                                description: result.message || "Neither 7-Zip nor WinRAR installation found",
+                                description:
+                                  result.message ||
+                                  "Neither 7-Zip nor WinRAR installation found",
                                 duration: 4000,
                               });
                             }
                           } catch (error) {
-                            console.error("Failed to detect archive tool:", error);
+                            console.error(
+                              "Failed to detect archive tool:",
+                              error
+                            );
                             toast.error("Detection failed", {
                               description: String(error),
                               duration: 4000,
                             });
                           }
                         }}
-                        style={{ padding: '0.5rem', minWidth: 'auto' }}
+                        style={{ padding: "0.5rem", minWidth: "auto" }}
                         title="Auto-detect 7-Zip or WinRAR"
                       >
                         <RotateCcw className="h-4 w-4" />
@@ -813,7 +991,7 @@ export function GetStartedDialog({
                         variant="outline"
                         size="sm"
                         onClick={() => handleFileSelect("seven_zip_bin")}
-                        style={{ padding: '0.5rem', minWidth: 'auto' }}
+                        style={{ padding: "0.5rem", minWidth: "auto" }}
                         title="Select file"
                       >
                         <Folder className="h-4 w-4" />
@@ -821,62 +999,26 @@ export function GetStartedDialog({
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div className="space-y-2">
-                      <Label htmlFor="nexus_api_key">Nexus API key</Label>
-                      <Input
-                        id="nexus_api_key"
-                        type="password"
-                        placeholder="•••••••••••••••"
-                        value={formValues.nexus_api_key}
-                        onChange={handleInputChange("nexus_api_key")}
-                      />
-                      {settings?.validation?.nexus_api_key ? (
-                        <p
-                          style={{
-                            fontSize: "0.75rem",
-                            color: settings.validation.nexus_api_key.ok
-                              ? "#059669"
-                              : settings.validation.nexus_api_key.reason ===
-                                "not_configured"
-                              ? "#6b7280"
-                              : "#dc2626",
-                            marginTop: "0.25rem",
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "0.25rem",
-                          }}
-                        >
-                          {settings.validation.nexus_api_key.ok ? (
-                            <CheckCircle
-                              style={{ width: "0.875rem", height: "0.875rem" }}
-                            />
-                          ) : (
-                            <AlertCircle
-                              style={{ width: "0.875rem", height: "0.875rem" }}
-                            />
-                          )}
-                          {settings.validation.nexus_api_key.message?.trim() ||
-                            ""}
-                        </p>
-                      ) : null}
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="aes_key_hex">AES key</Label>
-                      <Input
-                        id="aes_key_hex"
-                        type="password"
-                        placeholder="hex-encoded key"
-                        value={formValues.aes_key_hex}
-                        onChange={handleInputChange("aes_key_hex")}
-                      />
-                    </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="aes_key_hex">AES key</Label>
+                    <Input
+                      id="aes_key_hex"
+                      type="password"
+                      placeholder="hex-encoded key"
+                      value={formValues.aes_key_hex}
+                      onChange={handleInputChange("aes_key_hex")}
+                    />
                   </div>
 
                   <div className="space-y-2">
                     <Label htmlFor="data_dir">Data directory (Locked)</Label>
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: "0.5rem",
+                        alignItems: "center",
+                      }}
+                    >
                       <Input
                         id="data_dir"
                         placeholder="C:\\Users\\You\\AppData\\Local\\RivalsManager"
@@ -966,7 +1108,7 @@ export function GetStartedDialog({
                   <TaskOutputSummary
                     task={job?.task ?? "bootstrap_rebuild"}
                     output={jobOutput}
-                    fallbackMinHeight="h-40"
+                    style={{ minHeight: "200px" }}
                   />
                 </div>
               ) : null}
@@ -1025,7 +1167,7 @@ export function GetStartedDialog({
                   task={job?.task ?? "bootstrap_rebuild"}
                   output={jobOutput}
                   isRunning={jobRunning}
-                  fallbackMinHeight="h-64"
+                  style={{ minHeight: "200px" }}
                 />
               </div>
             </div>
@@ -1056,7 +1198,7 @@ export function GetStartedDialog({
                 <TaskOutputSummary
                   task={job?.task ?? "bootstrap_rebuild"}
                   output={jobOutput}
-                  fallbackMinHeight="h-64"
+                  style={{ minHeight: "200px" }}
                 />
               </div>
               <div

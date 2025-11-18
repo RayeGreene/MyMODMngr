@@ -230,6 +230,33 @@ export function SettingsDialog({
         }, 100); // Small delay to ensure backend is ready
       };
 
+      // Auto-detect Marvel Rivals path if not set
+      const detectMarvelRivalsPath = async () => {
+        if (!settings.marvel_rivals_root || settings.marvel_rivals_root.trim() === "") {
+          try {
+            const result = await invoke<{
+              success: boolean;
+              path?: string;
+              message: string;
+            }>("detect_marvel_rivals_path");
+            
+            if (result.success && result.path) {
+              setFormValues((prev) => ({ ...prev, marvel_rivals_root: result.path! }));
+              toast.success("Marvel Rivals detected", {
+                description: `Found at: ${result.path}`,
+                duration: 4000,
+              });
+            }
+          } catch (error) {
+            console.log("Marvel Rivals detection failed:", error);
+            // Silently fail - user can manually detect later
+          }
+        }
+      };
+
+      // Run detection
+      detectMarvelRivalsPath();
+
       autoDetectSidecars();
     }
   }, [open, settings]);
@@ -351,15 +378,21 @@ export function SettingsDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="max-w-5xl h-[90vh] max-h-[90vh] flex flex-col overflow-hidden [&::-webkit-scrollbar]:hidden scrollbar-hide"
+        className="max-w-5xl h-[90vh] max-h-[90vh] flex flex-col overflow-hidden settings-dialog-scroll"
         onOpenAutoFocus={(e) => e.preventDefault()}
         style={{
           width: "80%",
           overflowY: "auto",
-          scrollbarWidth: "none",
-          msOverflowStyle: "none",
+          // Traditional CSS to hide scrollbars while keeping functionality
+          msOverflowStyle: "none", // IE and Edge
+          scrollbarWidth: "none", // Firefox
         }}
       >
+        <style>{`
+          .settings-dialog-scroll::-webkit-scrollbar {
+            display: none;
+          }
+        `}</style>
         {/* Header */}
         <div className="flex items-start justify-between gap-4 border-b px-6 py-5">
           <DialogHeader className="space-y-2 mb-4">
@@ -392,52 +425,182 @@ export function SettingsDialog({
 
         {/* Body */}
         <form onSubmit={handleSubmit} className="flex flex-col">
-          <ScrollArea className="max-h-[calc(100vh-280px)]">
-            <div className="px-6 py-5">
-              {settings ? (
+          <div className="px-6 py-5">
+            {settings ? (
+              <div
+                className="settings-grid"
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "3fr 2fr",
+                  gap: "40px",
+                  alignItems: "start",
+                  marginBottom: "8px",
+                }}
+              >
+                {/* Left column (wider - 2/3) */}
                 <div
-                  className="settings-grid"
+                  className="settings-left"
                   style={{
-                    display: "grid",
-                    gridTemplateColumns: "3fr 2fr",
-                    gap: "40px",
-                    alignItems: "start",
-                    marginBottom: "8px",
+                    minWidth: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "32px",
                   }}
                 >
-                  {/* Left column (wider - 2/3) */}
-                  <div
-                    className="settings-left"
+                  {/* Directories & Tools */}
+                  <section
                     style={{
-                      minWidth: 0,
                       display: "flex",
                       flexDirection: "column",
-                      gap: "32px",
+                      gap: "24px",
                     }}
                   >
-                    {/* Directories & Tools */}
-                    <section
+                    <div style={{ marginBottom: "8px" }}>
+                      <h3 className="text-lg font-semibold">
+                        Directories & Tools
+                      </h3>
+                      <p className="text-sm text-muted-foreground">
+                        Provide absolute paths so helper scripts can locate
+                        the game, packed downloads, and optional tooling.
+                      </p>
+                    </div>
+
+                    <div
                       style={{
                         display: "flex",
                         flexDirection: "column",
-                        gap: "24px",
+                        gap: "20px",
                       }}
                     >
-                      <div style={{ marginBottom: "8px" }}>
-                        <h3 className="text-lg font-semibold">
-                          Directories & Tools
-                        </h3>
-                        <p className="text-sm text-muted-foreground">
-                          Provide absolute paths so helper scripts can locate
-                          the game, packed downloads, and optional tooling.
-                        </p>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "10px",
+                        }}
+                      >
+                        <Label htmlFor="marvel_rivals_local_downloads_root">
+                          Local downloads folder
+                        </Label>
+                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                          <Input
+                            id="marvel_rivals_local_downloads_root"
+                            placeholder="D:\Mods\MarvelRivalsDownloads"
+                            value={
+                              formValues.marvel_rivals_local_downloads_root
+                            }
+                            onChange={handleInputChange(
+                              "marvel_rivals_local_downloads_root"
+                            )}
+                            className="flex-1"
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleFolderSelect("marvel_rivals_local_downloads_root")}
+                            style={{ padding: '0.5rem', minWidth: 'auto' }}
+                            title="Select folder"
+                          >
+                            <Folder className="h-4 w-4" />
+                          </Button>
+                        </div>
+                        {renderValidationStatus(
+                          "marvel_rivals_local_downloads_root"
+                        )}
                       </div>
 
                       <div
                         style={{
                           display: "flex",
                           flexDirection: "column",
-                          gap: "20px",
+                          gap: "10px",
+                        }}
+                      >
+                        <Label htmlFor="nexus_api_key">Nexus API key</Label>
+                        <Input
+                          id="nexus_api_key"
+                          type="password"
+                          placeholder="••••••••••••••••"
+                          value={formValues.nexus_api_key}
+                          onChange={handleInputChange("nexus_api_key")}
+                        />
+                      </div>
+
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "10px",
+                        }}
+                      >
+                        <Label htmlFor="marvel_rivals_root">
+                          Marvel Rivals root
+                        </Label>
+                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                          <Input
+                            id="marvel_rivals_root"
+                            placeholder="D:\Games\MarvelRivals"
+                            value={formValues.marvel_rivals_root}
+                            onChange={handleInputChange("marvel_rivals_root")}
+                            className="flex-1"
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={async () => {
+                              try {
+                                const result = await invoke<{
+                                  success: boolean;
+                                  path?: string;
+                                  message: string;
+                                }>("detect_marvel_rivals_path");
+                                
+                                if (result.success && result.path) {
+                                  setFormValues((prev) => ({ ...prev, marvel_rivals_root: result.path! }));
+                                  toast.success("Marvel Rivals detected", {
+                                    description: `Found at: ${result.path}`,
+                                    duration: 4000,
+                                  });
+                                } else {
+                                  toast.error("Marvel Rivals not found", {
+                                    description: result.message || "Installation not detected. Please install via Steam or Epic Games Store.",
+                                    duration: 4000,
+                                  });
+                                }
+                              } catch (error) {
+                                console.error("Failed to detect Marvel Rivals:", error);
+                                toast.error("Detection failed", {
+                                  description: String(error),
+                                  duration: 4000,
+                                });
+                              }
+                            }}
+                            style={{ padding: '0.5rem', minWidth: 'auto' }}
+                            title="Auto-detect Marvel Rivals installation"
+                          >
+                            <RefreshCw className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleFolderSelect("marvel_rivals_root")}
+                            style={{ padding: '0.5rem', minWidth: 'auto' }}
+                            title="Select folder"
+                          >
+                            <Folder className="h-4 w-4" />
+                          </Button>
+                        </div>
+                        {renderValidationStatus("marvel_rivals_root")}
+                      </div>
+
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "1fr 1fr",
+                          gap: "16px",
                         }}
                       >
                         <div
@@ -447,29 +610,27 @@ export function SettingsDialog({
                             gap: "10px",
                           }}
                         >
-                          <Label htmlFor="marvel_rivals_root">
-                            Marvel Rivals root
-                          </Label>
+                          <Label htmlFor="repak_bin">Repak executable</Label>
                           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                             <Input
-                              id="marvel_rivals_root"
-                              placeholder="D:\Games\MarvelRivals"
-                              value={formValues.marvel_rivals_root}
-                              onChange={handleInputChange("marvel_rivals_root")}
+                              id="repak_bin"
+                              placeholder="C:\Tools\repak.exe"
+                              value={formValues.repak_bin}
+                              onChange={handleInputChange("repak_bin")}
                               className="flex-1"
                             />
                             <Button
                               type="button"
                               variant="outline"
                               size="sm"
-                              onClick={() => handleFolderSelect("marvel_rivals_root")}
+                              onClick={() => handleFileSelect("repak_bin")}
                               style={{ padding: '0.5rem', minWidth: 'auto' }}
-                              title="Select folder"
+                              title="Select file"
                             >
                               <Folder className="h-4 w-4" />
                             </Button>
                           </div>
-                          {renderValidationStatus("marvel_rivals_root")}
+                          {renderValidationStatus("repak_bin")}
                         </div>
 
                         <div
@@ -479,264 +640,126 @@ export function SettingsDialog({
                             gap: "10px",
                           }}
                         >
-                          <Label htmlFor="marvel_rivals_local_downloads_root">
-                            Local downloads folder
-                          </Label>
+                          <Label htmlFor="retoc_cli">retoc CLI</Label>
                           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                             <Input
-                              id="marvel_rivals_local_downloads_root"
-                              placeholder="D:\Mods\MarvelRivalsDownloads"
-                              value={
-                                formValues.marvel_rivals_local_downloads_root
-                              }
-                              onChange={handleInputChange(
-                                "marvel_rivals_local_downloads_root"
-                              )}
+                              id="retoc_cli"
+                              placeholder="C:\Tools\retoc.exe"
+                              value={formValues.retoc_cli}
+                              onChange={handleInputChange("retoc_cli")}
                               className="flex-1"
                             />
                             <Button
                               type="button"
                               variant="outline"
                               size="sm"
-                              onClick={() => handleFolderSelect("marvel_rivals_local_downloads_root")}
+                              onClick={() => handleFileSelect("retoc_cli")}
                               style={{ padding: '0.5rem', minWidth: 'auto' }}
-                              title="Select folder"
+                              title="Select file"
                             >
                               <Folder className="h-4 w-4" />
                             </Button>
                           </div>
-                          {renderValidationStatus(
-                            "marvel_rivals_local_downloads_root"
-                          )}
+                          {renderValidationStatus("retoc_cli")}
                         </div>
 
                         <div
                           style={{
-                            display: "grid",
-                            gridTemplateColumns: "1fr 1fr",
-                            gap: "16px",
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "10px",
+                            gridColumn: "span 2",
                           }}
                         >
-                          <div
-                            style={{
-                              display: "flex",
-                              flexDirection: "column",
-                              gap: "10px",
-                            }}
-                          >
-                            <Label htmlFor="repak_bin">Repak executable</Label>
-                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                              <Input
-                                id="repak_bin"
-                                placeholder="C:\Tools\repak.exe"
-                                value={formValues.repak_bin}
-                                onChange={handleInputChange("repak_bin")}
-                                className="flex-1"
-                              />
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleFileSelect("repak_bin")}
-                                style={{ padding: '0.5rem', minWidth: 'auto' }}
-                                title="Select file"
-                              >
-                                <Folder className="h-4 w-4" />
-                              </Button>
-                            </div>
-                            {renderValidationStatus("repak_bin")}
-                          </div>
-
-                          <div
-                            style={{
-                              display: "flex",
-                              flexDirection: "column",
-                              gap: "10px",
-                            }}
-                          >
-                            <Label htmlFor="retoc_cli">retoc CLI</Label>
-                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                              <Input
-                                id="retoc_cli"
-                                placeholder="C:\Tools\retoc.exe"
-                                value={formValues.retoc_cli}
-                                onChange={handleInputChange("retoc_cli")}
-                                className="flex-1"
-                              />
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleFileSelect("retoc_cli")}
-                                style={{ padding: '0.5rem', minWidth: 'auto' }}
-                                title="Select file"
-                              >
-                                <Folder className="h-4 w-4" />
-                              </Button>
-                            </div>
-                            {renderValidationStatus("retoc_cli")}
-                          </div>
-
-                          <div
-                            style={{
-                              display: "flex",
-                              flexDirection: "column",
-                              gap: "10px",
-                              gridColumn: "span 2",
-                            }}
-                          >
-                            <Label htmlFor="seven_zip_bin">
-                              7-Zip executable
-                            </Label>
-                            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                              <Input
-                                id="seven_zip_bin"
-                                placeholder="C:\Program Files\7-Zip\7z.exe"
-                                value={formValues.seven_zip_bin}
-                                onChange={handleInputChange("seven_zip_bin")}
-                                className="flex-1"
-                              />
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={async () => {
-                                  try {
-                                    const result = await invoke<{
-                                      success: boolean;
-                                      name?: string;
-                                      executable?: string;
-                                      message: string;
-                                      already_in_path?: boolean;
-                                    }>("detect_archive_tool");
+                          <Label htmlFor="seven_zip_bin">
+                            7-Zip executable
+                          </Label>
+                          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                            <Input
+                              id="seven_zip_bin"
+                              placeholder="C:\Program Files\7-Zip\7z.exe"
+                              value={formValues.seven_zip_bin}
+                              onChange={handleInputChange("seven_zip_bin")}
+                              className="flex-1"
+                            />
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={async () => {
+                                try {
+                                  const result = await invoke<{
+                                    success: boolean;
+                                    name?: string;
+                                    executable?: string;
+                                    message: string;
+                                    already_in_path?: boolean;
+                                  }>("detect_archive_tool");
+                                  
+                                  if (result.success && result.executable) {
+                                    setFormValues((prev) => ({ ...prev, seven_zip_bin: result.executable! }));
                                     
-                                    if (result.success && result.executable) {
-                                      setFormValues((prev) => ({ ...prev, seven_zip_bin: result.executable! }));
-                                      
-                                      // Show toast notification
-                                      if (result.already_in_path) {
-                                        toast.info(`${result.name} detected`, {
-                                          description: `Already in PATH: ${result.executable}`,
-                                          duration: 4000,
-                                        });
-                                      } else {
-                                        toast.success(`${result.name} detected and added to PATH`, {
-                                          description: `Executable: ${result.executable}`,
-                                          duration: 4000,
-                                        });
-                                      }
+                                    // Show toast notification
+                                    if (result.already_in_path) {
+                                      toast.info(`${result.name} detected`, {
+                                        description: `Already in PATH: ${result.executable}`,
+                                        duration: 4000,
+                                      });
                                     } else {
-                                      toast.error("Archive tool not found", {
-                                        description: result.message || "Neither 7-Zip nor WinRAR installation found",
+                                      toast.success(`${result.name} detected and added to PATH`, {
+                                        description: `Executable: ${result.executable}`,
                                         duration: 4000,
                                       });
                                     }
-                                  } catch (error) {
-                                    console.error("Failed to detect archive tool:", error);
-                                    toast.error("Detection failed", {
-                                      description: String(error),
+                                  } else {
+                                    toast.error("Archive tool not found", {
+                                      description: result.message || "Neither 7-Zip nor WinRAR installation found",
                                       duration: 4000,
                                     });
                                   }
-                                }}
-                                style={{ padding: '0.5rem', minWidth: 'auto' }}
-                                title="Auto-detect 7-Zip or WinRAR"
-                              >
-                                <RefreshCw className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleFileSelect("seven_zip_bin")}
-                                style={{ padding: '0.5rem', minWidth: 'auto' }}
-                                title="Select file"
-                              >
-                                <Folder className="h-4 w-4" />
-                              </Button>
-                            </div>
-                            {renderValidationStatus("seven_zip_bin")}
+                                } catch (error) {
+                                  console.error("Failed to detect archive tool:", error);
+                                  toast.error("Detection failed", {
+                                    description: String(error),
+                                    duration: 4000,
+                                  });
+                                }
+                              }}
+                              style={{ padding: '0.5rem', minWidth: 'auto' }}
+                              title="Auto-detect 7-Zip or WinRAR"
+                            >
+                              <RefreshCw className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleFileSelect("seven_zip_bin")}
+                              style={{ padding: '0.5rem', minWidth: 'auto' }}
+                              title="Select file"
+                            >
+                              <Folder className="h-4 w-4" />
+                            </Button>
                           </div>
+                          {renderValidationStatus("seven_zip_bin")}
                         </div>
-                      </div>
-                    </section>
-
-                    {/* Nexus Integration */}
-                    <section
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: "24px",
-                      }}
-                    >
-                      <div style={{ marginBottom: "8px" }}>
-                        <h3 className="text-lg font-semibold">
-                          Nexus Integration
-                        </h3>
-                        <p className="text-sm text-muted-foreground">
-                          Keys are stored locally; clearing a field removes the
-                          value until re-entered.
-                        </p>
                       </div>
 
                       <div
                         style={{
                           display: "flex",
                           flexDirection: "column",
-                          gap: "20px",
+                          gap: "10px",
                         }}
                       >
-                        <div
-                          style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: "10px",
-                          }}
-                        >
-                          <Label htmlFor="nexus_api_key">Nexus API key</Label>
-                          <Input
-                            id="nexus_api_key"
-                            type="password"
-                            placeholder="••••••••••••••••"
-                            value={formValues.nexus_api_key}
-                            onChange={handleInputChange("nexus_api_key")}
-                          />
-                        </div>
-
-                        <div
-                          style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: "10px",
-                          }}
-                        >
-                          <Label htmlFor="aes_key_hex">AES key</Label>
-                          <Input
-                            id="aes_key_hex"
-                            type="password"
-                            placeholder="hex-encoded key"
-                            value={formValues.aes_key_hex}
-                            onChange={handleInputChange("aes_key_hex")}
-                          />
-                        </div>
-                      </div>
-                    </section>
-
-                    {/* Data Directory - Locked */}
-                    <section
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: "24px",
-                      }}
-                    >
-                      <div style={{ marginBottom: "8px" }}>
-                        <h3 className="text-lg font-semibold">
-                          Application Data
-                        </h3>
-                        <p className="text-sm text-muted-foreground">
-                          The data directory is automatically managed by the application.
-                        </p>
+                        <Label htmlFor="aes_key_hex">AES key</Label>
+                        <Input
+                          id="aes_key_hex"
+                          type="password"
+                          placeholder="hex-encoded key"
+                          value={formValues.aes_key_hex}
+                          onChange={handleInputChange("aes_key_hex")}
+                        />
                       </div>
 
                       <div
@@ -758,268 +781,268 @@ export function SettingsDialog({
                         </div>
                         {renderValidationStatus("data_dir")}
                       </div>
-                    </section>
+                    </div>
+                  </section>
 
-                    {/* NXM Protocol Registration */}
-                    <section>
-                      <NxmProtocolSettings />
-                    </section>
+                  {/* NXM Protocol Registration */}
+                  <section>
+                    <NxmProtocolSettings />
+                  </section>
+                </div>
+
+                {/* Right column (narrower - 1/3) */}
+                <div
+                  className="settings-right"
+                  style={{
+                    minWidth: 0,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "24px",
+                  }}
+                >
+                  <div style={{ marginBottom: "8px" }}>
+                    <h3 className="text-lg font-semibold">
+                      Maintenance Tasks
+                    </h3>
+                    <p className="text-sm text-muted-foreground">
+                      These scripts run on the backend and may take a moment;
+                      outputs are captured for review.
+                    </p>
                   </div>
 
-                  {/* Right column (narrower - 1/3) */}
                   <div
-                    className="settings-right"
                     style={{
-                      minWidth: 0,
                       display: "flex",
                       flexDirection: "column",
-                      gap: "24px",
+                      gap: "20px",
                     }}
                   >
-                    <div style={{ marginBottom: "8px" }}>
-                      <h3 className="text-lg font-semibold">
-                        Maintenance Tasks
-                      </h3>
-                      <p className="text-sm text-muted-foreground">
-                        These scripts run on the backend and may take a moment;
-                        outputs are captured for review.
-                      </p>
-                    </div>
-
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: "20px",
-                      }}
-                    >
-                      {TASKS.map((task) => {
-                        const result = taskJobs?.[task.key] ?? null;
-                        const isRunning = taskBusy === task.key;
-                        const rawStatus =
-                          result?.status ?? (isRunning ? "running" : null);
-                        const status =
-                          rawStatus === "pending" && isRunning
-                            ? "running"
-                            : rawStatus;
-                        const statusLabel =
-                          status === "succeeded"
-                            ? "Success"
-                            : status === "failed"
-                            ? "Failed"
-                            : status === "running"
-                            ? "Running"
-                            : status === "pending"
-                            ? "Pending"
-                            : result?.ok
-                            ? "Success"
-                            : "Idle";
-                        const statusTone =
-                          status === "failed"
-                            ? "font-medium text-red-600"
-                            : status === "succeeded"
-                            ? "font-medium text-green-600"
-                            : status === "running"
-                            ? "font-medium text-blue-600"
-                            : "font-medium text-muted-foreground";
-                        const startedAt = formatTimestamp(
-                          result?.started_at ?? null
-                        );
-                        const updatedAt = formatTimestamp(
-                          result?.updated_at ?? null
-                        );
-                        const finishedAt = formatTimestamp(
-                          result?.finished_at ?? null
-                        );
-                        const timestampSource =
-                          finishedAt || updatedAt || startedAt;
-                        const timestampPrefix = finishedAt
-                          ? "Finished"
-                          : updatedAt && status === "running"
-                          ? "Updated"
-                          : "Started";
-                        let durationSeconds: string | null = null;
-                        if (result?.status === "running" && result.started_at) {
-                          const started = new Date(result.started_at).getTime();
-                          if (!Number.isNaN(started)) {
-                            durationSeconds = (
-                              (Date.now() - started) /
-                              1000
-                            ).toFixed(2);
-                          }
-                        } else if (typeof result?.duration_ms === "number") {
-                          durationSeconds = Math.max(
-                            result.duration_ms / 1000,
-                            0
+                    {TASKS.map((task) => {
+                      const result = taskJobs?.[task.key] ?? null;
+                      const isRunning = taskBusy === task.key;
+                      const rawStatus =
+                        result?.status ?? (isRunning ? "running" : null);
+                      const status =
+                        rawStatus === "pending" && isRunning
+                          ? "running"
+                          : rawStatus;
+                      const statusLabel =
+                        status === "succeeded"
+                          ? "Success"
+                          : status === "failed"
+                          ? "Failed"
+                          : status === "running"
+                          ? "Running"
+                          : status === "pending"
+                          ? "Pending"
+                          : result?.ok
+                          ? "Success"
+                          : "Idle";
+                      const statusTone =
+                        status === "failed"
+                          ? "font-medium text-red-600"
+                          : status === "succeeded"
+                          ? "font-medium text-green-600"
+                          : status === "running"
+                          ? "font-medium text-blue-600"
+                          : "font-medium text-muted-foreground";
+                      const startedAt = formatTimestamp(
+                        result?.started_at ?? null
+                      );
+                      const updatedAt = formatTimestamp(
+                        result?.updated_at ?? null
+                      );
+                      const finishedAt = formatTimestamp(
+                        result?.finished_at ?? null
+                      );
+                      const timestampSource =
+                        finishedAt || updatedAt || startedAt;
+                      const timestampPrefix = finishedAt
+                        ? "Finished"
+                        : updatedAt && status === "running"
+                        ? "Updated"
+                        : "Started";
+                      let durationSeconds: string | null = null;
+                      if (result?.status === "running" && result.started_at) {
+                        const started = new Date(result.started_at).getTime();
+                        if (!Number.isNaN(started)) {
+                          durationSeconds = (
+                            (Date.now() - started) /
+                            1000
                           ).toFixed(2);
                         }
-                        const outputText = result?.output ?? "";
-                        const exitCodeText =
-                          typeof result?.exit_code === "number"
-                            ? ` (exit ${result.exit_code})`
-                            : "";
+                      } else if (typeof result?.duration_ms === "number") {
+                        durationSeconds = Math.max(
+                          result.duration_ms / 1000,
+                          0
+                        ).toFixed(2);
+                      }
+                      const outputText = result?.output ?? "";
+                      const exitCodeText =
+                        typeof result?.exit_code === "number"
+                          ? ` (exit ${result.exit_code})`
+                          : "";
 
-                        return (
+                      return (
+                        <div
+                          key={task.key}
+                          style={{
+                            borderRadius: "10px",
+                            border: "1px solid #333",
+                            padding: "16px",
+                            marginBottom: "4px",
+                          }}
+                        >
                           <div
-                            key={task.key}
                             style={{
-                              borderRadius: "10px",
-                              border: "1px solid #333",
-                              padding: "16px",
-                              marginBottom: "4px",
+                              display: "flex",
+                              alignItems: "flex-start",
+                              justifyContent: "space-between",
+                              gap: "12px",
                             }}
                           >
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <h4 className="text-sm font-medium leading-tight">
+                                {task.label}
+                              </h4>
+                              <p className="text-xs text-muted-foreground leading-snug">
+                                {task.description}
+                              </p>
+                            </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => onRunTask(task.key)}
+                              disabled={isRunning || !settings}
+                              style={{ marginLeft: "8px", minWidth: "72px" }}
+                            >
+                              {isRunning ? (
+                                <>
+                                  <Loader2
+                                    style={{
+                                      marginRight: "6px",
+                                      height: "18px",
+                                      width: "18px",
+                                    }}
+                                    className="animate-spin"
+                                  />
+                                  Running
+                                </>
+                              ) : (
+                                <>
+                                  <Play
+                                    style={{
+                                      marginRight: "6px",
+                                      height: "18px",
+                                      width: "18px",
+                                    }}
+                                  />
+                                  Run
+                                </>
+                              )}
+                            </Button>
+                          </div>
+
+                          {result ? (
                             <div
                               style={{
+                                marginTop: "16px",
                                 display: "flex",
-                                alignItems: "flex-start",
-                                justifyContent: "space-between",
+                                flexDirection: "column",
                                 gap: "12px",
                               }}
                             >
-                              <div style={{ minWidth: 0, flex: 1 }}>
-                                <h4 className="text-sm font-medium leading-tight">
-                                  {task.label}
-                                </h4>
-                                <p className="text-xs text-muted-foreground leading-snug">
-                                  {task.description}
-                                </p>
-                              </div>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="secondary"
-                                onClick={() => onRunTask(task.key)}
-                                disabled={isRunning || !settings}
-                                style={{ marginLeft: "8px", minWidth: "72px" }}
-                              >
-                                {isRunning ? (
-                                  <>
-                                    <Loader2
-                                      style={{
-                                        marginRight: "6px",
-                                        height: "18px",
-                                        width: "18px",
-                                      }}
-                                      className="animate-spin"
-                                    />
-                                    Running
-                                  </>
-                                ) : (
-                                  <>
-                                    <Play
-                                      style={{
-                                        marginRight: "6px",
-                                        height: "18px",
-                                        width: "18px",
-                                      }}
-                                    />
-                                    Run
-                                  </>
-                                )}
-                              </Button>
-                            </div>
-
-                            {result ? (
                               <div
                                 style={{
-                                  marginTop: "16px",
                                   display: "flex",
-                                  flexDirection: "column",
-                                  gap: "12px",
+                                  flexWrap: "wrap",
+                                  alignItems: "center",
+                                  gap: "10px",
+                                  fontSize: "13px",
                                 }}
                               >
-                                <div
-                                  style={{
-                                    display: "flex",
-                                    flexWrap: "wrap",
-                                    alignItems: "center",
-                                    gap: "10px",
-                                    fontSize: "13px",
-                                  }}
-                                >
-                                  <span>
-                                    Status:{" "}
-                                    <span className={statusTone}>
-                                      {status === "running" ? (
-                                        <>
-                                          <Loader2 className="mr-1 inline-block h-3 w-3 animate-spin" />
-                                          {statusLabel}
-                                        </>
-                                      ) : (
-                                        `${statusLabel}`
-                                      )}
-                                    </span>
-                                    {exitCodeText}
+                                <span>
+                                  Status:{" "}
+                                  <span className={statusTone}>
+                                    {status === "running" ? (
+                                      <>
+                                        <Loader2 className="mr-1 inline-block h-3 w-3 animate-spin" />
+                                        {statusLabel}
+                                      </>
+                                    ) : (
+                                      `${statusLabel}`
+                                    )}
                                   </span>
-                                  {timestampSource ? (
-                                    <span className="text-muted-foreground">
-                                      {timestampPrefix} {timestampSource}
-                                    </span>
-                                  ) : null}
-                                  {durationSeconds ? (
-                                    <span className="text-muted-foreground">
-                                      {result?.status === "running"
-                                        ? `Elapsed ${durationSeconds}s`
-                                        : `Duration ${durationSeconds}s`}
-                                    </span>
-                                  ) : null}
-                                </div>
-
-                                {result.error ? (
-                                  <div
-                                    style={{
-                                      borderRadius: "6px",
-                                      border: "1px solid #f99",
-                                      background: "#fff0f0",
-                                      padding: "10px",
-                                      fontSize: "12px",
-                                      color: "#b00",
-                                    }}
-                                  >
-                                    {result.error}
-                                  </div>
+                                  {exitCodeText}
+                                </span>
+                                {timestampSource ? (
+                                  <span className="text-muted-foreground">
+                                    {timestampPrefix} {timestampSource}
+                                  </span>
                                 ) : null}
+                                {durationSeconds ? (
+                                  <span className="text-muted-foreground">
+                                    {result?.status === "running"
+                                      ? `Elapsed ${durationSeconds}s`
+                                      : `Duration ${durationSeconds}s`}
+                                  </span>
+                                ) : null}
+                              </div>
 
+                              {result.error ? (
                                 <div
                                   style={{
-                                    display: "flex",
-                                    flexDirection: "column",
-                                    gap: "8px",
+                                    borderRadius: "6px",
+                                    border: "1px solid #f99",
+                                    background: "#fff0f0",
+                                    padding: "10px",
+                                    fontSize: "12px",
+                                    color: "#b00",
                                   }}
                                 >
-                                  <Label className="text-xs">Output</Label>
-                                  <TaskOutputSummary
-                                    task={task.key}
-                                    output={outputText}
-                                    isRunning={isRunning}
-                                    fallbackMinHeight="h-24"
-                                  />
+                                  {result.error}
                                 </div>
+                              ) : null}
+
+                              <div
+                                style={{
+                                  display: "flex",
+                                  flexDirection: "column",
+                                  gap: "8px",
+                                }}
+                              >
+                                <Label className="text-xs">Output</Label>
+                                <TaskOutputSummary
+                                  task={task.key}
+                                  output={outputText}
+                                  isRunning={isRunning}
+                                  fallbackMinHeight="h-24"
+                                />
                               </div>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                    </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
-              ) : (
-                <div className="flex h-48 items-center justify-center">
-                  {loading ? (
-                    <div className="inline-flex items-center text-sm text-muted-foreground">
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Loading settings…
-                    </div>
-                  ) : (
-                    <div className="text-sm text-muted-foreground">
-                      Settings are unavailable. Try reloading.
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </ScrollArea>
+              </div>
+            ) : (
+              <div className="flex h-48 items-center justify-center">
+                {loading ? (
+                  <div className="inline-flex items-center text-sm text-muted-foreground">
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Loading settings…
+                  </div>
+                ) : (
+                  <div className="text-sm text-muted-foreground">
+                    Settings are unavailable. Try reloading.
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* Footer - always visible at bottom */}
           <DialogFooter

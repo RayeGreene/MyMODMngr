@@ -13,6 +13,7 @@ interface TaskOutputSummaryProps {
   isRunning?: boolean;
   fallbackMinHeight?: string;
   showRawToggle?: boolean;
+  style?: React.CSSProperties;
 }
 
 export function TaskOutputSummary({
@@ -21,6 +22,7 @@ export function TaskOutputSummary({
   isRunning = false,
   fallbackMinHeight = "h-40",
   showRawToggle = true,
+  style,
 }: TaskOutputSummaryProps) {
   const trimmed = output?.trim() ?? "";
   const [showRaw, setShowRaw] = useState(false);
@@ -58,6 +60,7 @@ export function TaskOutputSummary({
           "rounded-md border border-dashed border-border/40 bg-muted/5 p-4 text-sm text-muted-foreground",
           fallbackMinHeight
         )}
+        style={style}
       >
         {isRunning ? "Waiting for output…" : "No output captured."}
       </div>
@@ -69,6 +72,7 @@ export function TaskOutputSummary({
       <Textarea
         readOnly
         className={cn("resize-y font-mono text-xs", fallbackMinHeight)}
+        style={style}
         value={trimmed}
         spellCheck={false}
       />
@@ -153,7 +157,7 @@ export function TaskOutputSummary({
   });
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" style={style}>
       <div className="rounded-lg border border-border/40 bg-muted/5 p-4">
         <div className="flex flex-col gap-2">{progressRows}</div>
       </div>
@@ -185,6 +189,7 @@ export function TaskOutputSummary({
         <Textarea
           readOnly
           className={cn("resize-y font-mono text-xs", fallbackMinHeight)}
+          style={style}
           value={trimmed}
           spellCheck={false}
         />

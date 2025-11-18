@@ -283,6 +283,95 @@ async fn detect_archive_tool() -> Result<serde_json::Value, String> {
     }
 }
 
+// Tauri command to detect Marvel Rivals game installation path
+#[tauri::command]
+async fn detect_marvel_rivals_path() -> Result<serde_json::Value, String> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        return Ok(serde_json::json!({
+            "success": false,
+            "message": "Marvel Rivals auto-detection is only supported on Windows",
+            "path": None::<String>
+        }));
+    }
+    
+    #[cfg(target_os = "windows")]
+    {
+        // Try Steam registry key first
+        if let Some(steam_path) = find_install_dir("steam") {
+            let steamapps_dir = Path::new(&steam_path).join("steamapps");
+            
+            if steamapps_dir.exists() {
+                // Look for common Marvel Rivals installation paths in Steam
+                let candidates = [
+                    steamapps_dir.join("common").join("MarvelRivals"),
+                    steamapps_dir.join("common").join("Marvel Rivals"),
+                    steamapps_dir.join("common").join("MarvelRivalsBeta"),
+                ];
+                
+                for candidate in &candidates {
+                    if candidate.exists() && candidate.is_dir() {
+                        // Verify this looks like a Marvel Rivals installation
+                        if candidate.join("MarvelRivals.exe").exists() || 
+                           candidate.join("MarvelRivals").exists() {
+                            return Ok(serde_json::json!({
+                                "success": true,
+                                "path": candidate.to_string_lossy().to_string(),
+                                "message": format!("Marvel Rivals found at: {}", candidate.display())
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Try Epic Games Store registry key
+        if let Some(epic_path) = find_install_dir("epic games") {
+            let epic_games_dir = Path::new(&epic_path);
+            
+            if epic_games_dir.exists() {
+                // Look for Marvel Rivals in Epic Games installations
+                let candidates = [
+                    epic_games_dir.join("MarvelRivals"),
+                    epic_games_dir.join("Marvel Rivals"),
+                ];
+                
+                for candidate in &candidates {
+                    if candidate.exists() && candidate.is_dir() {
+                        if candidate.join("MarvelRivals.exe").exists() || 
+                           candidate.join("MarvelRivals").exists() {
+                            return Ok(serde_json::json!({
+                                "success": true,
+                                "path": candidate.to_string_lossy().to_string(),
+                                "message": format!("Marvel Rivals found at: {}", candidate.display())
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Direct registry lookup for Marvel Rivals
+        if let Some(game_path) = find_install_dir("marvel rivals") {
+            let game_dir = Path::new(&game_path);
+            
+            if game_dir.exists() && game_dir.is_dir() {
+                return Ok(serde_json::json!({
+                    "success": true,
+                    "path": game_dir.to_string_lossy().to_string(),
+                    "message": format!("Marvel Rivals found at: {}", game_dir.display())
+                }));
+            }
+        }
+        
+        Ok(serde_json::json!({
+            "success": false,
+            "message": "Marvel Rivals installation not found. Please install via Steam or Epic Games Store, or set the path manually.",
+            "path": None::<String>
+        }))
+    }
+}
+
 // Tauri command to get archive tool information for Python backend
 #[tauri::command]
 fn get_archive_tool_info() -> Result<serde_json::Value, String> {
@@ -720,6 +809,7 @@ fn main() {
             select_folder_dialog,
             select_file_dialog,
             detect_archive_tool,
+            detect_marvel_rivals_path,
             get_archive_tool_info,
             get_sidecar_path
         ])
@@ -729,6 +819,7 @@ fn main() {
             select_folder_dialog,
             select_file_dialog,
             detect_archive_tool,
+            detect_marvel_rivals_path,
             get_sidecar_path
         ])
         .setup(|app| {
