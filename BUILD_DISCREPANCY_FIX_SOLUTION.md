@@ -31,7 +31,7 @@ exe = EXE(
 ```bash
 # Fixed: Run PyInstaller from project root with command-line distpath
 # Before: cd "$SPEC_DIR" && python -m PyInstaller rivalnxt_backend_merged.spec
-# After: python -m PyInstaller "$SPEC_FILE" --clean --noconfirm --debug all --distpath "$PROJECT_ROOT/src-tauri/sidecars"
+# After: python -m PyInstaller "$SPEC_FILE" --clean --noconfirm --distpath "$PROJECT_ROOT/src-tauri/sidecars"
 
 # Now: Direct verification of PyInstaller output
 if [ -f "$PROJECT_ROOT/src-tauri/sidecars/rivalnxt_backend" ]; then

@@ -130,10 +130,10 @@ echo "- scripts directory: $([ -d "scripts" ] && echo "EXISTS" || echo "MISSING"
 echo "- character_ids.json: $([ -f "character_ids.json" ] && echo "EXISTS" || echo "MISSING")"
 
 echo "Building with PyInstaller (verbose output)..."
-echo "Full command: python -m PyInstaller $SPEC_FILE --clean --noconfirm --debug all --distpath $PROJECT_ROOT/src-tauri/sidecars"
+echo "Full command: python -m PyInstaller $SPEC_FILE --clean --noconfirm --distpath $PROJECT_ROOT/src-tauri/sidecars"
 
 # Run PyInstaller and capture output
-python -m PyInstaller "$SPEC_FILE" --clean --noconfirm --debug all --distpath "$PROJECT_ROOT/src-tauri/sidecars"
+python -m PyInstaller "$SPEC_FILE" --clean --noconfirm --distpath "$PROJECT_ROOT/src-tauri/sidecars"
 PYINSTALLER_EXIT_CODE=$?
 
 echo "PyInstaller exit code: $PYINSTALLER_EXIT_CODE"
