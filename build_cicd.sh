@@ -100,9 +100,6 @@ SPEC_DIR=$(dirname "$SPEC_FILE")
 echo "Found spec file: $SPEC_FILE"
 echo "Spec file directory: $SPEC_DIR"
 
-# Change to the spec file directory so relative paths work correctly
-cd "$SPEC_DIR"
-
 # Test imports from the correct directory
 echo "Testing imports from correct directory..."
 python -c "
@@ -120,7 +117,7 @@ for imp in test_imports:
         print(f'FAIL: {imp}: {e}')
 "
 
-# Build using the spec file from the correct directory
+# Build using the spec file from the project root directory
 echo "=== DEBUG: Before PyInstaller Build ==="
 echo "Current directory: $(pwd)"
 echo "Contents of current directory:"
@@ -133,27 +130,51 @@ echo "- scripts directory: $([ -d "scripts" ] && echo "EXISTS" || echo "MISSING"
 echo "- character_ids.json: $([ -f "character_ids.json" ] && echo "EXISTS" || echo "MISSING")"
 
 echo "Building with PyInstaller (verbose output)..."
-python -m PyInstaller rivalnxt_backend_merged.spec --clean --noconfirm --debug all
+echo "Full command: python -m PyInstaller $SPEC_FILE --clean --noconfirm --debug all --distpath $PROJECT_ROOT/src-tauri/sidecars"
+
+# Run PyInstaller and capture output
+python -m PyInstaller "$SPEC_FILE" --clean --noconfirm --debug all --distpath "$PROJECT_ROOT/src-tauri/sidecars"
+PYINSTALLER_EXIT_CODE=$?
+
+echo "PyInstaller exit code: $PYINSTALLER_EXIT_CODE"
 
 # Look for the built executable with detailed debugging
 echo "=== DEBUG: After PyInstaller Build ==="
 echo "Current directory: $(pwd)"
 echo "Contents of current directory:"
-ls -la | grep -E "(dist|\.exe|build)"
+ls -la
 
-if [ -d "dist" ]; then
-    echo "Contents of dist/ directory:"
-    ls -la dist/
-    echo "Looking for .exe files in dist/:"
-    find dist/ -name "*.exe" -type f 2>/dev/null || echo "No .exe files found in dist/"
+# Check if sidecars directory was created
+if [ -d "sidecars" ]; then
+    echo "Contents of sidecars/ directory:"
+    ls -la sidecars/
+else
+    echo "WARNING: sidecars directory was not created in current directory"
+fi
+
+# Check project root sidecars
+if [ -d "$PROJECT_ROOT/src-tauri/sidecars" ]; then
+    echo "Contents of project sidecars directory:"
+    ls -la "$PROJECT_ROOT/src-tauri/sidecars/"
+else
+    echo "WARNING: Project sidecars directory does not exist"
+fi
+
+# Look for .exe files anywhere
+echo "Searching for .exe files in current directory tree:"
+find . -name "*.exe" -type f 2>/dev/null || echo "No .exe files found"
+
+if [ $PYINSTALLER_EXIT_CODE -ne 0 ]; then
+    echo "ERROR: PyInstaller failed with exit code $PYINSTALLER_EXIT_CODE"
+    exit 1
 fi
 
 # Create sidecars directory if it doesn't exist
 echo "Creating sidecars directory..."
-mkdir -p src-tauri/sidecars
+mkdir -p "$PROJECT_ROOT/src-tauri/sidecars"
 
 # Verify sidecars directory exists
-if [ -d "src-tauri/sidecars" ]; then
+if [ -d "$PROJECT_ROOT/src-tauri/sidecars" ]; then
     echo "OK: sidecars directory exists"
 else
     echo "ERROR: Failed to create sidecars directory!"

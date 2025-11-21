@@ -20,23 +20,18 @@ exe = EXE(
 )
 ```
 
-### 2. Simplified Build Script (`build_cicd.sh`)
-- **Removed**: Complex copy logic that was creating the wrong filename
+### 2. Fixed Build Script (`build_cicd.sh`)
+- **Fixed**: PyInstaller execution from project root (not spec file directory)
 - **Added**: Direct verification that PyInstaller outputs to the correct location
 - **Result**: Clean, direct path from PyInstaller output to Tauri bundle
 
 ### 3. Key Changes Made
 
-#### `rivalnxt_backend_merged.spec`:
-```python
-# Added distpath parameter to EXE configuration
-distpath=os.path.join(_project_root, 'src-tauri', 'sidecars'),
-```
-
 #### `build_cicd.sh`:
 ```bash
-# Removed: Manual copy with wrong filename
-# Before: cp "$BACKEND_SOURCE" "$PROJECT_ROOT/src-tauri/sidecars/rivalnxt_backend-x86_64-pc-windows-msvc.exe"
+# Fixed: Run PyInstaller from project root with command-line distpath
+# Before: cd "$SPEC_DIR" && python -m PyInstaller rivalnxt_backend_merged.spec
+# After: python -m PyInstaller "$SPEC_FILE" --clean --noconfirm --debug all --distpath "$PROJECT_ROOT/src-tauri/sidecars"
 
 # Now: Direct verification of PyInstaller output
 if [ -f "$PROJECT_ROOT/src-tauri/sidecars/rivalnxt_backend" ]; then
@@ -48,19 +43,31 @@ else
 fi
 ```
 
+### 4. Final Implementation Details
+- **PyInstaller Command**: Uses `--distpath` CLI argument for reliable path resolution
+- **Working Directory**: Run from project root with full spec file path
+- **Verification**: Clear error messages and file size reporting
+
 ## Expected Result
 With these changes, the GitHub Actions workflow should now produce ~114MB artifacts that include both the frontend and backend, matching the local build size.
 
 ## Build Flow
-1. **PyInstaller**: Builds backend and outputs directly to `src-tauri/sidecars/rivalnxt_backend`
+1. **PyInstaller**: Builds backend and outputs directly to `src-tauri/sidecars/rivalnxt_backend` using `--distpath`
 2. **Tauri**: Finds backend at expected path and bundles it into the installer
 3. **Result**: Complete application with both frontend and backend included
 
-## Verification
-The build script now includes clear verification steps:
-- Creates `src-tauri/sidecars/` directory
-- Verifies the backend file exists at the exact path Tauri expects
-- Provides clear error messages if the file is missing
-- Shows file size and location for debugging
+## Enhanced Debugging
+The build script now includes comprehensive debugging:
+- **PyInstaller Exit Code**: Captures and reports PyInstaller success/failure
+- **Directory Contents**: Shows what's in both current directory and sidecars
+- **File Search**: Looks for .exe files anywhere in the directory tree
+- **Command Display**: Shows the exact PyInstaller command being run
 
-This solution eliminates the manual copy step and ensures the backend is placed exactly where Tauri needs it, with the correct filename.
+## Troubleshooting
+If PyInstaller still fails, the enhanced debugging will reveal:
+- Whether PyInstaller completed successfully
+- Where the executable was actually created (if at all)
+- Any build errors or warnings
+- Directory structure after the build attempt
+
+This solution eliminates the manual copy step and ensures the backend is placed exactly where Tauri needs it, with comprehensive debugging to identify any remaining issues.

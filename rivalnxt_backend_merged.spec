@@ -96,6 +96,4 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    # Output directly to Tauri sidecars directory
-    distpath=os.path.join(_project_root, 'src-tauri', 'sidecars'),
 )
