@@ -78,95 +78,22 @@ for imp in test_imports:
         print(f'FAIL: {imp}: {e}')
 "
 
-# Determine the correct script path (handle nested directory structure)
-echo "Looking for run_server.py script file..."
-find . -name "run_server.py" -type f 2>/dev/null | while read -r script_file; do
-    if [ -f "$script_file" ]; then
-        SCRIPT_PATH="$script_file"
-        echo "Found script at: $SCRIPT_PATH"
-        
-        # Extract base directory from found script path for data files
-        DATA_BASE=$(dirname "$(dirname "$SCRIPT_PATH")")
-        echo "Using data base: $DATA_BASE"
-        break
-    fi
-done
+# Use the comprehensive spec file that already has all configurations
+echo "Using rivalnxt_backend_merged.spec for PyInstaller build..."
+echo "Current directory: $(pwd)"
 
-if [ -z "$SCRIPT_PATH" ]; then
-    echo "ERROR: Cannot find run_server.py script file!"
-    echo "Current directory: $(pwd)"
+# Check if spec file exists
+if [ ! -f "rivalnxt_backend_merged.spec" ]; then
+    echo "ERROR: rivalnxt_backend_merged.spec file not found!"
+    echo "Looking for spec files:"
+    find . -name "*.spec" -type f
     exit 1
 fi
 
-# Data base directory is already determined from script path above
+echo "Found spec file: rivalnxt_backend_merged.spec"
 
-# Comprehensive PyInstaller build with all needed hidden imports
-python -m PyInstaller \
-    --noconfirm \
-    --clean \
-    --onefile \
-    --exclude-module PyQt5 \
-    --exclude-module PyQt6 \
-    --collect-data core.db.migrations \
-    --add-data "${DATA_BASE}/core:core" \
-    --add-data "${DATA_BASE}/scripts:scripts" \
-    --add-data "${DATA_BASE}/character_ids.json:." \
-    --hidden-import fastapi \
-    --hidden-import fastapi.middleware \
-    --hidden-import fastapi.middleware.cors \
-    --hidden-import fastapi.middleware.trustedhost \
-    --hidden-import fastapi.middleware.gzip \
-    --hidden-import fastapi.responses \
-    --hidden-import fastapi.routing \
-    --hidden-import fastapi.applications \
-    --hidden-import fastapi.dependencies \
-    --hidden-import uvicorn \
-    --hidden-import requests \
-    --hidden-import python_multipart \
-    --hidden-import pydantic \
-    --hidden-import psutil \
-    --hidden-import py7zr \
-    --hidden-import rarfile \
-    --hidden-import core \
-    --hidden-import core.api \
-    --hidden-import core.api.server \
-    --hidden-import core.api.dependencies \
-    --hidden-import core.api.services \
-    --hidden-import core.api.services.handoffs \
-    --hidden-import core.assets \
-    --hidden-import core.assets.zip_to_asset_paths \
-    --hidden-import core.db \
-    --hidden-import core.db.db \
-    --hidden-import core.db.queries \
-    --hidden-import core.db.conflicts \
-    --hidden-import core.ingestion \
-    --hidden-import core.ingestion.scan_active_mods \
-    --hidden-import core.ingestion.scan_mod_downloads \
-    --hidden-import core.nexus \
-    --hidden-import core.nexus.nexus_api \
-    --hidden-import core.nexus.nxm \
-    --hidden-import core.utils \
-    --hidden-import core.utils.archive \
-    --hidden-import core.utils.download_paths \
-    --hidden-import core.utils.pak_files \
-    --hidden-import core.utils.mod_filename \
-    --hidden-import core.utils.nexus_metadata \
-    --hidden-import core.utils.nxm_protocol \
-    --hidden-import core.utils.nxm_registration \
-    --hidden-import core.config \
-    --hidden-import core.config.settings \
-    --hidden-import field_prefs \
-    --hidden-import scripts \
-    --hidden-import scripts.activate_mods \
-    --hidden-import scripts.deactivate_mods \
-    --hidden-import scripts.sync_nexus_to_db \
-    --hidden-import scripts.rebuild_tags \
-    --hidden-import scripts.rebuild_sqlite \
-    --hidden-import scripts.ingest_download_assets \
-    --hidden-import scripts.build_asset_tags \
-    --hidden-import scripts.build_pak_tags \
-    --name rivalnxt_backend \
-    "$SCRIPT_PATH"
+# Build using the spec file
+python -m PyInstaller rivalnxt_backend_merged.spec --clean --noconfirm
 
 # Look for the built executable
 echo "Checking for built executable..."
@@ -178,6 +105,8 @@ elif [ -f "rivalnxt_backend.exe" ]; then
     echo "OK: Found backend in current dir: $BACKEND_SOURCE"
 else
     echo "ERROR: Backend executable not found!"
+    echo "Contents of current directory:"
+    ls -la | grep -E "(dist|\.exe)"
     echo "Contents of dist/ directory:"
     ls -la dist/ 2>/dev/null || echo "No dist/ directory found"
     exit 1
