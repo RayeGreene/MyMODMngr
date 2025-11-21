@@ -88,7 +88,7 @@ for imp in test_imports:
         print(f'FAIL: {imp}: {e}')
 "
 
-# Determine the correct script path
+# Determine the correct script path (handle nested directory structure)
 SCRIPT_PATH="src-python/run_server.py"
 if [ ! -f "$SCRIPT_PATH" ]; then
     echo "Trying alternative path..."
@@ -96,11 +96,29 @@ if [ ! -f "$SCRIPT_PATH" ]; then
 fi
 
 if [ ! -f "$SCRIPT_PATH" ]; then
+    echo "Trying nested directory path..."
+    SCRIPT_PATH="RivalNxt/src-python/run_server.py"
+fi
+
+if [ ! -f "$SCRIPT_PATH" ]; then
     echo "ERROR: Cannot find run_server.py script file!"
+    echo "Current directory: $(pwd)"
+    echo "Looking for file..."
+    find . -name "run_server.py" -type f 2>/dev/null || echo "No run_server.py found"
     exit 1
 fi
 
 echo "Using script path: $SCRIPT_PATH"
+
+# Determine the correct data paths (handle nested directory structure)
+DATA_BASE=""
+if [ -d "RivalNxt" ]; then
+    DATA_BASE="RivalNxt"
+    echo "Detected nested directory structure, using base: $DATA_BASE"
+else
+    DATA_BASE="."
+    echo "Using current directory as base: $DATA_BASE"
+fi
 
 # Comprehensive PyInstaller build with all needed hidden imports
 python -m PyInstaller \
@@ -110,9 +128,9 @@ python -m PyInstaller \
     --exclude-module PyQt5 \
     --exclude-module PyQt6 \
     --collect-data core.db.migrations \
-    --add-data "core:core" \
-    --add-data "scripts:scripts" \
-    --add-data "character_ids.json:." \
+    --add-data "${DATA_BASE}/core:core" \
+    --add-data "${DATA_BASE}/scripts:scripts" \
+    --add-data "${DATA_BASE}/character_ids.json:." \
     --hidden-import fastapi \
     --hidden-import fastapi.middleware \
     --hidden-import fastapi.middleware.cors \
