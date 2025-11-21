@@ -30,6 +30,7 @@ else
 fi
 
 echo Found backend at: $BACKEND_SOURCE
+ls -lh "$BACKEND_SOURCE"
 
 # Create sidecars directory if it doesn't exist
 mkdir -p src-tauri/sidecars

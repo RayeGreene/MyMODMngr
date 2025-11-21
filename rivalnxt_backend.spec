@@ -1,5 +1,13 @@
 import os
+import sys
 from PyInstaller.utils.hooks import collect_data_files
+
+# DEBUG: Print current working directory and list files to verify environment
+print(f"DEBUG: CWD is {os.getcwd()}")
+try:
+    print(f"DEBUG: Files in CWD: {os.listdir(os.getcwd())}")
+except Exception as e:
+    print(f"DEBUG: Could not list files: {e}")
 
 datas = []
 datas += collect_data_files('core.db.migrations')
@@ -7,7 +15,7 @@ datas += collect_data_files('core.db.migrations')
 
 a = Analysis(
     ['src-python\\run_server.py'],
-    pathex=[os.getcwd()],
+    pathex=['.'],
     binaries=[],
     datas=datas,
     hiddenimports=[],
