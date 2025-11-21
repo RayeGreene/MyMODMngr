@@ -4,6 +4,10 @@ echo Building RivalNxt for CI/CD...
 # Set environment for CI
 export CI=true
 
+# Store project root directory for later use
+PROJECT_ROOT=$(pwd)
+echo "Project root directory: $PROJECT_ROOT"
+
 # Build PyO3 library with proper error handling
 echo Building PyO3 library...
 cd src-tauri/src/rust-ue-tools
@@ -140,12 +144,25 @@ fi
 echo Found backend at: $BACKEND_SOURCE
 ls -lh "$BACKEND_SOURCE"
 
+# Go back to project root for copy operation
+cd "$PROJECT_ROOT"
+
 # Create sidecars directory if it doesn't exist
 mkdir -p src-tauri/sidecars
 
-# Copy backend to Tauri sidecars
-cp "$BACKEND_SOURCE" src-tauri/sidecars/rivalnxt_backend-x86_64-pc-windows-msvc.exe
-echo Backend copied to sidecars
+# Copy backend to Tauri sidecars using full path
+cp "$BACKEND_SOURCE" "$PROJECT_ROOT/src-tauri/sidecars/rivalnxt_backend-x86_64-pc-windows-msvc.exe"
+echo "Backend copied to: $PROJECT_ROOT/src-tauri/sidecars/rivalnxt_backend-x86_64-pc-windows-msvc.exe"
+
+# Debug: Verify the copy worked
+echo "=== DEBUG: Verifying backend copy ==="
+ls -lh "$PROJECT_ROOT/src-tauri/sidecars/"
+
+# Check Tauri config expects the right filename
+echo "=== DEBUG: Tauri config check ==="
+echo "Tauri expects: externalBin = ['sidecars/rivalnxt_backend']"
+echo "Our file: $PROJECT_ROOT/src-tauri/sidecars/rivalnxt_backend-x86_64-pc-windows-msvc.exe"
+ls -lh "$PROJECT_ROOT/src-tauri/sidecars/rivalnxt_backend-x86_64-pc-windows-msvc.exe"
 
 # Build Tauri application
 echo Building Tauri application...
