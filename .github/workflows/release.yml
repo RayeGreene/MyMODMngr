@@ -37,21 +37,8 @@ jobs:
           pip install maturin pyinstaller
           pip install -r requirements.txt
 
-      - name: Build PyO3 library
-        shell: bash
-        run: |
-          cd src-tauri/src/rust-ue-tools
-          maturin build --features pyo3 --release --out ../../../target/wheels
-          pip install --force-reinstall ../../../target/wheels/*.whl
-          cd ../../..
-
-      - name: Build Python Backend
-        run: |
-          pyinstaller rivalnxt_backend.spec --clean --noconfirm
-          npm run py:copy
-
-      - name: Build Tauri App
-        run: npm run tauri:build
+      - name: Build Application (CI/CD)
+        run: npm run build:ci
 
       - name: Upload Release Assets (MSI)
         if: github.event_name == 'release'
