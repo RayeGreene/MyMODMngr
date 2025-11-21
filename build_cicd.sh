@@ -13,28 +13,28 @@ ls -la
 
 # Try to build PyO3, but make sure we have a wheel one way or another
 if maturin build --features pyo3 --release --out ../../../target/wheels; then
-    echo "✓ PyO3 library build succeeded"
+    echo "OK: PyO3 library build succeeded"
     pip install --force-reinstall ../../../target/wheels/*.whl
     if [ $? -eq 0 ]; then
-        echo "✓ PyO3 wheel installed successfully"
+        echo "OK: PyO3 wheel installed successfully"
     else
-        echo "✗ PyO3 wheel installation failed"
+        echo "FAIL: PyO3 wheel installation failed"
         exit 1
     fi
 else
-    echo "✗ PyO3 library build failed"
+    echo "FAIL: PyO3 library build failed"
     echo "Trying to install pre-extracted wheel as fallback..."
     if [ -d "../../../extracted_wheel" ]; then
         echo "Found extracted wheel, installing..."
         pip install --force-reinstall ../../../extracted_wheel/*.whl
         if [ $? -eq 0 ]; then
-            echo "✓ Pre-extracted wheel installed successfully"
+            echo "OK: Pre-extracted wheel installed successfully"
         else
-            echo "✗ Pre-extracted wheel installation failed"
+            echo "FAIL: Pre-extracted wheel installation failed"
             exit 1
         fi
     else
-        echo "✗ No PyO3 wheel available - this will cause import failures"
+        echo "FAIL: No PyO3 wheel available - this will cause import failures"
         exit 1
     fi
 fi
@@ -44,9 +44,9 @@ echo "Testing PyO3 import..."
 python -c "
 try:
     import rust_ue_tools
-    print('✓ rust_ue_tools import successful')
+    print('OK: rust_ue_tools import successful')
 except ImportError as e:
-    print(f'✗ rust_ue_tools import failed: {e}')
+    print(f'FAIL: rust_ue_tools import failed: {e}')
     print('This will cause server.py imports to fail!')
     exit(1)
 "
@@ -56,6 +56,18 @@ cd ../../../..
 # Build Python backend using direct PyInstaller command (more reliable than spec file)
 echo Building Python backend with PyInstaller...
 echo "Current directory: $(pwd)"
+echo "Files in current directory:"
+ls -la
+echo "Checking for script file..."
+if [ -f "src-python/run_server.py" ]; then
+    echo "Found script at: src-python/run_server.py"
+elif [ -f "src/python/run_server.py" ]; then
+    echo "Found script at: src/python/run_server.py" 
+else
+    echo "Script file not found!"
+    find . -name "run_server.py" -type f
+    exit 1
+fi
 echo "Python path:"
 python -c "import sys; print('\n'.join(sys.path))"
 
@@ -71,10 +83,24 @@ test_imports = [
 for imp in test_imports:
     try:
         __import__(imp)
-        print(f'✓ {imp}')
+        print(f'OK: {imp}')
     except Exception as e:
-        print(f'✗ {imp}: {e}')
+        print(f'FAIL: {imp}: {e}')
 "
+
+# Determine the correct script path
+SCRIPT_PATH="src-python/run_server.py"
+if [ ! -f "$SCRIPT_PATH" ]; then
+    echo "Trying alternative path..."
+    SCRIPT_PATH="src/python/run_server.py"
+fi
+
+if [ ! -f "$SCRIPT_PATH" ]; then
+    echo "ERROR: Cannot find run_server.py script file!"
+    exit 1
+fi
+
+echo "Using script path: $SCRIPT_PATH"
 
 # Comprehensive PyInstaller build with all needed hidden imports
 python -m PyInstaller \
@@ -142,7 +168,7 @@ python -m PyInstaller \
     --hidden-import scripts.build_asset_tags \
     --hidden-import scripts.build_pak_tags \
     --name rivalnxt_backend \
-    src-python/run_server.py
+    "$SCRIPT_PATH"
 
 # Look for the built executable
 echo "Checking for built executable..."
