@@ -56,6 +56,7 @@ clap = { version = "4.0", features = ["derive", "cargo"] }
 [features]
 default = []
 python-bindings = []
+pyo3 = []
 
 [profile.release]
 opt-level = 3
