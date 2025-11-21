@@ -61,7 +61,7 @@ _hiddenimports.extend([
 _project_root = os.path.abspath('.')
 
 a = Analysis(
-    ['src-python\\run_server.py'],
+    ['src-python/run_server.py'],
     pathex=[_project_root],
     binaries=[],
     datas=datas,
@@ -96,4 +96,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    # Output directly to Tauri sidecars directory
+    distpath=os.path.join(_project_root, 'src-tauri', 'sidecars'),
 )

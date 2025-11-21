@@ -121,48 +121,67 @@ for imp in test_imports:
 "
 
 # Build using the spec file from the correct directory
-echo "Building from correct directory: $(pwd)"
-python -m PyInstaller rivalnxt_backend_merged.spec --clean --noconfirm
+echo "=== DEBUG: Before PyInstaller Build ==="
+echo "Current directory: $(pwd)"
+echo "Contents of current directory:"
+ls -la
 
-# Look for the built executable
-echo "Checking for built executable..."
-if [ -f "dist/rivalnxt_backend.exe" ]; then
-    BACKEND_SOURCE="dist/rivalnxt_backend.exe"
-    echo "OK: Found backend in dist/: $BACKEND_SOURCE"
-elif [ -f "rivalnxt_backend.exe" ]; then
-    BACKEND_SOURCE="rivalnxt_backend.exe"
-    echo "OK: Found backend in current dir: $BACKEND_SOURCE"
-else
-    echo "ERROR: Backend executable not found!"
-    echo "Contents of current directory:"
-    ls -la | grep -E "(dist|\.exe)"
+echo "Checking if required files exist:"
+echo "- src-python/run_server.py: $([ -f "src-python/run_server.py" ] && echo "EXISTS" || echo "MISSING")"
+echo "- core directory: $([ -d "core" ] && echo "EXISTS" || echo "MISSING")"
+echo "- scripts directory: $([ -d "scripts" ] && echo "EXISTS" || echo "MISSING")"
+echo "- character_ids.json: $([ -f "character_ids.json" ] && echo "EXISTS" || echo "MISSING")"
+
+echo "Building with PyInstaller (verbose output)..."
+python -m PyInstaller rivalnxt_backend_merged.spec --clean --noconfirm --debug all
+
+# Look for the built executable with detailed debugging
+echo "=== DEBUG: After PyInstaller Build ==="
+echo "Current directory: $(pwd)"
+echo "Contents of current directory:"
+ls -la | grep -E "(dist|\.exe|build)"
+
+if [ -d "dist" ]; then
     echo "Contents of dist/ directory:"
-    ls -la dist/ 2>/dev/null || echo "No dist/ directory found"
+    ls -la dist/
+    echo "Looking for .exe files in dist/:"
+    find dist/ -name "*.exe" -type f 2>/dev/null || echo "No .exe files found in dist/"
+fi
+
+# Create sidecars directory if it doesn't exist
+echo "Creating sidecars directory..."
+mkdir -p src-tauri/sidecars
+
+# Verify sidecars directory exists
+if [ -d "src-tauri/sidecars" ]; then
+    echo "OK: sidecars directory exists"
+else
+    echo "ERROR: Failed to create sidecars directory!"
     exit 1
 fi
 
-echo Found backend at: $BACKEND_SOURCE
-ls -lh "$BACKEND_SOURCE"
+# Go back to project root for final verification
+echo "=== DEBUG: About to verify PyInstaller output ==="
+echo "Project root: $PROJECT_ROOT"
+echo "Current directory: $(pwd)"
 
-# Go back to project root for copy operation
 cd "$PROJECT_ROOT"
-
-# Create sidecars directory if it doesn't exist
-mkdir -p src-tauri/sidecars
-
-# Copy backend to Tauri sidecars using full path
-cp "$BACKEND_SOURCE" "$PROJECT_ROOT/src-tauri/sidecars/rivalnxt_backend-x86_64-pc-windows-msvc.exe"
-echo "Backend copied to: $PROJECT_ROOT/src-tauri/sidecars/rivalnxt_backend-x86_64-pc-windows-msvc.exe"
-
-# Debug: Verify the copy worked
-echo "=== DEBUG: Verifying backend copy ==="
-ls -lh "$PROJECT_ROOT/src-tauri/sidecars/"
 
 # Check Tauri config expects the right filename
 echo "=== DEBUG: Tauri config check ==="
 echo "Tauri expects: externalBin = ['sidecars/rivalnxt_backend']"
-echo "Our file: $PROJECT_ROOT/src-tauri/sidecars/rivalnxt_backend-x86_64-pc-windows-msvc.exe"
-ls -lh "$PROJECT_ROOT/src-tauri/sidecars/rivalnxt_backend-x86_64-pc-windows-msvc.exe"
+echo "Expected file: $PROJECT_ROOT/src-tauri/sidecars/rivalnxt_backend"
+
+# Verify the backend was built directly to the correct location
+if [ -f "$PROJECT_ROOT/src-tauri/sidecars/rivalnxt_backend" ]; then
+    echo "SUCCESS: Backend file is present in sidecars directory!"
+    ls -lh "$PROJECT_ROOT/src-tauri/sidecars/rivalnxt_backend"
+else
+    echo "ERROR: Backend file is NOT present in sidecars directory!"
+    echo "Contents of sidecars directory:"
+    ls -la "$PROJECT_ROOT/src-tauri/sidecars/"
+    exit 1
+fi
 
 # Build Tauri application
 echo Building Tauri application...
