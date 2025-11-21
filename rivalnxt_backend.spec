@@ -1,4 +1,4 @@
-# -*- mode: python ; coding: utf-8 -*-
+import os
 from PyInstaller.utils.hooks import collect_data_files
 
 datas = []
@@ -7,7 +7,7 @@ datas += collect_data_files('core.db.migrations')
 
 a = Analysis(
     ['src-python\\run_server.py'],
-    pathex=[],
+    pathex=[os.getcwd()],
     binaries=[],
     datas=datas,
     hiddenimports=[],
