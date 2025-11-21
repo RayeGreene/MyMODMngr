@@ -13,7 +13,7 @@ cd ../../..
 
 # Build Python backend using spec file
 echo Building Python backend with PyInstaller...
-pyinstaller rivalnxt_backend.spec --clean --noconfirm
+pyinstaller rivalnxt_backend_merged.spec --clean --noconfirm
 
 # CI/CD specific copy logic - PyInstaller with spec file puts output in current directory
 if [ -f "dist/rivalnxt_backend.exe" ]; then
