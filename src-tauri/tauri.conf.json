@@ -13,13 +13,7 @@
     "active": true,
     "targets": ["nsis"],
     "icon": ["icons/frontendlogo.ico"],
-    "resources": [
-      "../public/icons/kofi.svg",
-      "../public/icons/upi.svg",
-      "../public/icons/qr.png",
-      "sidecars/repak.exe",
-      "sidecars/retoc_cli.exe"
-    ],
+    "resources": [],
     "externalBin": ["sidecars/rivalnxt_backend"],
     "windows": {}
   },

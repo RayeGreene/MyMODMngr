@@ -42,8 +42,6 @@ const EMPTY_VALUES: SettingsFormValues = {
   nexus_api_key: "",
   aes_key_hex: "",
   allow_direct_api_downloads: false,
-  repak_bin: "",
-  retoc_cli: "",
   seven_zip_bin: "",
 };
 
@@ -106,8 +104,6 @@ export function GetStartedDialog({
         nexus_api_key: settings.nexus_api_key ?? "",
         aes_key_hex: settings.aes_key_hex ?? "",
         allow_direct_api_downloads: settings.allow_direct_api_downloads,
-        repak_bin: settings.repak_bin ?? "",
-        retoc_cli: settings.retoc_cli ?? "",
         seven_zip_bin: settings.seven_zip_bin ?? "",
       });
 
@@ -115,56 +111,6 @@ export function GetStartedDialog({
       const autoDetectSidecars = async () => {
         // Add a small delay to ensure backend is ready
         setTimeout(async () => {
-          try {
-            // Try to get repak path
-            if (!settings.repak_bin || settings.repak_bin.trim() === "") {
-              try {
-                const repakResult = await invoke<string>("get_sidecar_path", {
-                  sidecarName: "repak",
-                });
-                if (repakResult && repakResult.trim() !== "") {
-                  setFormValues((prev) => ({
-                    ...prev,
-                    repak_bin: repakResult,
-                  }));
-                  toast.success("repak.exe detected", {
-                    description: `Found bundled: ${repakResult}`,
-                    duration: 4000,
-                  });
-                }
-              } catch (error) {
-                console.log("repak sidecar detection failed:", error);
-              }
-            }
-          } catch (error) {
-            console.log("Error in repak detection:", error);
-          }
-
-          try {
-            // Try to get retoc_cli path
-            if (!settings.retoc_cli || settings.retoc_cli.trim() === "") {
-              try {
-                const retocResult = await invoke<string>("get_sidecar_path", {
-                  sidecarName: "retoc_cli",
-                });
-                if (retocResult && retocResult.trim() !== "") {
-                  setFormValues((prev) => ({
-                    ...prev,
-                    retoc_cli: retocResult,
-                  }));
-                  toast.success("retoc_cli.exe detected", {
-                    description: `Found bundled: ${retocResult}`,
-                    duration: 4000,
-                  });
-                }
-              } catch (error) {
-                console.log("retoc_cli sidecar detection failed:", error);
-              }
-            }
-          } catch (error) {
-            console.log("Error in retoc_cli detection:", error);
-          }
-
           // Auto-detect archive tool if seven_zip_bin is not set
           if (!settings.seven_zip_bin || settings.seven_zip_bin.trim() === "") {
             try {
@@ -316,8 +262,6 @@ export function GetStartedDialog({
         "data_dir",
         "marvel_rivals_root",
         "marvel_rivals_local_downloads_root",
-        "repak_bin",
-        "retoc_cli",
       ]);
 
       if (!pathFields.has(field) || !value.trim()) {
@@ -446,11 +390,7 @@ export function GetStartedDialog({
       const result = await invoke<string>("select_file_dialog", {
         defaultPath: null,
         filterExtensions:
-          field === "repak_bin" ||
-          field === "retoc_cli" ||
-          field === "seven_zip_bin"
-            ? ["exe", "bat", "cmd", "msi"]
-            : ["*"],
+          field === "seven_zip_bin" ? ["exe", "bat", "cmd", "msi"] : ["*"],
       });
 
       if (result) {
@@ -799,116 +739,6 @@ export function GetStartedDialog({
                         {pathCheckResults.marvel_rivals_root.message}
                       </p>
                     )}
-                  </div>
-
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div className="space-y-2">
-                      <Label htmlFor="repak_bin">repak executable</Label>
-                      <div
-                        style={{
-                          display: "flex",
-                          gap: "0.5rem",
-                          alignItems: "center",
-                        }}
-                      >
-                        <Input
-                          id="repak_bin"
-                          placeholder="...\repak.exe"
-                          value={formValues.repak_bin}
-                          onChange={handleInputChange("repak_bin")}
-                          className="flex-1"
-                        />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleFileSelect("repak_bin")}
-                          style={{ padding: "0.5rem", minWidth: "auto" }}
-                          title="Select file"
-                        >
-                          <Folder className="h-4 w-4" />
-                        </Button>
-                      </div>
-                      {pathCheckResults.repak_bin && (
-                        <p
-                          style={{
-                            fontSize: "0.75rem",
-                            color: pathCheckResults.repak_bin.ok
-                              ? "#059669"
-                              : "#dc2626",
-                            marginTop: "0.25rem",
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "0.25rem",
-                          }}
-                        >
-                          {pathCheckResults.repak_bin.ok ? (
-                            <CheckCircle
-                              style={{ width: "0.875rem", height: "0.875rem" }}
-                            />
-                          ) : (
-                            <AlertCircle
-                              style={{ width: "0.875rem", height: "0.875rem" }}
-                            />
-                          )}
-                          {pathCheckResults.repak_bin.message}
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="retoc_cli">retoc CLI</Label>
-                      <div
-                        style={{
-                          display: "flex",
-                          gap: "0.5rem",
-                          alignItems: "center",
-                        }}
-                      >
-                        <Input
-                          id="retoc_cli"
-                          placeholder="...\retoc.exe"
-                          value={formValues.retoc_cli}
-                          onChange={handleInputChange("retoc_cli")}
-                          className="flex-1"
-                        />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleFileSelect("retoc_cli")}
-                          style={{ padding: "0.5rem", minWidth: "auto" }}
-                          title="Select file"
-                        >
-                          <Folder className="h-4 w-4" />
-                        </Button>
-                      </div>
-                      {pathCheckResults.retoc_cli && (
-                        <p
-                          style={{
-                            fontSize: "0.75rem",
-                            color: pathCheckResults.retoc_cli.ok
-                              ? "#059669"
-                              : "#dc2626",
-                            marginTop: "0.25rem",
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "0.25rem",
-                          }}
-                        >
-                          {pathCheckResults.retoc_cli.ok ? (
-                            <CheckCircle
-                              style={{ width: "0.875rem", height: "0.875rem" }}
-                            />
-                          ) : (
-                            <AlertCircle
-                              style={{ width: "0.875rem", height: "0.875rem" }}
-                            />
-                          )}
-                          {pathCheckResults.retoc_cli.message}
-                        </p>
-                      )}
-                    </div>
                   </div>
 
                   <div className="space-y-2">

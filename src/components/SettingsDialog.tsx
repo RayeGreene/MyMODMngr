@@ -38,8 +38,6 @@ export type SettingsFormValues = {
   nexus_api_key: string;
   aes_key_hex: string;
   allow_direct_api_downloads: boolean;
-  repak_bin: string;
-  retoc_cli: string;
   seven_zip_bin: string;
 };
 
@@ -63,8 +61,6 @@ const EMPTY_SETTINGS: SettingsFormValues = {
   nexus_api_key: "",
   aes_key_hex: "",
   allow_direct_api_downloads: false,
-  repak_bin: "",
-  retoc_cli: "",
   seven_zip_bin: "",
 };
 
@@ -147,55 +143,13 @@ export function SettingsDialog({
         nexus_api_key: settings.nexus_api_key ?? "",
         aes_key_hex: settings.aes_key_hex ?? "",
         allow_direct_api_downloads: settings.allow_direct_api_downloads,
-        repak_bin: settings.repak_bin ?? "",
-        retoc_cli: settings.retoc_cli ?? "",
         seven_zip_bin: settings.seven_zip_bin ?? "",
       });
-      
+
       // Auto-detect sidecars if not set
       const autoDetectSidecars = async () => {
         // Add a small delay to ensure backend is ready
         setTimeout(async () => {
-          try {
-            // Try to get repak path
-            if (!settings.repak_bin || settings.repak_bin.trim() === "") {
-              try {
-                const repakResult = await invoke<string>("get_sidecar_path", { sidecarName: "repak" });
-                if (repakResult && repakResult.trim() !== "") {
-                  setFormValues((prev) => ({ ...prev, repak_bin: repakResult }));
-                  toast.success("repak.exe detected", {
-                    description: `Found bundled: ${repakResult}`,
-                    duration: 4000,
-                  });
-                }
-              } catch (error) {
-                console.log("repak sidecar detection failed:", error);
-              }
-            }
-          } catch (error) {
-            console.log("Error in repak detection:", error);
-          }
-
-          try {
-            // Try to get retoc_cli path
-            if (!settings.retoc_cli || settings.retoc_cli.trim() === "") {
-              try {
-                const retocResult = await invoke<string>("get_sidecar_path", { sidecarName: "retoc_cli" });
-                if (retocResult && retocResult.trim() !== "") {
-                  setFormValues((prev) => ({ ...prev, retoc_cli: retocResult }));
-                  toast.success("retoc_cli.exe detected", {
-                    description: `Found bundled: ${retocResult}`,
-                    duration: 4000,
-                  });
-                }
-              } catch (error) {
-                console.log("retoc_cli sidecar detection failed:", error);
-              }
-            }
-          } catch (error) {
-            console.log("Error in retoc_cli detection:", error);
-          }
-
           // Auto-detect archive tool if seven_zip_bin is not set
           if (!settings.seven_zip_bin || settings.seven_zip_bin.trim() === "") {
             try {
@@ -206,10 +160,13 @@ export function SettingsDialog({
                 message: string;
                 already_in_path?: boolean;
               }>("detect_archive_tool");
-              
+
               if (result.success && result.executable) {
-                setFormValues((prev) => ({ ...prev, seven_zip_bin: result.executable! }));
-                
+                setFormValues((prev) => ({
+                  ...prev,
+                  seven_zip_bin: result.executable!,
+                }));
+
                 if (result.already_in_path) {
                   toast.info(`${result.name} detected`, {
                     description: `Already in PATH: ${result.executable}`,
@@ -232,16 +189,22 @@ export function SettingsDialog({
 
       // Auto-detect Marvel Rivals path if not set
       const detectMarvelRivalsPath = async () => {
-        if (!settings.marvel_rivals_root || settings.marvel_rivals_root.trim() === "") {
+        if (
+          !settings.marvel_rivals_root ||
+          settings.marvel_rivals_root.trim() === ""
+        ) {
           try {
             const result = await invoke<{
               success: boolean;
               path?: string;
               message: string;
             }>("detect_marvel_rivals_path");
-            
+
             if (result.success && result.path) {
-              setFormValues((prev) => ({ ...prev, marvel_rivals_root: result.path! }));
+              setFormValues((prev) => ({
+                ...prev,
+                marvel_rivals_root: result.path!,
+              }));
               toast.success("Marvel Rivals detected", {
                 description: `Found at: ${result.path}`,
                 duration: 4000,
@@ -272,8 +235,6 @@ export function SettingsDialog({
       "marvel_rivals_local_downloads_root",
       "nexus_api_key",
       "aes_key_hex",
-      "repak_bin",
-      "retoc_cli",
       "seven_zip_bin",
     ];
 
@@ -285,8 +246,6 @@ export function SettingsDialog({
       nexus_api_key: settings.nexus_api_key ?? "",
       aes_key_hex: settings.aes_key_hex ?? "",
       allow_direct_api_downloads: settings.allow_direct_api_downloads,
-      repak_bin: settings.repak_bin ?? "",
-      retoc_cli: settings.retoc_cli ?? "",
       seven_zip_bin: settings.seven_zip_bin ?? "",
     };
 
@@ -328,7 +287,7 @@ export function SettingsDialog({
       const result = await invoke<string>("select_folder_dialog", {
         defaultPath: null,
       });
-      
+
       if (result) {
         setFormValues((prev) => ({ ...prev, [field]: result }));
       }
@@ -344,11 +303,10 @@ export function SettingsDialog({
     try {
       const result = await invoke<string>("select_file_dialog", {
         defaultPath: null,
-        filterExtensions: field === "repak_bin" || field === "retoc_cli" || field === "seven_zip_bin"
-          ? ["exe", "bat", "cmd", "msi"]
-          : ["*"],
+        filterExtensions:
+          field === "seven_zip_bin" ? ["exe", "bat", "cmd", "msi"] : ["*"],
       });
-      
+
       if (result) {
         setFormValues((prev) => ({ ...prev, [field]: result }));
       }
@@ -460,8 +418,8 @@ export function SettingsDialog({
                         Directories & Tools
                       </h3>
                       <p className="text-sm text-muted-foreground">
-                        Provide absolute paths so helper scripts can locate
-                        the game, packed downloads, and optional tooling.
+                        Provide absolute paths so helper scripts can locate the
+                        game, packed downloads, and optional tooling.
                       </p>
                     </div>
 
@@ -482,7 +440,13 @@ export function SettingsDialog({
                         <Label htmlFor="marvel_rivals_local_downloads_root">
                           Local downloads folder
                         </Label>
-                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: "0.5rem",
+                            alignItems: "center",
+                          }}
+                        >
                           <Input
                             id="marvel_rivals_local_downloads_root"
                             placeholder="D:\Mods\MarvelRivalsDownloads"
@@ -498,8 +462,12 @@ export function SettingsDialog({
                             type="button"
                             variant="outline"
                             size="sm"
-                            onClick={() => handleFolderSelect("marvel_rivals_local_downloads_root")}
-                            style={{ padding: '0.5rem', minWidth: 'auto' }}
+                            onClick={() =>
+                              handleFolderSelect(
+                                "marvel_rivals_local_downloads_root"
+                              )
+                            }
+                            style={{ padding: "0.5rem", minWidth: "auto" }}
                             title="Select folder"
                           >
                             <Folder className="h-4 w-4" />
@@ -537,7 +505,13 @@ export function SettingsDialog({
                         <Label htmlFor="marvel_rivals_root">
                           Marvel Rivals root
                         </Label>
-                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: "0.5rem",
+                            alignItems: "center",
+                          }}
+                        >
                           <Input
                             id="marvel_rivals_root"
                             placeholder="D:\Games\MarvelRivals"
@@ -556,28 +530,36 @@ export function SettingsDialog({
                                   path?: string;
                                   message: string;
                                 }>("detect_marvel_rivals_path");
-                                
+
                                 if (result.success && result.path) {
-                                  setFormValues((prev) => ({ ...prev, marvel_rivals_root: result.path! }));
+                                  setFormValues((prev) => ({
+                                    ...prev,
+                                    marvel_rivals_root: result.path!,
+                                  }));
                                   toast.success("Marvel Rivals detected", {
                                     description: `Found at: ${result.path}`,
                                     duration: 4000,
                                   });
                                 } else {
                                   toast.error("Marvel Rivals not found", {
-                                    description: result.message || "Installation not detected. Please install via Steam or Epic Games Store.",
+                                    description:
+                                      result.message ||
+                                      "Installation not detected. Please install via Steam or Epic Games Store.",
                                     duration: 4000,
                                   });
                                 }
                               } catch (error) {
-                                console.error("Failed to detect Marvel Rivals:", error);
+                                console.error(
+                                  "Failed to detect Marvel Rivals:",
+                                  error
+                                );
                                 toast.error("Detection failed", {
                                   description: String(error),
                                   duration: 4000,
                                 });
                               }
                             }}
-                            style={{ padding: '0.5rem', minWidth: 'auto' }}
+                            style={{ padding: "0.5rem", minWidth: "auto" }}
                             title="Auto-detect Marvel Rivals installation"
                           >
                             <RefreshCw className="h-4 w-4" />
@@ -586,8 +568,10 @@ export function SettingsDialog({
                             type="button"
                             variant="outline"
                             size="sm"
-                            onClick={() => handleFolderSelect("marvel_rivals_root")}
-                            style={{ padding: '0.5rem', minWidth: 'auto' }}
+                            onClick={() =>
+                              handleFolderSelect("marvel_rivals_root")
+                            }
+                            style={{ padding: "0.5rem", minWidth: "auto" }}
                             title="Select folder"
                           >
                             <Folder className="h-4 w-4" />
@@ -599,7 +583,6 @@ export function SettingsDialog({
                       <div
                         style={{
                           display: "grid",
-                          gridTemplateColumns: "1fr 1fr",
                           gap: "16px",
                         }}
                       >
@@ -610,71 +593,16 @@ export function SettingsDialog({
                             gap: "10px",
                           }}
                         >
-                          <Label htmlFor="repak_bin">Repak executable</Label>
-                          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                            <Input
-                              id="repak_bin"
-                              placeholder="C:\Tools\repak.exe"
-                              value={formValues.repak_bin}
-                              onChange={handleInputChange("repak_bin")}
-                              className="flex-1"
-                            />
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleFileSelect("repak_bin")}
-                              style={{ padding: '0.5rem', minWidth: 'auto' }}
-                              title="Select file"
-                            >
-                              <Folder className="h-4 w-4" />
-                            </Button>
-                          </div>
-                          {renderValidationStatus("repak_bin")}
-                        </div>
-
-                        <div
-                          style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: "10px",
-                          }}
-                        >
-                          <Label htmlFor="retoc_cli">retoc CLI</Label>
-                          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                            <Input
-                              id="retoc_cli"
-                              placeholder="C:\Tools\retoc.exe"
-                              value={formValues.retoc_cli}
-                              onChange={handleInputChange("retoc_cli")}
-                              className="flex-1"
-                            />
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleFileSelect("retoc_cli")}
-                              style={{ padding: '0.5rem', minWidth: 'auto' }}
-                              title="Select file"
-                            >
-                              <Folder className="h-4 w-4" />
-                            </Button>
-                          </div>
-                          {renderValidationStatus("retoc_cli")}
-                        </div>
-
-                        <div
-                          style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: "10px",
-                            gridColumn: "span 2",
-                          }}
-                        >
                           <Label htmlFor="seven_zip_bin">
                             7-Zip executable
                           </Label>
-                          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: "0.5rem",
+                              alignItems: "center",
+                            }}
+                          >
                             <Input
                               id="seven_zip_bin"
                               placeholder="C:\Program Files\7-Zip\7z.exe"
@@ -695,10 +623,13 @@ export function SettingsDialog({
                                     message: string;
                                     already_in_path?: boolean;
                                   }>("detect_archive_tool");
-                                  
+
                                   if (result.success && result.executable) {
-                                    setFormValues((prev) => ({ ...prev, seven_zip_bin: result.executable! }));
-                                    
+                                    setFormValues((prev) => ({
+                                      ...prev,
+                                      seven_zip_bin: result.executable!,
+                                    }));
+
                                     // Show toast notification
                                     if (result.already_in_path) {
                                       toast.info(`${result.name} detected`, {
@@ -706,26 +637,34 @@ export function SettingsDialog({
                                         duration: 4000,
                                       });
                                     } else {
-                                      toast.success(`${result.name} detected and added to PATH`, {
-                                        description: `Executable: ${result.executable}`,
-                                        duration: 4000,
-                                      });
+                                      toast.success(
+                                        `${result.name} detected and added to PATH`,
+                                        {
+                                          description: `Executable: ${result.executable}`,
+                                          duration: 4000,
+                                        }
+                                      );
                                     }
                                   } else {
                                     toast.error("Archive tool not found", {
-                                      description: result.message || "Neither 7-Zip nor WinRAR installation found",
+                                      description:
+                                        result.message ||
+                                        "Neither 7-Zip nor WinRAR installation found",
                                       duration: 4000,
                                     });
                                   }
                                 } catch (error) {
-                                  console.error("Failed to detect archive tool:", error);
+                                  console.error(
+                                    "Failed to detect archive tool:",
+                                    error
+                                  );
                                   toast.error("Detection failed", {
                                     description: String(error),
                                     duration: 4000,
                                   });
                                 }
                               }}
-                              style={{ padding: '0.5rem', minWidth: 'auto' }}
+                              style={{ padding: "0.5rem", minWidth: "auto" }}
                               title="Auto-detect 7-Zip or WinRAR"
                             >
                               <RefreshCw className="h-4 w-4" />
@@ -735,7 +674,7 @@ export function SettingsDialog({
                               variant="outline"
                               size="sm"
                               onClick={() => handleFileSelect("seven_zip_bin")}
-                              style={{ padding: '0.5rem', minWidth: 'auto' }}
+                              style={{ padding: "0.5rem", minWidth: "auto" }}
                               title="Select file"
                             >
                               <Folder className="h-4 w-4" />
@@ -769,8 +708,16 @@ export function SettingsDialog({
                           gap: "10px",
                         }}
                       >
-                        <Label htmlFor="data_dir">Data directory (Locked)</Label>
-                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        <Label htmlFor="data_dir">
+                          Data directory (Locked)
+                        </Label>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: "0.5rem",
+                            alignItems: "center",
+                          }}
+                        >
                           <Input
                             id="data_dir"
                             placeholder="C:\Users\You\AppData\Local\RivalsModManager\data"
@@ -801,9 +748,7 @@ export function SettingsDialog({
                   }}
                 >
                   <div style={{ marginBottom: "8px" }}>
-                    <h3 className="text-lg font-semibold">
-                      Maintenance Tasks
-                    </h3>
+                    <h3 className="text-lg font-semibold">Maintenance Tasks</h3>
                     <p className="text-sm text-muted-foreground">
                       These scripts run on the backend and may take a moment;
                       outputs are captured for review.

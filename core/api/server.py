@@ -147,8 +147,6 @@ def _seed_env_from_settings() -> None:
 		"MARVEL_RIVALS_LOCAL_DOWNLOADS_ROOT": current.marvel_rivals_local_downloads_root,
 		"NEXUS_API_KEY": current.nexus_api_key,
 		"AES_KEY_HEX": current.aes_key_hex,
-		"REPAK_BIN": current.repak_bin,
-		"RETOC_CLI": current.retoc_cli,
 		"SEVEN_ZIP_BIN": current.seven_zip_bin,
 		"MOD_MANAGER_DATA_DIR": current.data_dir,
 	}
@@ -335,8 +333,6 @@ class SettingsUpdatePayload(BaseModel):
 	nexus_api_key: Optional[str] = None
 	aes_key_hex: Optional[str] = None
 	allow_direct_api_downloads: Optional[bool] = None
-	repak_bin: Optional[str] = None
-	retoc_cli: Optional[str] = None
 	seven_zip_bin: Optional[str] = None
 
 	class Config:
@@ -511,8 +507,6 @@ def _collect_settings_validation(settings) -> Dict[str, Any]:
 		"data_dir": _validate_directory_path(settings.data_dir, required=True),
 		"marvel_rivals_root": _validate_directory_path(settings.marvel_rivals_root, required=True),
 		"marvel_rivals_local_downloads_root": _validate_directory_path(settings.marvel_rivals_local_downloads_root, required=True),
-		"repak_bin": _validate_executable_path(settings.repak_bin, label="RePak CLI", required=False),
-		"retoc_cli": _validate_executable_path(settings.retoc_cli, label="ReToc CLI", required=False),
 		"seven_zip_bin": _validate_executable_path(settings.seven_zip_bin, label="7-Zip", required=False),
 		"nexus_api_key": _validate_api_key(settings.nexus_api_key),
 	}
@@ -529,8 +523,6 @@ def _serialize_settings(settings, *, validation: Optional[Dict[str, Any]] = None
 		"nexus_api_key": settings.nexus_api_key,
 		"aes_key_hex": settings.aes_key_hex,
 		"allow_direct_api_downloads": bool(settings.allow_direct_api_downloads),
-		"repak_bin": _serialize_path(settings.repak_bin),
-		"retoc_cli": _serialize_path(settings.retoc_cli),
 		"seven_zip_bin": _serialize_path(settings.seven_zip_bin),
 		"validation": validation or _collect_settings_validation(settings),
 	}
@@ -559,10 +551,6 @@ def _apply_settings_update(payload: SettingsUpdatePayload) -> Dict[str, Any]:
 		overrides["aes_key_hex"] = payload.aes_key_hex.strip()
 	if payload.allow_direct_api_downloads is not None:
 		overrides["allow_direct_api_downloads"] = bool(payload.allow_direct_api_downloads)
-	if payload.repak_bin is not None:
-		overrides["repak_bin"] = _normalize_optional_str(payload.repak_bin)
-	if payload.retoc_cli is not None:
-		overrides["retoc_cli"] = _normalize_optional_str(payload.retoc_cli)
 	if payload.seven_zip_bin is not None:
 		overrides["seven_zip_bin"] = _normalize_optional_str(payload.seven_zip_bin)
 	if not overrides:
@@ -1122,12 +1110,6 @@ def _ingest_resolved_download(
 	normalized_path = normalize_download_path(path)
 	repo_root = _ROOT
 	current = _get_current_settings()
-	repak_path = current.repak_bin
-	if repak_path is None:
-		repak_candidate = repo_root / ("repak.exe" if os.name == "nt" else "repak")
-		if repak_candidate.exists():
-			repak_path = repak_candidate
-	use_repak = str(repak_path) if repak_path else None
 	aes_key = current.aes_key_hex or None
 
 	suffix = path.suffix.lower()
@@ -1136,26 +1118,6 @@ def _ingest_resolved_download(
 	contents: List[str] = []
 	pak_map: Dict[str, List[str]] = {}
 	ingest_prep_error: Optional[Exception] = None
-
-	if is_archive:
-		try:
-			contents, pak_map = _extract_archive_assets(path, repak_bin=use_repak, aes_key=aes_key)
-		except Exception as exc:
-			ingest_prep_error = exc
-	elif is_pak:
-		contents = [path.name]
-		try:
-			pak_map = _extract_assets_from_pak(str(path), repak_bin=use_repak, aes_key=aes_key)
-		except Exception as exc:
-			ingest_prep_error = exc
-	else:
-		try:
-			if path.is_dir():
-				contents = [p.name for p in path.iterdir() if p.is_file()]
-			else:
-				contents = [path.name]
-		except Exception:
-			contents = [path.name]
 
 	if not contents:
 		contents = [path.name]
@@ -1564,8 +1526,6 @@ def validate_path(payload: Dict[str, Any]) -> Dict[str, Any]:
 	# Define field types
 	directory_fields = {"data_dir", "marvel_rivals_root", "marvel_rivals_local_downloads_root"}
 	executable_fields = {
-		"repak_bin": "RePak CLI",
-		"retoc_cli": "ReToc CLI", 
 		"seven_zip_bin": "7-Zip"
 	}
 	
@@ -3013,45 +2973,6 @@ if __name__ == "__main__":
 	uvicorn.run("core.api.server:app", host="127.0.0.1", port=8000, reload=True)
 
 
-# Helpers for .pak ingestion without zip wrapper
-def _extract_assets_from_pak(
-	pak_path: str,
-	*,
-	repak_bin: Optional[str] = None,
-	aes_key: Optional[str] = None,
-) -> Dict[str, List[str]]:
-	pak = Path(pak_path)
-	if not pak.exists():
-		raise FileNotFoundError(f"pak not found: {pak_path}")
-	tmpdir_obj = tempfile.TemporaryDirectory(prefix="single_pak_")
-	tmpdir = Path(tmpdir_obj.name)
-	try:
-		shadow = tmpdir / pak.name
-		shutil.copy2(pak, shadow)
-		# copy sibling IoStore companions if present so folder scan can pick them up
-		for ext in (".utoc", ".ucas", ".utac"):
-			sibling = pak.with_suffix(ext)
-			if sibling.exists():
-				try:
-					shutil.copy2(sibling, tmpdir / sibling.name)
-				except Exception:
-					continue
-		pak_map = extract_pak_asset_map_from_folder(str(tmpdir), repak_bin=repak_bin, aes_key=aes_key)
-		if not pak_map:
-			raise RuntimeError("Failed to enumerate assets from pak")
-		filtered: Dict[str, List[str]] = {}
-		stem = pak.name
-		alt_stem = pak.stem
-		for key, assets in pak_map.items():
-			if key == stem or key == alt_stem or key.startswith(alt_stem):
-				filtered[key] = assets
-		if not filtered:
-			filtered = pak_map
-		return filtered
-	finally:
-		tmpdir_obj.cleanup()
-
-
 # Mods endpoints
 @app.get("/api/mods")
 def list_mods(limit: int = 100) -> List[Dict[str, Any]]:
@@ -3750,31 +3671,6 @@ def _sync_mod_metadata(
 		result["metadata_warning"] = f"Metadata sync failed: {e}"
 		return result
 
-
-def _extract_archive_assets(
-	archive_path: Path,
-	*,
-	repak_bin: Optional[str] = None,
-	aes_key: Optional[str] = None,
-) -> tuple[List[str], Dict[str, List[str]]]:
-	tmpdir_obj = tempfile.TemporaryDirectory(prefix="addmod_extract_")
-	tmpdir = Path(tmpdir_obj.name)
-	try:
-		entries = extract_archive(str(archive_path), str(tmpdir))
-		contents: List[str] = []
-		seen: set[str] = set()
-		for rel in entries:
-			base = os.path.basename(rel)
-			if not base:
-				continue
-			ext = Path(base).suffix.lower()
-			if ext in _ARCHIVE_UE_EXTS and base.lower() not in seen:
-				seen.add(base.lower())
-				contents.append(base)
-		pak_map = extract_pak_asset_map_from_folder(str(tmpdir), repak_bin=repak_bin, aes_key=aes_key)
-		return contents, pak_map
-	finally:
-		tmpdir_obj.cleanup()
 
 
 def _looks_like_url(value: str) -> bool:

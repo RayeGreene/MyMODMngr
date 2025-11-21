@@ -8,6 +8,26 @@ src-python/build/
 src-python/dist/
 src-tauri/target/
 
+# Rust/Cargo specific ignores
+**/target/
+Cargo.lock
+Cargo.lock.backup
+.debug/
+debug/
+release/
+*.pdb
+*.rlib
+*.dylib
+*.so
+*.dll
+*.dll.exp
+*.dll.lib
+*.a
+*.lib
+*.exe
+rustc_info.json
+rustfmt.toml
+
 # Environment files and secrets
 .env
 .env.*

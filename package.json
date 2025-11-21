@@ -50,7 +50,7 @@
   },
   "devDependencies": {
     "@tauri-apps/api": "^2.9.0",
-    "@tauri-apps/cli": "^2.9.0",
+    "@tauri-apps/cli": "^2.9.4",
     "@tauri-apps/plugin-shell": "^2.3.3",
     "@types/node": "^20.10.0",
     "@types/react": "^19.1.13",

@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { Toaster } from "./components/ui/sonner";
 import { ThemeProvider } from "./components/ThemeProvider";
 import { openInBrowser } from "./lib/tauri-utils";
+import { initializeIcons } from "./lib/iconManager";
 import {
   waitForMatchingHandoff,
   createNxmProgressController,
@@ -282,8 +283,6 @@ export default function App() {
           marvel_rivals_root: values.marvel_rivals_root.trim() || null,
           marvel_rivals_local_downloads_root:
             values.marvel_rivals_local_downloads_root.trim() || null,
-          repak_bin: values.repak_bin.trim() || null,
-          retoc_cli: values.retoc_cli.trim() || null,
           seven_zip_bin: values.seven_zip_bin.trim() || null,
         };
         const dataDir = values.data_dir.trim();
@@ -1074,6 +1073,20 @@ export default function App() {
         setMods(deduped);
       } catch (e) {
         // ignore, stay on mock data
+      }
+    })();
+  }, [backendReady]);
+
+  // Initialize icons on app startup (only in Tauri environment)
+  useEffect(() => {
+    if (!backendReady) {
+      return;
+    }
+    (async () => {
+      try {
+        await initializeIcons();
+      } catch (error) {
+        console.warn("Failed to initialize icons:", error);
       }
     })();
   }, [backendReady]);

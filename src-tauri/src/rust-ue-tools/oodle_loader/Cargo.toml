@@ -1,0 +1,13 @@
+[package]
+name = "oodle_loader"
+version = "0.1.0"
+edition = "2021"
+authors = ["RivalNxt"]
+repository = "https://github.com/rivalnxt/rivalnxt"
+license = "MIT"
+
+[dependencies]
+libloading = "0.8"
+hex = "0.4"
+sha2 = "0.10"
+thiserror = "2.0"

@@ -12,9 +12,43 @@ _repo_root = Path(__file__).resolve().parents[1]
 if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
 
+# For PyInstaller frozen builds, we need additional path handling
+if getattr(sys, 'frozen', False):
+    # When running as PyInstaller executable, the executable is in a temp directory
+    # We need to find the actual script directory or use a different approach
+    import sys
+    if hasattr(sys, '_MEIPASS'):
+        # We're running from PyInstaller bundle
+        # The core module should be in the same directory as the executable
+        exe_dir = Path(sys.executable).parent
+        if str(exe_dir) not in sys.path:
+            sys.path.insert(0, str(exe_dir))
+        
+        # Also check if core is relative to the executable
+        core_dir = exe_dir / "core"
+        if core_dir.exists() and str(core_dir) not in sys.path:
+            sys.path.insert(0, str(core_dir))
+        
+        # Alternative: check if core is in the same location as the script would be
+        script_dir = exe_dir.parent
+        core_dir2 = script_dir / "core"
+        if core_dir2.exists() and str(core_dir2) not in sys.path:
+            sys.path.insert(0, str(core_dir2))
+
 import uvicorn
 
-from core.config.settings import SETTINGS, configure
+try:
+    from core.config.settings import SETTINGS, configure
+except ImportError as e:
+    print(f"Failed to import core module: {e}")
+    print(f"Current working directory: {os.getcwd()}")
+    print(f"Python path: {sys.path}")
+    print(f"sys.executable: {sys.executable}")
+    print(f"sys.frozen: {getattr(sys, 'frozen', False)}")
+    if hasattr(sys, '_MEIPASS'):
+        print(f"sys._MEIPASS: {sys._MEIPASS}")
+    print(f"Repository root calculated as: {_repo_root}")
+    raise
 
 
 def _ensure_repo_on_path() -> Path:

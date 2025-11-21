@@ -58,6 +58,7 @@ import {
   extractNonCategoryTags,
 } from "../lib/categoryUtils";
 import { openInBrowser } from "../lib/tauri-utils";
+import { getIconUrl } from "../lib/iconManager";
 
 interface DownloadsSidebarProps {
   selectedCategory: string;
@@ -723,7 +724,7 @@ export function DownloadsSidebar({
             onClick={() => handleDonateClick("kofi")}
           >
             <img
-              src="/icons/kofi.svg"
+              src={getIconUrl("kofi.svg")}
               alt="Ko-fi"
               style={{ width: "40px", height: "15px" }}
             />
@@ -736,7 +737,7 @@ export function DownloadsSidebar({
             onClick={() => handleDonateClick("upi")}
           >
             <img
-              src="/icons/upi.svg"
+              src={getIconUrl("upi.svg")}
               alt="UPI"
               style={{ width: "40px", height: "12px" }}
             />
@@ -752,7 +753,7 @@ export function DownloadsSidebar({
           </DialogHeader>
           <div className="flex flex-col items-center space-y-3 py-2">
             <img
-              src="/icons/qr.png"
+              src={getIconUrl("qr.png")}
               alt="UPI QR Code"
               className="object-contain"
               style={{ width: "300px" }}

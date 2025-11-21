@@ -1,0 +1,71 @@
+name: Release Build
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          npm install
+          pip install maturin pyinstaller
+          pip install -r requirements.txt
+
+      - name: Build PyO3 library
+        shell: bash
+        run: |
+          cd src-tauri/src/rust-ue-tools
+          maturin build --features pyo3 --release --out ../../../target/wheels
+          pip install --force-reinstall ../../../target/wheels/*.whl
+          cd ../../..
+
+      - name: Build Python Backend
+        run: |
+          pyinstaller rivalnxt_backend.spec --clean --noconfirm
+          npm run py:copy
+
+      - name: Build Tauri App
+        run: npm run tauri:build
+
+      - name: Upload Release Assets (MSI)
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: src-tauri/target/release/bundle/msi/rivalnxt_0.1.0_x64_en-US.msi
+          asset_name: rivalnxt_0.1.0_x64_en-US.msi
+          asset_content_type: application/octet-stream
+
+      - name: Upload Release Assets (EXE)
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: src-tauri/target/release/bundle/nsis/rivalnxt_0.1.0_x64-setup.exe
+          asset_name: rivalnxt_0.1.0_x64-setup.exe
+          asset_content_type: application/octet-stream

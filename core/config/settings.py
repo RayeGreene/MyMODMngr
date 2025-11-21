@@ -65,8 +65,6 @@ class AppSettings:
 	nexus_api_key: str = ""  
 	aes_key_hex: str = "0x0C263D8C22DCB085894899C3A3796383E9BF9DE0CBFB08C9BF2DEF2E84F29D74"
 	allow_direct_api_downloads: bool = False
-	repak_bin: Optional[Path] = None
-	retoc_cli: Optional[Path] = None
 	seven_zip_bin: Optional[Path] = None
 
 
@@ -132,8 +130,6 @@ def save_settings(settings: AppSettings) -> None:
 			"nexus_api_key": settings.nexus_api_key,
 			"aes_key_hex": settings.aes_key_hex,
 			"allow_direct_api_downloads": settings.allow_direct_api_downloads,
-			"repak_bin": str(settings.repak_bin) if settings.repak_bin else None,
-			"retoc_cli": str(settings.retoc_cli) if settings.retoc_cli else None,
 			"seven_zip_bin": str(settings.seven_zip_bin) if settings.seven_zip_bin else None,
 		}
 		with open(path, "w", encoding="utf-8") as f:
@@ -184,8 +180,6 @@ def load_settings() -> AppSettings:
 				nexus_api_key=data.get("nexus_api_key", defaults.nexus_api_key),
 				aes_key_hex=data.get("aes_key_hex", defaults.aes_key_hex),
 				allow_direct_api_downloads=bool(data.get("allow_direct_api_downloads", defaults.allow_direct_api_downloads)),
-				repak_bin=_normalize_path(data.get("repak_bin")),
-				retoc_cli=_normalize_path(data.get("retoc_cli")),
 				seven_zip_bin=_normalize_path(data.get("seven_zip_bin")),
 			)
 		except Exception as e:
@@ -228,8 +222,6 @@ def configure(**overrides: object) -> AppSettings:
 		"data_dir",
 		"marvel_rivals_root",
 		"marvel_rivals_local_downloads_root",
-		"repak_bin",
-		"retoc_cli",
 		"seven_zip_bin",
 	}
 	for key, value in overrides.items():
