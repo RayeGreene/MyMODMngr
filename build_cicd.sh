@@ -82,17 +82,42 @@ for imp in test_imports:
 echo "Using rivalnxt_backend_merged.spec for PyInstaller build..."
 echo "Current directory: $(pwd)"
 
-# Check if spec file exists
-if [ ! -f "rivalnxt_backend_merged.spec" ]; then
+# Find the spec file and its directory (handle nested directory structure)
+SPEC_FILE=$(find . -name "rivalnxt_backend_merged.spec" -type f | head -1)
+
+if [ -z "$SPEC_FILE" ]; then
     echo "ERROR: rivalnxt_backend_merged.spec file not found!"
     echo "Looking for spec files:"
     find . -name "*.spec" -type f
     exit 1
 fi
 
-echo "Found spec file: rivalnxt_backend_merged.spec"
+SPEC_DIR=$(dirname "$SPEC_FILE")
+echo "Found spec file: $SPEC_FILE"
+echo "Spec file directory: $SPEC_DIR"
 
-# Build using the spec file
+# Change to the spec file directory so relative paths work correctly
+cd "$SPEC_DIR"
+
+# Test imports from the correct directory
+echo "Testing imports from correct directory..."
+python -c "
+import sys
+test_imports = [
+    'fastapi', 'uvicorn', 'requests', 'pydantic', 'psutil',
+    'core.api.server', 'core.config.settings', 'core.db.db',
+    'field_prefs', 'py7zr', 'rarfile', 'python_multipart'
+]
+for imp in test_imports:
+    try:
+        __import__(imp)
+        print(f'OK: {imp}')
+    except Exception as e:
+        print(f'FAIL: {imp}: {e}')
+"
+
+# Build using the spec file from the correct directory
+echo "Building from correct directory: $(pwd)"
 python -m PyInstaller rivalnxt_backend_merged.spec --clean --noconfirm
 
 # Look for the built executable
