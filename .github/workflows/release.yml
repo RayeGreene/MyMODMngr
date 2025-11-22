@@ -56,6 +56,14 @@ jobs:
           cargo build --release --features pyo3 --lib
         shell: bash
 
+      # Step 1.5: CRITICAL - Install PyO3 bindings as Python module
+      - name: Install PyO3 Bindings
+        working-directory: src-tauri/src/rust-ue-tools
+        run: |
+          echo "Installing Rust UE Tools as Python module..."
+          pip install -e .
+        shell: bash
+
       # Step 2: Build Python Backend with PyInstaller
       - name: Build Python Backend
         run: |
@@ -78,6 +86,9 @@ jobs:
             Write-Error "Backend executable not found!"
             exit 1
           }
+          
+          echo "Backend size:"
+          (Get-Item dist\rivalnxt_backend.exe).Length / 1MB
         shell: pwsh
 
       # Step 3: Copy Backend to Tauri Sidecars
@@ -94,6 +105,9 @@ jobs:
             Write-Error "Failed to copy backend executable!"
             exit 1
           }
+          
+          echo "Sidecar size:"
+          (Get-Item src-tauri\sidecars\rivalnxt_backend-x86_64-pc-windows-msvc.exe).Length / 1MB
         shell: pwsh
 
       # Step 4: Build Tauri Application
@@ -109,7 +123,7 @@ jobs:
           prerelease: false
           args: --verbose
 
-      # Upload additional artifacts (optional)
+      # Diagnostics - Upload backend for inspection
       - name: Upload Backend Artifact
         uses: actions/upload-artifact@v4
         with:
