@@ -3,50 +3,126 @@ name: Release Build
 on:
   release:
     types: [published]
-  workflow_dispatch:
-  push:
-    branches:
-      - '**'
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  release:
+  build-and-release:
     runs-on: windows-latest
-
+    
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
+          node-version: '18'
+          cache: 'npm'
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
+          cache: 'pip'
 
-      - name: Install dependencies
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src-tauri
+            src-tauri/src/rust-ue-tools
+
+      - name: Install Python dependencies
         run: |
-          npm install
-          pip install maturin pyinstaller
+          python -m pip install --upgrade pip
+          pip install pyinstaller
           pip install -r requirements.txt
 
-      - name: Build Application (CI/CD)
-        run: npm run build:ci
+      - name: Install Node dependencies
+        run: npm install
 
-      - name: Upload Release Assets (EXE)
-        if: github.event_name == 'release'
-        uses: actions/upload-release-asset@v1
+      # Step 1: Build Rust UE Tools with PyO3 bindings
+      - name: Build Rust UE Tools
+        working-directory: src-tauri/src/rust-ue-tools
+        run: |
+          echo "Building Rust UE Tools with PyO3 features..."
+          cargo build --release --features pyo3 --lib
+        shell: bash
+
+      # Step 2: Build Python Backend with PyInstaller
+      - name: Build Python Backend
+        run: |
+          echo "Cleaning previous builds..."
+          if (Test-Path dist) { Remove-Item -Recurse -Force dist }
+          if (Test-Path build) { Remove-Item -Recurse -Force build }
+          
+          echo "Building backend executable..."
+          python -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --exclude-module PyQt5 `
+            --exclude-module PyQt6 `
+            --collect-data core.db.migrations `
+            --name rivalnxt_backend `
+            src-python/run_server.py
+          
+          if (-not (Test-Path dist\rivalnxt_backend.exe)) {
+            Write-Error "Backend executable not found!"
+            exit 1
+          }
+        shell: pwsh
+
+      # Step 3: Copy Backend to Tauri Sidecars
+      - name: Copy Backend to Sidecars
+        run: |
+          if (-not (Test-Path src-tauri\sidecars)) {
+            New-Item -ItemType Directory -Path src-tauri\sidecars
+          }
+          Copy-Item -Path dist\rivalnxt_backend.exe `
+                    -Destination src-tauri\sidecars\rivalnxt_backend-x86_64-pc-windows-msvc.exe `
+                    -Force
+          
+          if (-not (Test-Path src-tauri\sidecars\rivalnxt_backend-x86_64-pc-windows-msvc.exe)) {
+            Write-Error "Failed to copy backend executable!"
+            exit 1
+          }
+        shell: pwsh
+
+      # Step 4: Build Tauri Application
+      - name: Build Tauri App
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: src-tauri/target/release/bundle/nsis/rivalnxt_0.1.0_x64-setup.exe
-          asset_name: rivalnxt_${{ github.ref_name }}_x64-setup.exe
-          asset_content_type: application/octet-stream
+          tagName: ${{ github.ref_name }}
+          releaseName: 'RivalNxt ${{ github.ref_name }}'
+          releaseBody: 'See the assets below to download this version.'
+          releaseDraft: false
+          prerelease: false
+          args: --verbose
+
+      # Upload additional artifacts (optional)
+      - name: Upload Backend Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rivalnxt-backend
+          path: dist/rivalnxt_backend.exe
+          retention-days: 7
+
+      - name: Upload Build Logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            build/
+            src-tauri/target/release/build.log
+          retention-days: 3
