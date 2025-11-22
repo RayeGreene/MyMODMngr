@@ -56,13 +56,29 @@ jobs:
           cargo build --release --features pyo3 --lib
         shell: bash
 
-      # Step 1.5: CRITICAL - Install PyO3 bindings as Python module
-      - name: Install PyO3 Bindings
-        working-directory: src-tauri/src/rust-ue-tools
+      # Step 1.5: Copy Rust DLL to Python path for PyInstaller
+      - name: Copy PyO3 DLL to Python
         run: |
-          echo "Installing Rust UE Tools as Python module..."
-          pip install -e .
-        shell: bash
+          echo "Copying rust_ue_tools.dll to Python site-packages..."
+          $pythonSitePackages = python -c "import site; print(site.getsitepackages()[0])"
+          
+          if (-not (Test-Path $pythonSitePackages)) {
+            Write-Error "Python site-packages not found: $pythonSitePackages"
+            exit 1
+          }
+          
+          $rustDll = "src-tauri\src\rust-ue-tools\target\release\rust_ue_tools.dll"
+          
+          if (-not (Test-Path $rustDll)) {
+            Write-Error "Rust DLL not found: $rustDll"
+            exit 1
+          }
+          
+          Copy-Item -Path $rustDll -Destination $pythonSitePackages -Force
+          
+          echo "Rust DLL copied successfully to: $pythonSitePackages"
+          echo "DLL size: $((Get-Item $rustDll).Length / 1MB) MB"
+        shell: pwsh
 
       # Step 2: Build Python Backend with PyInstaller
       - name: Build Python Backend
@@ -71,7 +87,7 @@ jobs:
           if (Test-Path dist) { Remove-Item -Recurse -Force dist }
           if (Test-Path build) { Remove-Item -Recurse -Force build }
           
-          echo "Building backend executable..."
+          echo "Building backend executable with rust_ue_tools..."
           python -m PyInstaller `
             --noconfirm `
             --clean `
@@ -79,6 +95,8 @@ jobs:
             --exclude-module PyQt5 `
             --exclude-module PyQt6 `
             --collect-data core.db.migrations `
+            --add-binary "src-tauri/src/rust-ue-tools/target/release/rust_ue_tools.dll;." `
+            --hidden-import rust_ue_tools `
             --name rivalnxt_backend `
             src-python/run_server.py
           
@@ -87,8 +105,12 @@ jobs:
             exit 1
           }
           
-          echo "Backend size:"
-          (Get-Item dist\rivalnxt_backend.exe).Length / 1MB
+          $backendSize = (Get-Item dist\rivalnxt_backend.exe).Length / 1MB
+          echo "Backend size: $backendSize MB"
+          
+          if ($backendSize -lt 50) {
+            Write-Warning "Backend size is suspiciously small ($backendSize MB), expected ~115 MB"
+          }
         shell: pwsh
 
       # Step 3: Copy Backend to Tauri Sidecars
@@ -106,8 +128,8 @@ jobs:
             exit 1
           }
           
-          echo "Sidecar size:"
-          (Get-Item src-tauri\sidecars\rivalnxt_backend-x86_64-pc-windows-msvc.exe).Length / 1MB
+          $sidecarSize = (Get-Item src-tauri\sidecars\rivalnxt_backend-x86_64-pc-windows-msvc.exe).Length / 1MB
+          echo "Sidecar size: $sidecarSize MB"
         shell: pwsh
 
       # Step 4: Build Tauri Application
