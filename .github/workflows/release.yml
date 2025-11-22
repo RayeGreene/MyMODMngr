@@ -50,17 +50,31 @@ jobs:
 
       # Step 1: Build and Install PyO3 Module with Maturin
       - name: Build PyO3 Module with Maturin
-        working-directory: src-tauri/src/rust-ue-tools
         run: |
           echo "Building PyO3 module with Maturin..."
+          cd src-tauri/src/rust-ue-tools
           maturin build --release --features pyo3
           
-          echo "Installing built wheel..."
-          pip install target/wheels/*.whl --force-reinstall
+          echo "Finding built wheel..."
+          $wheel = Get-ChildItem -Path target/wheels -Filter *.whl | Select-Object -First 1
+          
+          if (-not $wheel) {
+            Write-Error "No wheel file found in target/wheels!"
+            exit 1
+          }
+          
+          echo "Found wheel: $($wheel.FullName)"
+          echo "Installing wheel..."
+          pip install $wheel.FullName --force-reinstall
           
           echo "Verifying installation..."
           python -c "import rust_ue_tools; print('rust_ue_tools imported successfully!')"
-        shell: bash
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to import rust_ue_tools module!"
+            exit 1
+          }
+        shell: pwsh
 
       # Step 2: Build Python Backend with PyInstaller
       - name: Build Python Backend
@@ -93,6 +107,8 @@ jobs:
             Write-Error "Backend size is too small ($backendSize MB), expected ~115 MB. PyO3 module not included!"
             exit 1
           }
+          
+          echo "✅ Backend built successfully with correct size!"
         shell: pwsh
 
       # Step 3: Copy Backend to Tauri Sidecars
