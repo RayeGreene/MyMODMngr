@@ -1,4 +1,5 @@
 @echo off
+setlocal enabledelayedexpansion
 REM ============================================================================
 REM Complete Build Script for RivalNxt
 REM This script builds all components: Rust libraries, PyO3 bindings, 
@@ -94,13 +95,22 @@ REM Display file sizes
 echo.
 echo File sizes:
 if exist dist\rivalnxt_backend.exe (
-    for %%A in (dist\rivalnxt_backend.exe) do echo   rivalnxt_backend.exe: %%~zA bytes
+    for %%A in (dist\rivalnxt_backend.exe) do (
+        set /a size_mb=%%~zA/1048576
+        echo   rivalnxt_backend.exe: !size_mb! MB
+    )
 )
 if exist src-tauri\target\release\rivalnxt.exe (
-    for %%A in (src-tauri\target\release\rivalnxt.exe) do echo   rivalnxt.exe: %%~zA bytes
+    for %%A in (src-tauri\target\release\rivalnxt.exe) do (
+        set /a size_mb=%%~zA/1048576
+        echo   rivalnxt.exe: !size_mb! MB
+    )
 )
 if exist src-tauri\target\release\bundle\nsis\RivalNxt_0.1.0_x64-setup.exe (
-    for %%A in (src-tauri\target\release\bundle\nsis\RivalNxt_0.1.0_x64-setup.exe) do echo   RivalNxt_0.1.0_x64-setup.exe: %%~zA bytes
+    for %%A in (src-tauri\target\release\bundle\nsis\RivalNxt_0.1.0_x64-setup.exe) do (
+        set /a size_mb=%%~zA/1048576
+        echo   RivalNxt_0.1.0_x64-setup.exe: !size_mb! MB
+    )
 )
 
 echo.

@@ -155,5 +155,10 @@ temp_conflict_view_debug.py
 # codeviz files
 *.codeviz
 
+# wheel files
+extracted_wheel/
+*.whl
+*.whl.info
+*.dist-info/
 
 
