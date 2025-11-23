@@ -155,6 +155,56 @@ def register_nxm_windows(tauri_exe_path: Path) -> Dict[str, Any]:
         return {"ok": False, "error": f"Registration failed: {e}"}
 
 
+def unregister_nxm_windows() -> Dict[str, Any]:
+    """Unregister nxm:// protocol from Windows registry.
+    
+    Returns:
+        Dict with 'ok' status and optional 'error' message
+    """
+    if platform.system() != "Windows":
+        return {"ok": False, "error": "Not on Windows"}
+    
+    try:
+        import winreg
+        
+        # Delete the nxm protocol key and all its subkeys
+        # We need to delete subkeys first, then the main key
+        try:
+            # Delete the command subkey
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\nxm\shell\open\command")
+        except FileNotFoundError:
+            pass  # Already deleted or never existed
+        
+        try:
+            # Delete the open subkey
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\nxm\shell\open")
+        except FileNotFoundError:
+            pass
+        
+        try:
+            # Delete the shell subkey
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\nxm\shell")
+        except FileNotFoundError:
+            pass
+        
+        try:
+            # Delete the DefaultIcon subkey
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\nxm\DefaultIcon")
+        except FileNotFoundError:
+            pass
+        
+        try:
+            # Delete the main nxm key
+            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, r"Software\Classes\nxm")
+        except FileNotFoundError:
+            pass
+        
+        return {"ok": True}
+        
+    except Exception as e:
+        return {"ok": False, "error": f"Unregistration failed: {e}"}
+
+
 def check_nxm_status() -> Dict[str, Any]:
     """Check the current NXM protocol registration status.
     
