@@ -44,44 +44,53 @@ export function AddModModal({
 
   const parseNexusModLink = (raw: string) => {
     try {
-      const url = new URL(raw);
-      if (!/nexusmods\.com$/i.test(url.hostname)) return null;
-      const segments = url.pathname
-        .split("/")
-        .map((segment) => segment.trim())
-        .filter(Boolean);
-      const modsIndex = segments.findIndex(
-        (segment) => segment.toLowerCase() === "mods"
-      );
-      if (modsIndex <= 0 || modsIndex + 1 >= segments.length) {
-        return null;
-      }
-      const game = segments[modsIndex - 1];
-      const modIdValue = Number.parseInt(segments[modsIndex + 1], 10);
-      if (!Number.isFinite(modIdValue)) {
-        return null;
-      }
+      // Extract mod ID using pattern /mods/XXXX
+      const modIdMatch = raw.match(/\/mods\/(\d+)/);
+      if (!modIdMatch) return null;
+      
+      const modIdValue = Number.parseInt(modIdMatch[1], 10);
+      if (!Number.isFinite(modIdValue)) return null;
+
+      // Extract file ID using pattern &file_id=XXXX or ?file_id=XXXX
       let fileId: number | null = null;
-      const queryCandidate =
-        url.searchParams.get("file_id") ?? url.searchParams.get("fileId");
-      if (queryCandidate) {
-        const parsed = Number.parseInt(queryCandidate, 10);
+      const fileIdMatch = raw.match(/[?&]file_id=(\d+)/i);
+      if (fileIdMatch) {
+        const parsed = Number.parseInt(fileIdMatch[1], 10);
         if (Number.isFinite(parsed)) {
           fileId = parsed;
         }
       }
-      if (fileId == null) {
-        const filesIndex = segments.findIndex(
-          (segment) => segment.toLowerCase() === "files"
-        );
-        if (filesIndex >= 0 && filesIndex + 1 < segments.length) {
-          const parsed = Number.parseInt(segments[filesIndex + 1], 10);
-          if (Number.isFinite(parsed)) {
-            fileId = parsed;
+
+      // Try to extract game from full URL if available, default to "marvelrivals"
+      let game = "marvelrivals";
+      try {
+        const url = new URL(raw);
+        if (/nexusmods\.com$/i.test(url.hostname)) {
+          const segments = url.pathname
+            .split("/")
+            .map((segment) => segment.trim())
+            .filter(Boolean);
+          const modsIndex = segments.findIndex(
+            (segment) => segment.toLowerCase() === "mods"
+          );
+          if (modsIndex > 0) {
+            game = segments[modsIndex - 1];
           }
         }
+      } catch {
+        // Not a valid URL, use default game
       }
-      return { url, game, modId: modIdValue, fileId };
+
+      // Construct the proper Nexus URL
+      const constructedUrl = new URL(
+        `https://www.nexusmods.com/${game}/mods/${modIdValue}`
+      );
+      if (fileId != null) {
+        constructedUrl.searchParams.set("tab", "files");
+        constructedUrl.searchParams.set("file_id", String(fileId));
+      }
+
+      return { url: constructedUrl, game, modId: modIdValue, fileId };
     } catch (err) {
       return null;
     }
@@ -198,15 +207,91 @@ export function AddModModal({
     if (!details) return;
     setBusy(true);
     const { url, game, modId, fileId } = details;
-    if (fileId == null) {
-      toast.error(
-        "Nexus link is missing a file id. Copy the specific file's 'Mod Manager Download' link from the Files tab."
-      );
-      setBusy(false);
-      return;
-    }
+    
     try {
       const nexusUrl = new URL(url.toString());
+      
+      // If no file ID, open the files tab and let user choose which file(s) to download
+      if (fileId == null) {
+        nexusUrl.searchParams.set("tab", "files");
+        
+        toast.info("Opening Nexus Mods files tab", {
+          description: `Select file(s) to download from Mod #${modId}`,
+        });
+
+        let openedNewTab = false;
+        try {
+          await openInBrowser(nexusUrl.toString());
+          openedNewTab = true;
+          console.log("Successfully opened Nexus URL");
+        } catch (err) {
+          console.error("Failed to open Nexus download page:", err);
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          toast.error("Could not open browser", {
+            description: errorMessage,
+          });
+        }
+
+        if (!openedNewTab) {
+          setBusy(false);
+          return;
+        }
+
+        // Wait for any handoff from this mod (not specific to a file ID)
+        const handoff = await waitForMatchingHandoff(modId, null);
+        if (!handoff) {
+          toast.error(
+            "Did not receive a RivalNxt handoff. Click 'Mod Manager Download' on a file in the Nexus tab, then try again."
+          );
+          setBusy(false);
+          return;
+        }
+
+        const modLabel =
+          handoff.request?.mod_id != null
+            ? `Mod #${handoff.request.mod_id}`
+            : "Nexus download";
+        const controller = createNxmProgressController(handoff.id, {
+          label: `Downloading ${modLabel}`,
+        });
+
+        try {
+          const ingest = await ingestNxmHandoff(handoff.id, {
+            activate: false,
+            deactivateExisting: false,
+          });
+          controller.stop();
+          const modName =
+            typeof ingest.mod_name === "string" && ingest.mod_name?.trim()
+              ? ingest.mod_name
+              : `Mod #${ingest.mod_id}`;
+          const fileName =
+            ingest.selected_file &&
+            typeof ingest.selected_file["name"] === "string"
+              ? (ingest.selected_file["name"] as string)
+              : undefined;
+          toast.success(`Added ${modName}`, {
+            id: controller.toastId,
+            description: fileName ?? controller.getLastDescription(),
+          });
+          if (ingest.activation_warning) {
+            toast.warning(ingest.activation_warning);
+          }
+          await finalizeSuccess();
+        } catch (err) {
+          controller.stop();
+          handleNxmError(
+            err,
+            "Failed to ingest Nexus download",
+            controller.toastId
+          );
+        } finally {
+          setBusy(false);
+        }
+        return;
+      }
+
+      // Original flow with specific file ID
       if (!nexusUrl.searchParams.get("tab")) {
         nexusUrl.searchParams.set("tab", "files");
       }
@@ -242,6 +327,7 @@ export function AddModModal({
         toast.error(
           "Did not receive a RivalNxt handoff. Approve the download in the Nexus tab, then try again."
         );
+        setBusy(false);
         return;
       }
 
@@ -283,7 +369,6 @@ export function AddModModal({
           "Failed to ingest Nexus download",
           controller.toastId
         );
-        return;
       }
     } catch (err) {
       handleNxmError(err, "Failed to ingest Nexus download");

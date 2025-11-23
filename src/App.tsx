@@ -10,6 +10,7 @@ import { DownloadsSidebar } from "./components/DownloadsSidebar";
 import { DownloadsPage } from "./components/DownloadsPage";
 import { ActiveModsView } from "./components/ActiveModsView";
 import { ServerStartupOverlay } from "./components/ServerStartupOverlay";
+import { NxmBackgroundListener } from "./components/NxmBackgroundListener";
 import { toast } from "sonner";
 import { Toaster } from "./components/ui/sonner";
 import { ThemeProvider } from "./components/ThemeProvider";
@@ -1596,6 +1597,10 @@ export default function App() {
           lastError={backendStatus.lastError}
         />
         <Toaster />
+        <NxmBackgroundListener
+          enabled={backendReady}
+          onModAdded={handleModAdded}
+        />
       </div>
     </ThemeProvider>
   );
