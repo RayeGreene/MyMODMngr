@@ -1,24 +1,108 @@
 @echo off
-echo Building RivalNxt for Local Development...
+REM ============================================================================
+REM Complete Build Script for RivalNxt
+REM This script builds all components: Rust libraries, PyO3 bindings, 
+REM Python backend, and Tauri application
+REM ============================================================================
 
-REM Clean previous builds
-if exist dist rmdir /s /q dist
-if exist build rmdir /s /q build
+echo.
+echo ============================================================================
+echo                    RivalNxt Build Script
+echo ============================================================================
+echo.
 
-echo Building Python backend with PyInstaller...
-python -m PyInstaller --noconfirm --clean --onefile --exclude-module PyQt5 --exclude-module PyQt6 --collect-data core.db.migrations --name rivalnxt_backend src-python/run_server.py
-
-if exist dist\rivalnxt_backend.exe (
-    echo Copying backend executable to Tauri sidecars...
-    if not exist src-tauri\sidecars mkdir src-tauri\sidecars
-    copy dist\rivalnxt_backend.exe src-tauri\sidecars\rivalnxt_backend-x86_64-pc-windows-msvc.exe
-    echo Local build completed successfully!
-) else (
-    echo ERROR: Backend executable not found in dist directory!
+REM Check if we're in the correct directory
+if not exist "src-tauri" (
+    echo ERROR: src-tauri directory not found!
+    echo Please run this script from the project root directory.
     exit /b 1
 )
 
-echo Building Tauri application...
-npm run tauri:build
+REM ============================================================================
+echo [1/4] Building Rust UE Tools with PyO3 bindings...
+echo ============================================================================
+cd src-tauri\src\rust-ue-tools
+echo Building release version with PyO3 features...
+cargo build --release --features pyo3 --lib
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: Rust UE Tools build failed!
+    cd ..\..\..
+    exit /b 1
+)
+echo ✓ Rust UE Tools built successfully
+cd ..\..\..
 
-echo Local build process completed!
+REM ============================================================================
+echo.
+echo [2/4] Building Python backend with PyInstaller...
+echo ============================================================================
+echo Cleaning previous builds...
+if exist dist rmdir /s /q dist
+if exist build rmdir /s /q build
+
+echo Building backend executable using spec file...
+python -m PyInstaller --noconfirm --clean rivalnxt_backend_merged.spec
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: Python backend build failed!
+    exit /b 1
+)
+
+if not exist dist\rivalnxt_backend.exe (
+    echo ERROR: Backend executable not found in dist directory!
+    exit /b 1
+)
+echo ✓ Python backend built successfully
+
+REM ============================================================================
+echo.
+echo [3/4] Copying backend to Tauri sidecars...
+echo ============================================================================
+if not exist src-tauri\sidecars mkdir src-tauri\sidecars
+copy /Y dist\rivalnxt_backend.exe src-tauri\sidecars\rivalnxt_backend-x86_64-pc-windows-msvc.exe >nul
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: Failed to copy backend executable!
+    exit /b 1
+)
+echo ✓ Backend copied to sidecars directory
+
+REM ============================================================================
+echo.
+echo [4/4] Building Tauri application...
+echo ============================================================================
+echo This will build the frontend and Tauri application...
+call npm run tauri:build
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: Tauri build failed!
+    exit /b 1
+)
+echo ✓ Tauri application built successfully
+
+REM ============================================================================
+echo.
+echo ============================================================================
+echo                         Build Complete!
+echo ============================================================================
+echo.
+echo Generated files:
+echo   - Python Backend:  dist\rivalnxt_backend.exe
+echo   - Tauri App:       src-tauri\target\release\rivalnxt.exe
+echo   - NSIS Installer:  src-tauri\target\release\bundle\nsis\RivalNxt_0.1.0_x64-setup.exe
+echo.
+echo ============================================================================
+
+REM Display file sizes
+echo.
+echo File sizes:
+if exist dist\rivalnxt_backend.exe (
+    for %%A in (dist\rivalnxt_backend.exe) do echo   rivalnxt_backend.exe: %%~zA bytes
+)
+if exist src-tauri\target\release\rivalnxt.exe (
+    for %%A in (src-tauri\target\release\rivalnxt.exe) do echo   rivalnxt.exe: %%~zA bytes
+)
+if exist src-tauri\target\release\bundle\nsis\RivalNxt_0.1.0_x64-setup.exe (
+    for %%A in (src-tauri\target\release\bundle\nsis\RivalNxt_0.1.0_x64-setup.exe) do echo   RivalNxt_0.1.0_x64-setup.exe: %%~zA bytes
+)
+
+echo.
+echo Build completed successfully at %date% %time%
+echo.

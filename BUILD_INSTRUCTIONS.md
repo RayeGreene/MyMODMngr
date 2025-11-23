@@ -26,18 +26,18 @@ This document explains how to build the complete RivalNxt application from sourc
 ### Windows
 Simply run the complete build script:
 ```cmd
-build_complete.bat
+build_local.bat
 ```
 
 ### Linux/macOS
 Make the script executable (first time only):
 ```bash
-chmod +x build_complete.sh
+chmod +x build_local.sh
 ```
 
 Then run it:
 ```bash
-./build_complete.sh
+./build_local.sh
 ```
 
 ## Build Process
@@ -64,7 +64,7 @@ The build script performs the following steps:
 ---
 
 ### 2. Build Python Backend
-**Command:** `python -m PyInstaller --noconfirm --clean --onefile --exclude-module PyQt5 --exclude-module PyQt6 --collect-data core.db.migrations --name rivalnxt_backend src-python/run_server.py`  
+**Command:** `python -m PyInstaller --noconfirm --clean rivalnxt_backend_merged.spec`  
 **Working Directory:** Project root
 
 **What it does:**
@@ -183,11 +183,7 @@ cd ../../..
 
 ### 2. Build Python Backend
 ```bash
-python -m PyInstaller --noconfirm --clean --onefile \
-  --exclude-module PyQt5 --exclude-module PyQt6 \
-  --collect-data core.db.migrations \
-  --name rivalnxt_backend \
-  src-python/run_server.py
+python -m PyInstaller --noconfirm --clean rivalnxt_backend_merged.spec
 ```
 
 ### 3. Copy Backend to Sidecars

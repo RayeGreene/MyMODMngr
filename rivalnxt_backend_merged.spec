@@ -11,6 +11,11 @@ character_ids_path = os.path.join('.', 'character_ids.json')
 if os.path.exists(character_ids_path):
     datas.append((character_ids_path, '.'))
 
+# Include backend icon for executable
+backend_icon_path = os.path.join('.', 'src-tauri', 'icons', 'backendicon.ico')
+if os.path.exists(backend_icon_path):
+    datas.append((backend_icon_path, 'src-tauri/icons'))
+
 # Add the entire core directory as data so it's available at runtime
 core_dir = Path('core')
 if core_dir.exists():

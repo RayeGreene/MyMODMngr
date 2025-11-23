@@ -1120,6 +1120,46 @@ def _ingest_resolved_download(
 	pak_map: Dict[str, List[str]] = {}
 	ingest_prep_error: Optional[Exception] = None
 
+	# Extract and enumerate PAK files from archives
+	if is_archive and path.exists():
+		tmpdir = None
+		try:
+			logger.info(f"[ingest] Extracting archive to enumerate PAK files: {path.name}")
+			# Extract archive to temporary directory
+			tmpdir = tempfile.mkdtemp(prefix="ingest_mod_")
+			extract_archive(str(path), tmpdir)
+			
+			# Extract PAK asset map from the extracted folder
+			pak_map = extract_pak_asset_map_from_folder(tmpdir, aes_key=aes_key)
+			
+			# Populate contents with PAK file names
+			if pak_map:
+				contents = list(pak_map.keys())
+				logger.info(f"[ingest] Found {len(contents)} PAK file(s) in archive: {contents}")
+				# Collapse bundled .pak + .utoc pairs
+				contents = collapse_pak_bundle(contents)
+				logger.info(f"[ingest] After collapsing bundles: {contents}")
+			else:
+				logger.warning(f"[ingest] No PAK files found in archive {path.name}")
+		except Exception as e:
+			# Log the error but don't fail - we'll store minimal info
+			ingest_prep_error = e
+			logger.warning(f"[ingest] Failed to extract/enumerate PAK files from {path.name}: {e}", exc_info=True)
+		finally:
+			# Clean up temporary directory
+			if tmpdir:
+				try:
+					shutil.rmtree(tmpdir, ignore_errors=True)
+				except Exception as cleanup_error:
+					logger.debug(f"[ingest] Failed to cleanup temp dir {tmpdir}: {cleanup_error}")
+	elif is_pak and path.exists():
+		# For standalone PAK files, just use the filename
+		logger.info(f"[ingest] Processing standalone PAK file: {path.name}")
+		contents = [path.name]
+		# We could optionally try to enumerate assets from the PAK file directly
+		# but for now we'll just store the filename
+
+
 	if not contents:
 		contents = [path.name]
 

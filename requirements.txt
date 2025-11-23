@@ -5,13 +5,4 @@ pyinstaller>=5.10.1
 python-multipart>=0.0.6
 pydantic>=1.10.7
 psutil>=5.9.0
-py7zr>=0.20.0
-rarfile>=4.0
 
-# Notes:
-# - `python-multipart` is required for FastAPI file upload endpoints (optional
-#   if you don't use uploads).
-# - `psutil` improves NXM protocol detection and process inspection on some
-#   platforms; an install helper exists at `scripts/install_psutil.py`.
-# - Package versions are minimum recommended versions; pin to exact versions
-#   in production if you need reproducible builds.
