@@ -14,6 +14,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -55,8 +57,30 @@ jobs:
           echo "Contents of current directory:"
           Get-ChildItem -Force
           
-          # Build using manifest path to specify the package
-          maturin build --release --features pyo3 --manifest-path Cargo.toml
+          # Check if required files exist
+          if (-not (Test-Path "Cargo.toml")) {
+            Write-Error "Cargo.toml not found in current directory!"
+            Write-Error "Available files:"
+            Get-ChildItem -Force
+            exit 1
+          }
+          
+          if (-not (Test-Path "pyproject.toml")) {
+            Write-Error "pyproject.toml not found in current directory!"
+            exit 1
+          }
+          
+          echo "Cargo.toml and pyproject.toml found. Checking workspace members..."
+          if (Test-Path "repak-rivals") {
+            echo "repak-rivals submodule found"
+            Get-ChildItem -Path "repak-rivals" -Force
+          } else {
+            Write-Error "repak-rivals submodule not found! Git submodules may not have been initialized properly."
+            exit 1
+          }
+          
+          # Build using maturin without specifying manifest path (it will use pyproject.toml)
+          maturin build --release --features pyo3
           
           echo "Finding built wheel..."
           $wheel = Get-ChildItem -Path target/wheels -Filter *.whl | Select-Object -First 1
