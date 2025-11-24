@@ -5,4 +5,7 @@ pyinstaller>=5.10.1
 python-multipart>=0.0.6
 pydantic>=1.10.7
 psutil>=5.9.0
+py7zr>=0.20.0
+rarfile>=4.0
+tzdata>=2023.3
 
