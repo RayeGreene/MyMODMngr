@@ -89,7 +89,7 @@ jobs:
           # Manually copy Oodle DLL to the extracted package
           # This is required because Maturin doesn't bundle it by default without pyproject.toml config
           echo "Copying Oodle DLL..."
-          Copy-Item -Path "src-tauri/src/rust-ue-tools/oo2core_9_win64.dll" -Destination "extracted_wheel/rust_ue_tools/"
+          Copy-Item -Path "src-tauri/src/rust-ue-tools/repak-rivals/oo2core_9_win64.dll" -Destination "extracted_wheel/rust_ue_tools/"
           
           echo "Wheel extracted successfully to extracted_wheel/"
           ls extracted_wheel
@@ -121,7 +121,7 @@ jobs:
             exit 1
           }
           
-          echo "✅ Backend built successfully with correct size!"
+          echo "âœ… Backend built successfully with correct size!"
         shell: pwsh
 
       # Step 3: Copy Backend to Tauri Sidecars
