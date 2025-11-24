@@ -74,6 +74,18 @@ jobs:
             Write-Error "Failed to import rust_ue_tools module!"
             exit 1
           }
+          
+          echo "Extracting wheel for PyInstaller bundling..."
+          cd ../../../
+          if (Test-Path extracted_wheel) { Remove-Item -Recurse -Force extracted_wheel }
+          New-Item -ItemType Directory -Path extracted_wheel | Out-Null
+          
+          # Extract wheel to get package data
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::ExtractToDirectory($wheel.FullName, "extracted_wheel")
+          
+          echo "Wheel extracted successfully to extracted_wheel/"
+          ls extracted_wheel
         shell: pwsh
 
       # Step 2: Build Python Backend with PyInstaller
@@ -83,17 +95,8 @@ jobs:
           if (Test-Path dist) { Remove-Item -Recurse -Force dist }
           if (Test-Path build) { Remove-Item -Recurse -Force build }
           
-          echo "Building backend executable..."
-          python -m PyInstaller `
-            --noconfirm `
-            --clean `
-            --onefile `
-            --exclude-module PyQt5 `
-            --exclude-module PyQt6 `
-            --collect-data core.db.migrations `
-            --hidden-import rust_ue_tools `
-            --name rivalnxt_backend `
-            src-python/run_server.py
+          echo "Building backend executable using spec file..."
+          python -m PyInstaller --noconfirm --clean rivalnxt_backend_merged.spec
           
           if (-not (Test-Path dist\rivalnxt_backend.exe)) {
             Write-Error "Backend executable not found!"
@@ -103,8 +106,8 @@ jobs:
           $backendSize = (Get-Item dist\rivalnxt_backend.exe).Length / 1MB
           echo "Backend size: $backendSize MB"
           
-          if ($backendSize -lt 50) {
-            Write-Error "Backend size is too small ($backendSize MB), expected ~115 MB. PyO3 module not included!"
+          if ($backendSize -lt 100) {
+            Write-Error "Backend size is too small ($backendSize MB), expected ~114 MB. Dependencies not included!"
             exit 1
           }
           
