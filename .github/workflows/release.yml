@@ -118,7 +118,14 @@ jobs:
           # Manually copy Oodle DLL to the extracted package
           # This is required because Maturin doesn't bundle it by default without pyproject.toml config
           echo "Copying Oodle DLL..."
-          Copy-Item -Path "src-tauri/src/rust-ue-tools/oo2core_9_win64.dll" -Destination "extracted_wheel/rust_ue_tools/"
+          $dllPath = "src-tauri/src/rust-ue-tools/repak-rivals/oo2core_9_win64.dll"
+          if (-not (Test-Path $dllPath)) {
+            Write-Error "Oodle DLL not found at: $dllPath"
+            Write-Error "Searching for DLL files in repak-rivals directory:"
+            Get-ChildItem -Path "src-tauri/src/rust-ue-tools/repak-rivals" -Filter "*.dll"
+            exit 1
+          }
+          Copy-Item -Path $dllPath -Destination "extracted_wheel/rust_ue_tools/"
           
           echo "Wheel extracted successfully to extracted_wheel/"
           ls extracted_wheel
