@@ -55,8 +55,8 @@ jobs:
           echo "Contents of current directory:"
           Get-ChildItem -Force
           
-          # Build the specific package in the workspace
-          maturin build --release --features pyo3 --package rust-ue-tools
+          # Build using manifest path to specify the package
+          maturin build --release --features pyo3 --manifest-path Cargo.toml
           
           echo "Finding built wheel..."
           $wheel = Get-ChildItem -Path target/wheels -Filter *.whl | Select-Object -First 1
