@@ -491,7 +491,7 @@ Consider adding an SPDX-compatible `LICENSE` file (MIT, Apache 2.0, GPL, etc.).
 Built with amazing open-source tools:
 
 - **Rust UE Tools** - Native Rust implementation replacing external CLI tools
-  - Based on [repak-rivals](https://github.com/natimerry/repak-rivals) and retoc libraries
+  - Based on [repak-rivals](https://github.com/Rounak77382/repak-rivals) and retoc libraries
   - Provides PAK/UTOC operations without external dependencies
 - [Tauri](https://tauri.app/) - Lightweight desktop runtime
 - [FastAPI](https://fastapi.tiangolo.com/) - Modern Python web framework
