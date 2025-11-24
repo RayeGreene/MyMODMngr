@@ -44,22 +44,78 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller maturin
           pip install -r requirements.txt
+          
+          # Install additional build tools
+          pip install setuptools wheel build
 
       - name: Install Node dependencies
         run: npm install
+
+      - name: Verify directory structure
+        run: |
+          echo "=== Repository Structure ==="
+          Get-ChildItem -Path . -Recurse -Force -Depth 3 | Select-Object FullName, Length | Format-Table -AutoSize
+          
+          echo "=== Rust Tools Directory Contents ==="
+          Get-ChildItem -Path "src-tauri/src/rust-ue-tools" -Force | Format-Table Name, Length, LastWriteTime
+          
+          echo "=== Cargo.toml exists check ==="
+          if (Test-Path "src-tauri/src/rust-ue-tools/Cargo.toml") {
+            echo "✅ Cargo.toml found"
+          } else {
+            echo "❌ Cargo.toml NOT found"
+            exit 1
+          }
+          
+          echo "=== pyproject.toml exists check ==="
+          if (Test-Path "src-tauri/src/rust-ue-tools/pyproject.toml") {
+            echo "✅ pyproject.toml found"
+          } else {
+            echo "❌ pyproject.toml NOT found"
+            exit 1
+          }
+          
+          echo "=== Git Submodule Status ==="
+          git submodule status --recursive
+        shell: pwsh
 
       # Step 1: Build and Install PyO3 Module with Maturin
       - name: Build PyO3 Module with Maturin
         run: |
           echo "Building PyO3 module with Maturin..."
-          cd src-tauri/src/rust-ue-tools
+          echo "Current working directory: $(Get-Location)"
+          echo "Contents of src-tauri:"
+          ls src-tauri
+          
+          $rustToolsPath = Resolve-Path "src-tauri/src/rust-ue-tools"
+          echo "Rust tools path: $rustToolsPath"
+          
+          if (-not (Test-Path "$rustToolsPath/Cargo.toml")) {
+            Write-Error "Cargo.toml not found at $rustToolsPath/Cargo.toml"
+            Write-Error "Available files in rust-ue-tools:"
+            ls "$rustToolsPath" -Force
+            exit 1
+          }
+          
+          Set-Location $rustToolsPath
+          echo "Changed to directory: $(Get-Location)"
+          
           maturin build --release --features pyo3
+          
+          if (-not (Test-Path "target/wheels")) {
+            Write-Error "target/wheels directory not found after maturin build"
+            Write-Error "Contents of target directory:"
+            ls target -Force
+            exit 1
+          }
           
           echo "Finding built wheel..."
           $wheel = Get-ChildItem -Path target/wheels -Filter *.whl | Select-Object -First 1
           
           if (-not $wheel) {
             Write-Error "No wheel file found in target/wheels!"
+            Write-Error "Contents of wheels directory:"
+            ls target/wheels -Force
             exit 1
           }
           
@@ -78,7 +134,7 @@ jobs:
           }
           
           echo "Extracting wheel for PyInstaller bundling..."
-          cd ../../../
+          Set-Location "..\..\..\"
           if (Test-Path extracted_wheel) { Remove-Item -Recurse -Force extracted_wheel }
           New-Item -ItemType Directory -Path extracted_wheel | Out-Null
           
@@ -89,7 +145,12 @@ jobs:
           # Manually copy Oodle DLL to the extracted package
           # This is required because Maturin doesn't bundle it by default without pyproject.toml config
           echo "Copying Oodle DLL..."
-          Copy-Item -Path "src-tauri/src/rust-ue-tools/repak-rivals/oo2core_9_win64.dll" -Destination "extracted_wheel/rust_ue_tools/"
+          $oodleDllPath = Resolve-Path "src-tauri/src/rust-ue-tools/repak-rivals/oo2core_9_win64.dll"
+          if (-not (Test-Path $oodleDllPath)) {
+            Write-Error "Oodle DLL not found at $oodleDllPath"
+            exit 1
+          }
+          Copy-Item -Path $oodleDllPath -Destination "extracted_wheel/rust_ue_tools/"
           
           echo "Wheel extracted successfully to extracted_wheel/"
           ls extracted_wheel
@@ -127,19 +188,28 @@ jobs:
       # Step 3: Copy Backend to Tauri Sidecars
       - name: Copy Backend to Sidecars
         run: |
-          if (-not (Test-Path src-tauri\sidecars)) {
-            New-Item -ItemType Directory -Path src-tauri\sidecars
+          $sidecarsPath = Resolve-Path "src-tauri\sidecars"
+          if (-not (Test-Path $sidecarsPath)) {
+            New-Item -ItemType Directory -Path $sidecarsPath
           }
-          Copy-Item -Path dist\rivalnxt_backend.exe `
-                    -Destination src-tauri\sidecars\rivalnxt_backend-x86_64-pc-windows-msvc.exe `
-                    -Force
           
-          if (-not (Test-Path src-tauri\sidecars\rivalnxt_backend-x86_64-pc-windows-msvc.exe)) {
-            Write-Error "Failed to copy backend executable!"
+          $backendPath = Resolve-Path "dist\rivalnxt_backend.exe"
+          if (-not (Test-Path $backendPath)) {
+            Write-Error "Backend executable not found at $backendPath"
             exit 1
           }
           
-          $sidecarSize = (Get-Item src-tauri\sidecars\rivalnxt_backend-x86_64-pc-windows-msvc.exe).Length / 1MB
+          Copy-Item -Path $backendPath `
+                    -Destination "$sidecarsPath\rivalnxt_backend-x86_64-pc-windows-msvc.exe" `
+                    -Force
+          
+          $sidecarExePath = "$sidecarsPath\rivalnxt_backend-x86_64-pc-windows-msvc.exe"
+          if (-not (Test-Path $sidecarExePath)) {
+            Write-Error "Failed to copy backend executable to $sidecarExePath!"
+            exit 1
+          }
+          
+          $sidecarSize = (Get-Item $sidecarExePath).Length / 1MB
           echo "Sidecar size: $sidecarSize MB"
         shell: pwsh
 
