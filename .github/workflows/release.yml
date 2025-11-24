@@ -63,9 +63,11 @@ jobs:
             exit 1
           }
           
-          echo "Found wheel: $($wheel.FullName)"
+          # Store absolute path before changing directories
+          $wheelPath = $wheel.FullName
+          echo "Found wheel: $wheelPath"
           echo "Installing wheel..."
-          pip install $wheel.FullName --force-reinstall
+          pip install $wheelPath --force-reinstall
           
           echo "Verifying installation..."
           python -c "import rust_ue_tools; print('rust_ue_tools imported successfully!')"
@@ -82,7 +84,7 @@ jobs:
           
           # Extract wheel to get package data
           Add-Type -AssemblyName System.IO.Compression.FileSystem
-          [System.IO.Compression.ZipFile]::ExtractToDirectory($wheel.FullName, "extracted_wheel")
+          [System.IO.Compression.ZipFile]::ExtractToDirectory($wheelPath, "extracted_wheel")
           
           echo "Wheel extracted successfully to extracted_wheel/"
           ls extracted_wheel
