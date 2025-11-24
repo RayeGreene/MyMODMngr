@@ -51,13 +51,20 @@ jobs:
         run: |
           echo "Building PyO3 module with Maturin..."
           cd src-tauri/src/rust-ue-tools
-          maturin build --release --features pyo3
+          echo "Current directory: $(Get-Location)"
+          echo "Contents of current directory:"
+          ls -la
+          
+          # Build the specific package in the workspace
+          maturin build --release --features pyo3 --package rust-ue-tools
           
           echo "Finding built wheel..."
           $wheel = Get-ChildItem -Path target/wheels -Filter *.whl | Select-Object -First 1
           
           if (-not $wheel) {
             Write-Error "No wheel file found in target/wheels!"
+            Write-Error "Available contents in target directory:"
+            if (Test-Path target) { ls target }
             exit 1
           }
           
@@ -169,5 +176,5 @@ jobs:
           name: build-logs
           path: |
             build/
-            src-tauri/target/release/build.log
+            src-tauri/target/
           retention-days: 3
