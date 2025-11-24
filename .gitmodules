@@ -1,0 +1,3 @@
+[submodule "src-tauri/src/rust-ue-tools"]
+	path = src-tauri/src/rust-ue-tools
+	url = https://github.com/Rounak77382/rust-ue-tools
