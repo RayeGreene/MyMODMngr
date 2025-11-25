@@ -192,10 +192,13 @@ jobs:
           prerelease: false
           args: --verbose
 
-      # Step 5: Compute SHA256 checksum + filename for installer
+           # Step 5: Compute SHA256 checksum + filename for installer
       - name: Compute SHA256 checksum
         id: sha
         shell: pwsh
+        env:
+          REPO: ${{ github.repository }}
+          TAG_NAME: ${{ github.ref_name }}
         run: |
           $installer = Get-ChildItem -Path "src-tauri/target" -Recurse -Filter "RivalNxt*_x64-setup.exe" | Select-Object -First 1
           if (-not $installer) { Write-Error "Installer exe not found in src-tauri/target"; exit 1 }
@@ -203,17 +206,30 @@ jobs:
           $installerHash = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLower()
           $installerName = $installer.Name
 
-          "SETUP_SHA256=$installerHash"       >> $env:GITHUB_OUTPUT
-          "INSTALLER_FILENAME=$installerName" >> $env:GITHUB_OUTPUT
+          # Write checksum file e.g. "RivalNxt_0.2.0_x64-setup.exe.sha256"
+          $checksumFile = "$installerName.sha256"
+          "$installerHash  $installerName" | Out-File -FilePath $checksumFile -Encoding ascii
 
-      # Step 6: Generate release notes from template
+          # Outputs for later steps
+          "INSTALLER_FILENAME=$installerName"       >> $env:GITHUB_OUTPUT
+          "SETUP_SHA256=$installerHash"            >> $env:GITHUB_OUTPUT
+          $baseUrl = "https://github.com/$env:REPO/releases/download/$env:TAG_NAME"
+          "INSTALLER_URL=$baseUrl/$installerName"  >> $env:GITHUB_OUTPUT
+          "CHECKSUM_URL=$baseUrl/$checksumFile"    >> $env:GITHUB_OUTPUT
+
+          # Upload checksum file as extra release asset
+          gh release upload "$env:TAG_NAME" "$checksumFile" --clobber
+
+           # Step 6: Generate release notes from template
       - name: Generate release notes
         shell: pwsh
         run: |
           (Get-Content .github/workflows/release_template.md) `
-            -replace '<SETUP_SHA256>', '${{ steps.sha.outputs.SETUP_SHA256 }}' `
             -replace '<INSTALLER_FILENAME>', '${{ steps.sha.outputs.INSTALLER_FILENAME }}' `
+            -replace '<INSTALLER_URL>',      '${{ steps.sha.outputs.INSTALLER_URL }}' `
+            -replace '<CHECKSUM_URL>',       '${{ steps.sha.outputs.CHECKSUM_URL }}' `
           | Set-Content release_generated.md
+
 
       # Step 7: Update GitHub Release body with generated notes
       - name: Update GitHub Release body

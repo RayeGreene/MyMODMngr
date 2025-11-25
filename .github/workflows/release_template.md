@@ -29,16 +29,14 @@ This is a beta pre-release focused on PyO3 Rust integration, automated CI/CD pip
 - Rust integration: PyO3 with Maturin for performance-critical operations  
 - Build system: GitHub Actions for CI/CD plus batch scripts for local development  
 
-## 📥 Installation (Windows)
+## 📥 Downloads
 
-1. Download `<INSTALLER_FILENAME>` from the release assets.  
-2. Run the installer.  
-3. Launch RivalNxt from the Start Menu.  
+| File | Platform | Checksum |
+|------|----------|----------|
+| [<INSTALLER_FILENAME>](<INSTALLER_URL>) | x64 Windows | [checksum](<CHECKSUM_URL>) |
 
-## 📋 Checksum
+> To verify the download on Windows, run `certutil -hashfile <filename> SHA256` and compare it with the value in the `.sha256` file.
 
-| File               | Platform   | SHA256 Checksum   |
-|-------------------|-----------|-------------------|
-| `<INSTALLER_FILENAME>` | Windows x64 | `<SETUP_SHA256>` |
+---
 
-> Verify downloads: On Windows, run `certutil -hashfile <filename> SHA256` and compare the result with the checksum above.
+**Note:** This is a beta pre-release intended for testing. Please report crashes, odd behavior, or Nexus Mods download issues via GitHub Issues or the Discord testing channel.
