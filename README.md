@@ -31,23 +31,28 @@ _One desktop app to manage, activate, and validate Marvel Rivals mods with confl
 
 - **Smart Mod Management** - Activate, deactivate, and organize mods with per-mod and bulk actions
 - **Conflict Detection** - Automatic detection and resolution of mod conflicts with tag rebuilding
-- **One-Click Downloads** - Seamless NexusMods NXM protocol integration for instant mod installation
+- **One-Click Downloads** - Seamless NexusMods NXM protocol integration with bi-directional handoff system
+- **Background Processing** - Automatic download processing via NXM protocol without manual intervention
 
 **🔧 Technical Highlights**
 
 - **Local-First Database** - Portable SQLite with health checks and inspection utilities
-- **Rust-Powered Core** - Native Rust `rust-ue-tools` library replaces external CLI tools (repak/retoc)
+- **Rust-Powered Core** - Native Rust `rust-ue-tools` library with PyO3 bindings via Maturin
 - **Modern Tech Stack** - Tauri 2 desktop shell + React/Vite frontend + FastAPI/Python backend
-- **Developer-Friendly** - Scriptable CLI utilities for automation and maintenance
+- **CI/CD Automation** - GitHub Actions workflow for automated builds and releases
+- **One-Click Build** - Complete build script for easy local development setup
 
 **🌐 NexusMods Integration**
 
 - API-powered metadata fetching and update notifications
-- Graceful fallback to manual workflows when needed
-- Full NXM protocol support for browser integration
+- Bi-directional NXM protocol with handoff system for background processing
+- Automatic download processing via `NxmBackgroundListener` component
+- Windows registry integration for seamless protocol handling
+- Test protocol functionality for validation
 
 **⚡ Rust UE Tools Library**
 
+- **PyO3 Integration** - Python bindings built with Maturin for seamless interop
 - **Native Performance** - Rust library replaces slow Python/external tool processing
 - **PAK/UTOC Support** - Direct unpacking and listing without external CLI dependencies
 - **AES Encryption** - Built-in support for encrypted mod files
@@ -105,31 +110,54 @@ See the [Development Guide](#-development-guide) below.
 
 ## 🏗️ Architecture
 
+```mermaid
+graph TB
+    subgraph Frontend["🎨 Frontend Layer"]
+        FE["React + Vite<br/>TypeScript"]
+    end
+    
+    subgraph Desktop["🖥️ Desktop Layer"]
+        Tauri["Tauri 2.0 Shell<br/>Rust Runtime"]
+    end
+    
+    subgraph Backend["⚙️ Backend Layer"]
+        API["FastAPI + Python<br/>REST API"]
+    end
+    
+    subgraph Shared["📦 Shared Libraries"]
+        RustUE["rust-ue-tools<br/>PAK/UTOC/Oodle Operations<br/><br/>• Native Rust API<br/>• PyO3 Bindings (Maturin)"]
+    end
+    
+    subgraph Data["💾 Data Layer"]
+        DB[("SQLite Database<br/>Conflict Views")]
+    end
+    
+    FE <-->|HTTP/IPC| Tauri
+    Tauri <-->|HTTP| API
+    Tauri -->|Native Rust API| RustUE
+    API -->|PyO3 Bindings| RustUE
+    API -->|SQLAlchemy ORM| DB
+    
+    classDef frontend fill:#61dafb,stroke:#333,stroke-width:2px,color:#000
+    classDef desktop fill:#ffc131,stroke:#333,stroke-width:2px,color:#000
+    classDef backend fill:#009688,stroke:#333,stroke-width:2px,color:#fff
+    classDef shared fill:#dea584,stroke:#333,stroke-width:2px,color:#000
+    classDef data fill:#4caf50,stroke:#333,stroke-width:2px,color:#fff
+    
+    class FE frontend
+    class Tauri desktop
+    class API backend
+    class RustUE shared
+    class DB data
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Frontend      │    │    Desktop      │    │    Backend      │
-│   React + Vite  │◄──►│  Tauri Shell    │◄──►│  FastAPI + Py   │
-│   TypeScript    │    │  Rust (Native)  │    │  REST API       │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-                                │                        │
-                       ┌─────────────────┐              │
-                       │ rust-ue-tools   │              │
-                       │ Native Library  │              │
-                       │ (PAK/UTOC Ops)  │              │
-                       └─────────────────┘              │
-                                                        │
-                                               ┌─────────────────┐
-                                               │   SQLite DB     │
-                                               │ Conflict Views  │
-                                               └─────────────────┘
-```
+
 
 **Tech Stack**
 
 - **Frontend**: React 18, TypeScript, Vite 6, Radix UI, Tailwind CSS
 - **Backend**: Python 3.10+, FastAPI, Uvicorn, SQLAlchemy
 - **Desktop**: Tauri 2.0 (Rust), Windows native
-- **Rust UE Tools**: Native Rust library for PAK/UTOC operations
+- **Rust UE Tools**: Native Rust library with dual interfaces (Rust API + PyO3 bindings via Maturin)
 - **Database**: SQLite with optimized materialized views
 
 ## 🦀 Rust UE Tools Library
@@ -264,15 +292,15 @@ let asset_paths = unpacker.extract_asset_paths_from_zip(
 ### Building from Source
 
 ```bash
-# Build debug and release versions
-./build_rust_libs.sh
-
-# Build with Python PyO3 bindings
-./build_rust_pyo3.sh
-
-# Manual Rust build
+# Build with Maturin (recommended for PyO3 bindings)
 cd src-tauri/src/rust-ue-tools
-cargo build --release
+maturin build --release --features pyo3
+
+# Install the built wheel
+pip install target/wheels/*.whl
+
+# Manual Rust build (library only)
+cargo build --release --features pyo3
 
 # Run tests
 cargo test
@@ -288,70 +316,90 @@ cargo doc --open
 - **💾 Memory Efficient**: Streams data instead of loading entire files
 - **🔄 Parallel Processing**: Rayon-powered concurrent operations
 - **📊 Progress Tracking**: Built-in progress reporting for long operations
+- **🐍 Python Integration**: Maturin-based PyO3 bindings for seamless Python usage
 
 ## 💻 Development Guide
 
 ### Prerequisites
 
 - Windows 10/11 (for desktop builds)
-- Node.js 18+ and Yarn
+- Node.js 18+ and npm
 - [Rust toolchain](https://rustup.rs/) via rustup
 - Python 3.10+
+- [Maturin](https://www.maturin.rs/) for PyO3 builds: `pip install maturin`
 - Git
 
-### Rust UE Tools Development
+### Quick Start (One-Click Build)
 
-The project includes a native Rust library (`rust-ue-tools`) that provides high-performance PAK/UTOC file operations, replacing external CLI tools.
-
-#### Building Rust Components
+For new users, use the automated build script that handles everything:
 
 ```bash
-# Build Rust UE Tools library
-./build_rust_libs.sh
-
-# Build with PyO3 Python bindings
-./build_rust_pyo3.sh
-
-# Manual Rust build
-cd src-tauri/src/rust-ue-tools
-cargo build --release
-```
-
-### Setup
-
-```
-# 1. Clone repository
-git clone https://github.com/Rounak77382/Project_ModManager_Rivals.git
+# Clone repository with submodules
+git clone --recurse-submodules https://github.com/Rounak77382/Project_ModManager_Rivals.git
 cd Project_ModManager_Rivals
 
+# Run one-click build (Windows)
+.\build_local.bat
+
+# This will:
+# 1. Install npm dependencies
+# 2. Build Rust UE Tools with PyO3 bindings
+# 3. Create Python wrapper module
+# 4. Build Python backend with PyInstaller
+# 5. Build Tauri application
+# 6. Generate NSIS installer
+```
+
+### Manual Development Setup
+
+```bash
+# 1. Clone repository with submodules
+git clone --recurse-submodules https://github.com/Rounak77382/Project_ModManager_Rivals.git
+cd Project_ModManager_Rivals
+
+# If you already cloned without submodules:
+git submodule update --init --recursive
+
 # 2. Install frontend dependencies
-yarn install
+npm install
 
 # 3. Setup Python environment
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+pip install maturin  # For PyO3 builds
 
-# 4. Start development servers
+# 4. Build Rust UE Tools with Maturin
+cd src-tauri/src/rust-ue-tools
+maturin build --release --features pyo3
+pip install target/wheels/*.whl
+cd ../../..
+
+# 5. Start development servers
 # Terminal 1: Backend
 python src-python/run_server.py
 
 # Terminal 2: Frontend
-yarn dev
+npm run dev
 
 # OR run full desktop app
-yarn desktop:dev
+npm run tauri:dev
 ```
 
 ### Build Commands
 
-```
-yarn build          # Production web build
-yarn desktop:build  # Full desktop application
+```bash
+# One-click build (recommended)
+.\build_local.bat
 
-# Rust UE Tools specific
-./build_rust_libs.sh      # Build native Rust library
-./build_rust_pyo3.sh      # Build with Python bindings
+# Manual builds
+npm run build          # Production web build
+npm run tauri:build    # Full desktop application
+
+# Rust UE Tools with Maturin
+cd src-tauri/src/rust-ue-tools
+maturin build --release --features pyo3
+maturin develop  # Install in development mode
 ```
 
 ### Project Structure
@@ -370,12 +418,13 @@ yarn desktop:build  # Full desktop application
 │   ├── lib/                  # API client & utils
 │   └── styles/               # Tailwind CSS
 ├── 📁 src-tauri/             # Rust desktop shell
-│   ├── src/rust-ue-tools/    # Native Rust library
-│   │   ├── repak/           # PAK file operations
-│   │   ├── retoc-rivals/    # UTOC file operations  
-│   │   └──oodle_loader/     # Compression handling
+│   ├── src/rust-ue-tools/    # Native Rust library (Git submodule)
+│   │   ├── repak-rivals/    # Workspace with PAK/UTOC/Oodle
+│   │   ├── pyproject.toml   # Maturin build config
+│   │   └── Cargo.toml       # Rust workspace config
 │   └── src/main.rs           # Tauri main entry
-├── 📁 build_rust_*.sh        # Rust build scripts
+├── 📁 build_local.bat        # One-click build script
+├── 📁 .github/workflows/     # CI/CD automation
 └── 📁 src-python/            # Backend entry point
 ```
 
@@ -430,6 +479,42 @@ python -X utf8 -m scripts.report_missing_tags
 - Rust Analyzer (rust-lang.rust-analyzer)
 - TypeScript (ms-vscode.vscode-typescript-next)
 - Tailwind CSS (bradlc.vscode-tailwindcss)
+
+## 🤖 CI/CD Automation
+
+RivalNxt uses GitHub Actions for automated builds and releases.
+
+### Release Workflow
+
+When a new GitHub Release is published, the workflow automatically:
+
+1. **Builds PyO3 Module** - Uses Maturin to build Python wheel with Rust bindings
+2. **Packages Backend** - Creates standalone executable with PyInstaller
+3. **Builds Tauri App** - Compiles desktop application with embedded backend
+4. **Uploads Assets** - Attaches installer to the GitHub Release
+
+### Workflow File
+
+See [`.github/workflows/release.yml`](file:///c:/Users/rouna/OneDrive/Documents/vs_code_projects/RivalNxt/.github/workflows/release.yml) for the complete CI/CD configuration.
+
+### Key Features
+
+- **Submodule Support** - Automatically initializes Git submodules
+- **Multi-stage Caching** - Caches Rust, Node, and Python dependencies
+- **Size Validation** - Ensures backend executable includes all dependencies
+- **Artifact Upload** - Uploads build artifacts for debugging
+- **Automated Release** - No manual build steps required for releases
+
+### Creating a Release
+
+```bash
+# 1. Tag your commit
+git tag v0.2.0
+git push origin v0.2.0
+
+# 2. Create GitHub Release from tag
+# The workflow will automatically build and attach the installer
+```
 
 ## ⚙️ Configuration
 
