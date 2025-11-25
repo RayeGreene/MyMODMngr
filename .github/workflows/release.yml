@@ -210,7 +210,7 @@ jobs:
       - name: Generate release notes
         shell: pwsh
         run: |
-          (Get-Content release_template.md) `
+          (Get-Content .github/workflows/release_template.md) `
             -replace '<SETUP_SHA256>', '${{ steps.sha.outputs.SETUP_SHA256 }}' `
             -replace '<INSTALLER_FILENAME>', '${{ steps.sha.outputs.INSTALLER_FILENAME }}' `
           | Set-Content release_generated.md
