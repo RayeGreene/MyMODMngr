@@ -168,27 +168,6 @@ RivalNxt includes a high-performance native Rust library (`rust-ue-tools`) that 
 - **✅ Parallel Processing**: Leverage Rayon for concurrent file operations
 - **✅ Python Bindings**: PyO3 integration for seamless Python usage
 
-### Architecture
-
-The `rust-ue-tools` library consists of:
-
-```
-📁 rust-ue-tools/
-├── 📄 lib.rs                 # Main library interface
-├── 📁 repak/                # PAK file operations
-│   ├── data.rs             # PAK data structures
-│   ├── entry.rs            # File entry handling
-│   ├── footer.rs           # PAK footer parsing
-│   └── pak.rs              # Core PAK operations
-├── 📁 retoc-rivals/        # UTOC file operations
-│   └──retoc.rs             # UTOC listing functionality
-├── 📁oodle_loader/         # Compression handling
-│   └── lib.rs             # Oodle compression loader
-├── 📄 types.rs             # Common data types
-├── 📄 error.rs             # Error handling
-└── 📄 python_bindings.rs   # PyO3 Python bindings
-```
-
 ### Usage Examples
 
 #### Basic Asset Path Extraction
@@ -570,8 +549,8 @@ Consider adding an SPDX-compatible `LICENSE` file (MIT, Apache 2.0, GPL, etc.).
 
 Built with amazing open-source tools:
 
-- **Rust UE Tools** - Native Rust implementation replacing external CLI tools
-  - Based on [repak-rivals](https://github.com/Rounak77382/repak-rivals) and retoc libraries
+- [Rust UE Tools](https://github.com/Rounak77382/rust-ue-tools) - Native Rust implementation replacing external CLI tools
+  - Based on [natimerry/repak-rivals](https://github.com/natimerry/repak-rivals) and retoc libraries
   - Provides PAK/UTOC operations without external dependencies
 - [Tauri](https://tauri.app/) - Lightweight desktop runtime
 - [FastAPI](https://fastapi.tiangolo.com/) - Modern Python web framework
