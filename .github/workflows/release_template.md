@@ -39,4 +39,4 @@ This is a beta pre-release focused on PyO3 Rust integration, automated CI/CD pip
 
 ---
 
-**Note:** This is a beta pre-release intended for testing. Please report crashes, odd behavior, or Nexus Mods download issues via GitHub Issues or the Discord testing channel.
+**Note:** This is a beta pre-release intended for testing. Please report crashes, odd behavior, or Nexus Mods download issues via GitHub Issues
