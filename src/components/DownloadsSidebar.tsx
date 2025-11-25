@@ -301,7 +301,7 @@ export function DownloadsSidebar({
           : undefined;
       toast.success(
         `Finished checking ${checked} mod${checked === 1 ? "" : "s"}${suffix}.`,
-        { id: toastId, description: warningDescription }
+        { id: toastId, description: warningDescription, duration: 4000 }
       );
       // Refresh authoritative downloads summary after checks complete
       try {

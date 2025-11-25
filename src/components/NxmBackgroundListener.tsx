@@ -10,6 +10,7 @@ import { createNxmProgressController } from "../lib/nxmHelpers";
 interface NxmBackgroundListenerProps {
   enabled: boolean;
   onModAdded?: () => Promise<void> | void;
+  isHandoffExcluded?: (handoff: ApiNxmHandoffSummary) => boolean;
 }
 
 /**
@@ -19,6 +20,7 @@ interface NxmBackgroundListenerProps {
 export function NxmBackgroundListener({
   enabled,
   onModAdded,
+  isHandoffExcluded,
 }: NxmBackgroundListenerProps) {
   const processedHandoffsRef = useRef<Set<string>>(new Set());
   const processingRef = useRef<Set<string>>(new Set());
@@ -43,6 +45,11 @@ export function NxmBackgroundListener({
             processedHandoffsRef.current.has(handoff.id) ||
             processingRef.current.has(handoff.id)
           ) {
+            continue;
+          }
+
+          // Skip if this handoff is being managed by the update flow
+          if (isHandoffExcluded?.(handoff)) {
             continue;
           }
 
@@ -95,6 +102,7 @@ export function NxmBackgroundListener({
         toast.success(`Auto-added ${modName}`, {
           id: controller.toastId,
           description: fileName ?? controller.getLastDescription(),
+          duration: 4000,
         });
 
         if (ingest.activation_warning) {
@@ -118,6 +126,7 @@ export function NxmBackgroundListener({
         toast.error(`Failed to auto-process ${modLabel}`, {
           id: controller.toastId,
           description: errorMessage,
+          duration: 5000,
         });
 
         console.error(

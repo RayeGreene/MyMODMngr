@@ -21,7 +21,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Separator } from "./ui/separator";
 import { ScrollArea } from "./ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
-import { Download, Star, Heart, Calendar, File, Trash2 } from "lucide-react";
+import { Download, Star, Heart, Calendar, File, Trash2, ExternalLink } from "lucide-react";
 import type { Mod } from "./ModCard";
 import {
   useCallback,
@@ -495,6 +495,7 @@ export function ModModal({
         statusLookup = await fetchPakStatuses();
         toast.success(willCheck ? "Activated file" : "Deactivated file", {
           id: toastId,
+          duration: 2000,
         });
       } catch (error) {
         toast.error((error as any)?.message || "Failed to apply");
@@ -567,7 +568,7 @@ export function ModModal({
         setActiveByDownload(toActiveMap(refreshed));
         const lookup = await fetchPakStatuses();
         setPakStatusByDownload(lookup);
-        toast.success(`Deleted ${displayName}`, { id: toastId });
+        toast.success(`Deleted ${displayName}`, { id: toastId, duration: 2000 });
         onConflictStateChanged?.();
         success = true;
       } catch (error) {
@@ -577,6 +578,7 @@ export function ModModal({
             : String(error ?? "Unknown error");
         toast.error(`Failed to delete ${displayName}: ${message}`, {
           id: toastId,
+          duration: 4000,
         });
       } finally {
         setDeletingDownloadId(null);
@@ -710,8 +712,21 @@ export function ModModal({
                   {details?.mod?.summary || mod.description}
                 </p>
 
-                <div className="flex items-center gap-4 mb-3">
-                  <div className="flex items-center gap-2">
+                <div className="flex items-center gap-3 mb-3">
+                  <a
+                    className="flex items-center gap-2 cursor-pointer"
+                    onClick={async () => {
+                      const modUrl = `https://next.nexusmods.com/profile/${details?.mod?.author || mod.author || "unknown"}`;
+                      try {
+                        const { openInBrowser } = await import(
+                          "../lib/tauri-utils"
+                        );
+                        await openInBrowser(modUrl);
+                      } catch (error) {
+                        console.error("Failed to open mod page:", error);
+                      }
+                    }}
+                  >
                     <Avatar className="w-6 h-6">
                       <AvatarImage
                         src={mod.authorAvatar || undefined}
@@ -733,7 +748,7 @@ export function ModModal({
                     <span className="font-medium">
                       {details?.mod?.author || mod.author || "Unknown author"}
                     </span>
-                  </div>
+                  </a>
                   {mod.categoryTags && mod.categoryTags.length > 0 && (
                     <div className="flex gap-1 flex-wrap">
                       {mod.categoryTags.map((tag) => (
@@ -744,6 +759,27 @@ export function ModModal({
                           {tag}
                         </Badge>
                       ))}
+                    </div>
+                  )}
+                  {serverModId && (
+                    <div className="flex gap-1 flex-wrap bg-muted rounded-md px-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={async () => {
+                          const modUrl = `https://www.nexusmods.com/marvelrivals/mods/${serverModId}`;
+                          try {
+                            const { openInBrowser } = await import("../lib/tauri-utils");
+                            await openInBrowser(modUrl);
+                          } catch (error) {
+                            console.error("Failed to open mod page:", error);
+                          }
+                        }}
+                        className="h-6 w-6"
+                        title="View on Nexus Mods"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                      </Button>
                     </div>
                   )}
                 </div>

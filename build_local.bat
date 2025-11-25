@@ -23,6 +23,12 @@ if not exist "src-tauri" (
     exit /b 1
 )
 
+REM Get version from package.json
+echo.
+echo Detecting version...
+for /f "delims=" %%v in ('node -p "require('./package.json').version"') do set APP_VERSION=%%v
+echo Detected version: !APP_VERSION!
+
 REM ============================================================================
 echo [1/6] Installing npm dependencies...
 echo ============================================================================
@@ -189,7 +195,7 @@ echo.
 echo Generated files:
 echo   - Python Backend:  dist\rivalnxt_backend.exe
 echo   - Tauri App:       src-tauri\target\release\rivalnxt.exe
-echo   - NSIS Installer:  src-tauri\target\release\bundle\nsis\RivalNxt_0.1.0_x64-setup.exe
+echo   - NSIS Installer:  src-tauri\target\release\bundle\nsis\RivalNxt_!APP_VERSION!_x64-setup.exe
 echo.
 echo ============================================================================
 
@@ -208,10 +214,10 @@ if exist src-tauri\target\release\rivalnxt.exe (
         echo   rivalnxt.exe: !size_mb! MB
     )
 )
-if exist src-tauri\target\release\bundle\nsis\RivalNxt_0.1.0_x64-setup.exe (
-    for %%A in (src-tauri\target\release\bundle\nsis\RivalNxt_0.1.0_x64-setup.exe) do (
+if exist src-tauri\target\release\bundle\nsis\RivalNxt_!APP_VERSION!_x64-setup.exe (
+    for %%A in (src-tauri\target\release\bundle\nsis\RivalNxt_!APP_VERSION!_x64-setup.exe) do (
         set /a size_mb=%%~zA/1048576
-        echo   RivalNxt_0.1.0_x64-setup.exe: !size_mb! MB
+        echo   RivalNxt_!APP_VERSION!_x64-setup.exe: !size_mb! MB
     )
 )
 

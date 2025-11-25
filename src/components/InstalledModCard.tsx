@@ -400,9 +400,24 @@ export function InstalledModCard({
                       {(mod.author?.trim()?.[0] ?? "?").toUpperCase()}
                     </AvatarFallback>
                   </Avatar>
-                  <span className="text-sm text-muted-foreground">
-                    {mod.author || "Unknown author"}
-                  </span>
+                  <a
+                    className="flex items-center gap-2 cursor-pointer"
+                    onClick={async () => {
+                      const modUrl = `https://next.nexusmods.com/profile/${mod.author || "unknown"}`;
+                      try {
+                        const { openInBrowser } = await import(
+                          "../lib/tauri-utils"
+                        );
+                        await openInBrowser(modUrl);
+                      } catch (error) {
+                        console.error("Failed to open mod page:", error);
+                      }
+                    }}
+                  >
+                    <span className="text-sm text-muted-foreground">
+                      {mod.author || "Unknown author"}
+                    </span>
+                  </a>
                 </div>
 
                 <TagList

@@ -127,6 +127,8 @@ export default function App() {
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [nxmEntries, setNxmEntries] = useState<Record<string, NxmEntry>>({});
   const nxmEntriesRef = useRef<Record<string, NxmEntry>>({});
+  // Track (mod_id, file_id) pairs being managed by update flow to prevent background listener from processing them
+  const updateManagedPairsRef = useRef<Set<string>>(new Set());
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
@@ -629,6 +631,7 @@ export default function App() {
       toast.success(message, {
         description,
         id: options.toastId,
+        duration: 4000,
       });
       setMods((prev) =>
         prev.map((mod) =>
@@ -747,11 +750,20 @@ export default function App() {
               throw new Error("Missing Nexus mod id for the handoff.");
             }
 
+            // Mark this (mod_id, file_id) pair as managed BEFORE waiting for handoff
+            // This prevents NxmBackgroundListener from processing it first
+            const trackingKey = expectedFileId != null 
+              ? `${expectedModId}:${expectedFileId}` 
+              : `${expectedModId}:*`;
+            updateManagedPairsRef.current.add(trackingKey);
+
             const handoff = await waitForMatchingHandoff(
               expectedModId,
               expectedFileId
             );
             if (!handoff) {
+              // Remove tracking on timeout
+              updateManagedPairsRef.current.delete(trackingKey);
               throw new Error(
                 "Timed out waiting for the RivalNxt download handoff."
               );
@@ -772,6 +784,10 @@ export default function App() {
             const progressDescription = controller?.getLastDescription();
             const toastId = controller?.toastId;
             controller?.stop();
+            
+            // Remove from managed set since processing is complete
+            updateManagedPairsRef.current.delete(trackingKey);
+            
             await applyUpdateSuccess(followUp, {
               toastId,
               progressDescription,
@@ -794,6 +810,7 @@ export default function App() {
                 {
                   id: toastId,
                   description,
+                  duration: 5000,
                 }
               );
             } else {
@@ -1061,6 +1078,18 @@ export default function App() {
 
   const handleModAdded = () =>
     refreshMods({ quiet: true, includeConflicts: true });
+
+  // Callback to check if a handoff is being managed by the update flow
+  // Checks by (mod_id, file_id) pair since we track updates before handoff appears
+  const isHandoffManagedByUpdate = useCallback((handoff: ApiNxmHandoffSummary) => {
+    const modId = handoff.request?.mod_id;
+    const fileId = handoff.request?.file_id;
+    if (modId == null) return false;
+    
+    // Create key: "modId:fileId" or "modId:*" if no specific file
+    const key = fileId != null ? `${modId}:${fileId}` : `${modId}:*`;
+    return updateManagedPairsRef.current.has(key);
+  }, []);
 
   // On mount, try to get mods from API (doesn't replace mock cards yet, just signals connectivity)
   useEffect(() => {
@@ -1600,6 +1629,7 @@ export default function App() {
         <NxmBackgroundListener
           enabled={backendReady}
           onModAdded={handleModAdded}
+          isHandoffExcluded={isHandoffManagedByUpdate}
         />
       </div>
     </ThemeProvider>
