@@ -111,46 +111,40 @@ See the [Development Guide](#-development-guide) below.
 ## 🏗️ Architecture
 
 ```mermaid
-graph TB
-    subgraph Frontend["🎨 Frontend Layer"]
-        FE["React + Vite<br/>TypeScript"]
-    end
-    
-    subgraph Desktop["🖥️ Desktop Layer"]
-        Tauri["Tauri 2.0 Shell<br/>Rust Runtime"]
-    end
-    
-    subgraph Backend["⚙️ Backend Layer"]
-        API["FastAPI + Python<br/>REST API"]
-    end
-    
-    subgraph Shared["📦 Shared Libraries"]
-        RustUE["rust-ue-tools<br/>PAK/UTOC/Oodle Operations<br/><br/>• Native Rust API<br/>• PyO3 Bindings (Maturin)"]
-    end
-    
-    subgraph Data["💾 Data Layer"]
-        DB[("SQLite Database<br/>Conflict Views")]
-    end
-    
+%%{init: {
+  "flowchart": {
+    "curve": "linear",
+    "nodeSpacing": 40,
+    "rankSpacing": 40
+  }
+}}%%
+flowchart-elk
+    FE["🎨 React + Vite"]
+    Tauri["🖥️ Tauri 2.0"]
+    API["⚙️ FastAPI"]
+    DB[("💾 SQLite")]
+    RustUE["📦 Rust UE Tools"]
+
     FE <-->|HTTP/IPC| Tauri
     Tauri <-->|HTTP| API
-    Tauri -->|Native Rust API| RustUE
-    API -->|PyO3 Bindings| RustUE
-    API -->|SQLAlchemy ORM| DB
-    
+    API <-->|ORM| DB
+    API <-->|PyO3| RustUE
+    Tauri <-->|Rust API| RustUE
+
     classDef frontend fill:#61dafb,stroke:#333,stroke-width:2px,color:#000
     classDef desktop fill:#ffc131,stroke:#333,stroke-width:2px,color:#000
     classDef backend fill:#009688,stroke:#333,stroke-width:2px,color:#fff
     classDef shared fill:#dea584,stroke:#333,stroke-width:2px,color:#000
     classDef data fill:#4caf50,stroke:#333,stroke-width:2px,color:#fff
-    
+
     class FE frontend
     class Tauri desktop
     class API backend
     class RustUE shared
     class DB data
-```
 
+
+```
 
 **Tech Stack**
 
@@ -267,24 +261,26 @@ match unpacker.list_utoc("mod.utoc", &options) {
 The Rust library replaces the original Python `zip_to_asset_paths.py` script:
 
 **Before (Python)**
+
 ```python
 from core.assets.zip_to_asset_paths import extract_uasset_paths_from_zip
 
 asset_paths = extract_uasset_paths_from_zip(
-    "mod.zip", 
-    repak_bin="path/to/repak", 
+    "mod.zip",
+    repak_bin="path/to/repak",
     aes_key="your-key"
 )
 ```
 
 **After (Rust)**
+
 ```rust
 use rust_ue_tools::Unpacker;
 
 let unpacker = Unpacker::new();
 let asset_paths = unpacker.extract_asset_paths_from_zip(
-    "mod.zip", 
-    Some("your-key"), 
+    "mod.zip",
+    Some("your-key"),
     false
 )?;
 ```
@@ -312,7 +308,7 @@ cargo doc --open
 ### Performance Benefits
 
 - **🚀 10-50x Faster**: Native Rust vs Python subprocess calls
-- **📦 No External Dependencies**: Eliminates repak.exe/retoc_cli.exe requirements  
+- **📦 No External Dependencies**: Eliminates repak.exe/retoc_cli.exe requirements
 - **💾 Memory Efficient**: Streams data instead of loading entire files
 - **🔄 Parallel Processing**: Rayon-powered concurrent operations
 - **📊 Progress Tracking**: Built-in progress reporting for long operations
@@ -560,7 +556,6 @@ We welcome contributions! Please see our [Contributing Guidelines](#contribution
 - Follow existing code style
 - Validate all inputs and API parameters
 
-
 ## 🐛 Known Issues
 
 See the [issue tracker](https://github.com/Rounak77382/Project_ModManager_Rivals/issues) for known bugs and feature requests.
@@ -583,7 +578,6 @@ Built with amazing open-source tools:
 - [React](https://reactjs.org/) + [Vite](https://vitejs.dev/) - Fast frontend tooling
 - [Radix UI](https://www.radix-ui.com/) - Accessible component primitives
 - [NexusMods](https://www.nexusmods.com/) - Modding community platform
-
 
 ---
 
