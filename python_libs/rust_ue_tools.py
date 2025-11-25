@@ -1,5 +1,5 @@
-Python wrapper for rust-ue-tools library 
-This module provides access to the Rust implementation of UE file operations 
+# Python wrapper for rust-ue-tools library 
+# This module provides access to the Rust implementation of UE file operations 
  
 import os 
 import sys 
@@ -16,7 +16,7 @@ _lib_name = None
  
 system = platform.system() 
 if system == "Windows": 
-    REM Try debug version first, then release 
+    # REM Try debug version first, then release 
     for lib_name in ["rust_ue_tools.dll", "rust_ue_tools_release.dll"]: 
         try: 
             _lib = __import__(lib_name.rsplit(".", 1)[0]) 
@@ -25,7 +25,7 @@ if system == "Windows":
         except (ImportError, OSError): 
             continue 
 else:  # Linux and macOS 
-    REM Handle other platforms similarly 
+    # REM Handle other platforms similarly 
     pass 
  
 if _lib is None: 
@@ -50,8 +50,8 @@ __all__ = [
     'extract_pak_asset_map_from_folder_py', 
     'free_c_string' 
 ] 
-Python wrapper for rust-ue-tools library 
-This module provides access to the Rust implementation of UE file operations 
+# Python wrapper for rust-ue-tools library 
+# This module provides access to the Rust implementation of UE file operations 
  
 import os 
 import sys 
@@ -68,7 +68,7 @@ _lib_name = None
  
 system = platform.system() 
 if system == "Windows": 
-    REM Try debug version first, then release 
+    # REM Try debug version first, then release 
     for lib_name in ["rust_ue_tools.dll", "rust_ue_tools_release.dll"]: 
         try: 
             _lib = __import__(lib_name.rsplit(".", 1)[0]) 
@@ -77,7 +77,7 @@ if system == "Windows":
         except (ImportError, OSError): 
             continue 
 else:  # Linux and macOS 
-    REM Handle other platforms similarly 
+    # REM Handle other platforms similarly 
     pass 
  
 if _lib is None: 
