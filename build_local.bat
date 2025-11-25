@@ -41,119 +41,99 @@ if not exist "node_modules" (
 
 REM ============================================================================
 echo.
-echo [2/6] Building Rust UE Tools with PyO3 bindings...
+echo [2/6] Building PyO3 Module with Maturin...
 echo ============================================================================
 cd src-tauri\src\rust-ue-tools
 
-echo 📦 Building debug version with PyO3 bindings...
-cargo build --lib --features pyo3
-if %ERRORLEVEL% NEQ 0 (
-    echo ❌ Debug build failed
+echo 📦 Building Python wheel with Maturin...
+echo Current directory: %cd%
+
+REM Check if required files exist
+if not exist "Cargo.toml" (
+    echo ❌ Cargo.toml not found in current directory!
     cd ..\..\..
     exit /b 1
 )
 
-echo 📦 Building release version with PyO3 bindings...
-cargo build --lib --release --features pyo3
-if %ERRORLEVEL% NEQ 0 (
-    echo ❌ Release build failed
+if not exist "pyproject.toml" (
+    echo ❌ pyproject.toml not found in current directory!
     cd ..\..\..
     exit /b 1
 )
 
-echo 🔗 Checking Python bindings...
-if exist "target\debug\rust_ue_tools.dll" (
-    echo ✅ Debug library built successfully
+echo ✅ Cargo.toml and pyproject.toml found
+
+REM Check workspace members
+if exist "repak-rivals" (
+    echo ✅ repak-rivals submodule found
 ) else (
-    echo ❌ Debug library not found
+    echo ❌ repak-rivals submodule not found! Git submodules may not be initialized.
+    echo Run: git submodule update --init --recursive
     cd ..\..\..
     exit /b 1
 )
 
-if exist "target\release\rust_ue_tools.dll" (
-    echo ✅ Release library built successfully
-) else (
-    echo ❌ Release library not found
+REM Build using Maturin
+echo Building wheel with --release --features pyo3...
+maturin build --release --features pyo3
+if %ERRORLEVEL% NEQ 0 (
+    echo ❌ Maturin build failed
     cd ..\..\..
     exit /b 1
 )
+
+echo Finding built wheel...
+for /f "delims=" %%i in ('dir /b /s target\wheels\*.whl 2^>nul ^| findstr /r ".*"') do set WHEEL_PATH=%%i
+
+if not defined WHEEL_PATH (
+    echo ❌ No wheel file found in target\wheels!
+    cd ..\..\..
+    exit /b 1
+)
+
+echo ✅ Found wheel: %WHEEL_PATH%
 
 REM ============================================================================
 echo.
-echo [3/6] Setting up Python bindings...
+echo [3/6] Installing and extracting wheel for PyInstaller...
 echo ============================================================================
 
-REM Create directory for Python libraries
-if not exist "..\..\..\python_libs" mkdir ..\..\..\python_libs
+echo Installing wheel...
+pip install "%WHEEL_PATH%" --force-reinstall
+if %ERRORLEVEL% NEQ 0 (
+    echo ❌ Failed to install wheel
+    cd ..\..\..
+    exit /b 1
+)
 
-REM Copy debug version (for development)
-copy "target\debug\rust_ue_tools.dll" "..\..\..\python_libs\rust_ue_tools.dll" >nul
-echo ✅ Copied Windows debug library
+echo Verifying installation...
+python -c "import rust_ue_tools; print('rust_ue_tools imported successfully!')"
+if %ERRORLEVEL% NEQ 0 (
+    echo ❌ Failed to import rust_ue_tools module!
+    cd ..\..\..
+    exit /b 1
+)
 
-REM Copy release version (for production)
-copy "target\release\rust_ue_tools.dll" "..\..\..\python_libs\rust_ue_tools_release.dll" >nul
-echo ✅ Copied Windows release library
-
-REM Create a simple Python wrapper module
-echo """ > ..\..\..\python_libs\rust_ue_tools.py
-echo Python wrapper for rust-ue-tools library >> ..\..\..\python_libs\rust_ue_tools.py
-echo This module provides access to the Rust implementation of UE file operations >> ..\..\..\python_libs\rust_ue_tools.py
-echo """ >> ..\..\..\python_libs\rust_ue_tools.py
-echo. >> ..\..\..\python_libs\rust_ue_tools.py
-echo import os >> ..\..\..\python_libs\rust_ue_tools.py
-echo import sys >> ..\..\..\python_libs\rust_ue_tools.py
-echo import platform >> ..\..\..\python_libs\rust_ue_tools.py
-echo from pathlib import Path >> ..\..\..\python_libs\rust_ue_tools.py
-echo. >> ..\..\..\python_libs\rust_ue_tools.py
-echo # Add current directory to path so we can import the shared library >> ..\..\..\python_libs\rust_ue_tools.py
-echo current_dir = Path(__file__).parent >> ..\..\..\python_libs\rust_ue_tools.py
-echo sys.path.insert(0, str(current_dir)) >> ..\..\..\python_libs\rust_ue_tools.py
-echo. >> ..\..\..\python_libs\rust_ue_tools.py
-echo # Try to load the shared library >> ..\..\..\python_libs\rust_ue_tools.py
-echo _lib = None >> ..\..\..\python_libs\rust_ue_tools.py
-echo _lib_name = None >> ..\..\..\python_libs\rust_ue_tools.py
-echo. >> ..\..\..\python_libs\rust_ue_tools.py
-echo system = platform.system() >> ..\..\..\python_libs\rust_ue_tools.py
-echo if system == "Windows": >> ..\..\..\python_libs\rust_ue_tools.py
-echo     REM Try debug version first, then release >> ..\..\..\python_libs\rust_ue_tools.py
-echo     for lib_name in ["rust_ue_tools.dll", "rust_ue_tools_release.dll"]: >> ..\..\..\python_libs\rust_ue_tools.py
-echo         try: >> ..\..\..\python_libs\rust_ue_tools.py
-echo             _lib = __import__(lib_name.rsplit(".", 1)[0]) >> ..\..\..\python_libs\rust_ue_tools.py
-echo             _lib_name = lib_name >> ..\..\..\python_libs\rust_ue_tools.py
-echo             break >> ..\..\..\python_libs\rust_ue_tools.py
-echo         except (ImportError, OSError): >> ..\..\..\python_libs\rust_ue_tools.py
-echo             continue >> ..\..\..\python_libs\rust_ue_tools.py
-echo else:  # Linux and macOS >> ..\..\..\python_libs\rust_ue_tools.py
-echo     REM Handle other platforms similarly >> ..\..\..\python_libs\rust_ue_tools.py
-echo     pass >> ..\..\..\python_libs\rust_ue_tools.py
-echo. >> ..\..\..\python_libs\rust_ue_tools.py
-echo if _lib is None: >> ..\..\..\python_libs\rust_ue_tools.py
-echo     print(f"Warning: Could not load rust-ue-tools library") >> ..\..\..\python_libs\rust_ue_tools.py
-echo     print("Falling back to external tools (repak.exe, retoc_cli.exe)") >> ..\..\..\python_libs\rust_ue_tools.py
-echo else: >> ..\..\..\python_libs\rust_ue_tools.py
-echo     print(f"✅ Loaded rust-ue-tools from {_lib_name}") >> ..\..\..\python_libs\rust_ue_tools.py
-echo. >> ..\..\..\python_libs\rust_ue_tools.py
-echo # Import the functions from the Rust library >> ..\..\..\python_libs\rust_ue_tools.py
-echo try: >> ..\..\..\python_libs\rust_ue_tools.py
-echo     extract_asset_paths_from_zip_py = getattr(_lib, 'extract_asset_paths_from_zip_py') >> ..\..\..\python_libs\rust_ue_tools.py
-echo     extract_pak_asset_map_from_folder_py = getattr(_lib, 'extract_pak_asset_map_from_folder_py') >> ..\..\..\python_libs\rust_ue_tools.py
-echo     free_c_string = getattr(_lib, 'free_c_string') >> ..\..\..\python_libs\rust_ue_tools.py
-echo except AttributeError as e: >> ..\..\..\python_libs\rust_ue_tools.py
-echo     print(f"Warning: Could not import required functions: {e}") >> ..\..\..\python_libs\rust_ue_tools.py
-echo     extract_asset_paths_from_zip_py = None >> ..\..\..\python_libs\rust_ue_tools.py
-echo     extract_pak_asset_map_from_folder_py = None >> ..\..\..\python_libs\rust_ue_tools.py
-echo     free_c_string = None >> ..\..\..\python_libs\rust_ue_tools.py
-echo. >> ..\..\..\python_libs\rust_ue_tools.py
-echo __all__ = [ >> ..\..\..\python_libs\rust_ue_tools.py
-echo     'extract_asset_paths_from_zip_py', >> ..\..\..\python_libs\rust_ue_tools.py
-echo     'extract_pak_asset_map_from_folder_py', >> ..\..\..\python_libs\rust_ue_tools.py
-echo     'free_c_string' >> ..\..\..\python_libs\rust_ue_tools.py
-echo ] >> ..\..\..\python_libs\rust_ue_tools.py
-
-echo ✅ Created Python wrapper module
-
-REM Return to project root
+echo Extracting wheel for PyInstaller bundling...
 cd ..\..\..
+if exist extracted_wheel rmdir /s /q extracted_wheel
+mkdir extracted_wheel
+
+REM Extract wheel using PowerShell
+powershell -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::ExtractToDirectory('%WHEEL_PATH%', 'extracted_wheel')"
+
+REM Manually copy Oodle DLL to the extracted package
+echo Copying Oodle DLL...
+set DLL_PATH=src-tauri\src\rust-ue-tools\repak-rivals\oo2core_9_win64.dll
+if not exist "%DLL_PATH%" (
+    echo ❌ Oodle DLL not found at: %DLL_PATH%
+    exit /b 1
+)
+copy "%DLL_PATH%" "extracted_wheel\rust_ue_tools\" >nul
+
+echo ✅ Wheel extracted successfully to extracted_wheel\
+dir extracted_wheel
+dir extracted_wheel\rust_ue_tools.
 
 REM ============================================================================
 echo.

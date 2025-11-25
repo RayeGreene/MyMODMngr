@@ -74,7 +74,28 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['PyQt5', 'PyQt6'],
+    excludes=[
+        # Qt frameworks
+        'PyQt5', 'PyQt6', 'PySide6',
+        # Machine Learning / Deep Learning (HUGE)
+        'tensorflow', 'torch', 'torchvision', 'torchaudio', 'tensorboard',
+        'tensorflow_intel', 'tensorflow_estimator', 'tensorboard_data_server',
+        'numpy.distutils', 'numpy.f2py',
+        # Data Science / Visualization
+        'matplotlib', 'seaborn', 'plotly', 'bokeh', 'altair',
+        'scipy.optimize', 'scipy.integrate', 'scipy.interpolate',
+        'sklearn', 'scikit-learn', 'scikit-image',
+        'pandas.tests', 'statsmodels',
+        # Web Scraping / Automation
+        'selenium', 'scrapy', 'beautifulsoup4',
+        # Jupyter / IPython
+        'IPython', 'jupyter', 'notebook', 'ipykernel', 'ipywidgets',
+        # Other heavy libraries
+        'streamlit', 'dash', 'flask', 'django',
+        'cv2', 'PIL.ImageQt',
+        # Testing frameworks
+        'pytest', 'unittest.mock', 'doctest',
+    ],
     noarchive=False,
     optimize=0,
 )
