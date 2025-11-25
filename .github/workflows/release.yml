@@ -6,11 +6,11 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
   build-and-release:
     runs-on: windows-latest
-    
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
