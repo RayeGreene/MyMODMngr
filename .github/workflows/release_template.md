@@ -1,6 +1,3 @@
-## RivalNxt - Production Release
-A powerful Marvel Rivals mod manager with native Rust performance, seamless NexusMods integration, and automated build pipelines.
-
 ## ✨ Key Features
 
 ### 🦀 PyO3 Rust Integration
