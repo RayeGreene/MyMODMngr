@@ -108,20 +108,10 @@ See the [Development Guide](#-development-guide) below.
 
 ```mermaid
 %%{init: {
-  "theme": "base",
-  "themeVariables": {
-    "primaryColor": "#61dafb",
-    "primaryTextColor": "#000",
-    "primaryBorderColor": "#333",
-    "lineColor": "#333"
-  },
-  "securityLevel": "loose",
   "flowchart": {
     "curve": "linear",
     "nodeSpacing": 40,
-    "rankSpacing": 40,
-    "htmlLabels": false,
-    "useMaxWidth": true
+    "rankSpacing": 40
   }
 }}%%
 flowchart LR
