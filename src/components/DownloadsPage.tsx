@@ -19,6 +19,7 @@ interface DownloadsPageProps {
   onConflictStateChanged?: () => void;
   viewMode: "grid" | "list";
   onViewModeChange: (mode: "grid" | "list") => void;
+  onRefresh?: () => void;
 }
 
 export function DownloadsPage({
@@ -32,6 +33,7 @@ export function DownloadsPage({
   onConflictStateChanged,
   viewMode,
   onViewModeChange,
+  onRefresh,
 }: DownloadsPageProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState<string>("Recent");
@@ -329,6 +331,7 @@ export function DownloadsPage({
           onInstall={() => {}}
           onFavorite={onFavorite}
           onConflictStateChanged={onConflictStateChanged}
+          onRefresh={onRefresh}
         />
       )}
     </>

@@ -59,6 +59,7 @@ import {
 } from "../lib/categoryUtils";
 import { openInBrowser } from "../lib/tauri-utils";
 import { getIconUrl } from "../lib/iconManager";
+import { useTheme } from "./ThemeProvider";
 
 interface DownloadsSidebarProps {
   selectedCategory: string;
@@ -149,6 +150,8 @@ export function DownloadsSidebar({
   mods,
   conflictsReloadToken = 0,
 }: DownloadsSidebarProps) {
+  const { theme } = useTheme();
+  const isLightMode = theme === "light";
   const installedMods = mods.filter((mod) => mod.isInstalled);
   // Map category to character counts for installed mods in that category
   const categoryCharacterCounts = useMemo(() => {
@@ -726,7 +729,11 @@ export function DownloadsSidebar({
             <img
               src={getIconUrl("kofi.svg")}
               alt="Ko-fi"
-              style={{ width: "40px", height: "15px" }}
+              style={{
+                width: "40px",
+                height: "15px",
+                filter: isLightMode ? "invert(1)" : "none",
+              }}
             />
           </Button>
           <Button
@@ -739,7 +746,11 @@ export function DownloadsSidebar({
             <img
               src={getIconUrl("upi.svg")}
               alt="UPI"
-              style={{ width: "40px", height: "12px" }}
+              style={{
+                width: "40px",
+                height: "12px",
+                filter: isLightMode ? "invert(1)" : "none",
+              }}
             />
           </Button>
         </div>

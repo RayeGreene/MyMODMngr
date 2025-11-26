@@ -21,7 +21,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 import { Switch } from "./ui/switch";
 import { ScrollArea } from "./ui/scroll-area";
-import { Loader2, RefreshCw, Play, Folder } from "lucide-react";
+import { Loader2, RefreshCw, Play, Folder, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -485,7 +485,29 @@ export function SettingsDialog({
                           gap: "10px",
                         }}
                       >
-                        <Label htmlFor="nexus_api_key">Nexus API key</Label>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <Label htmlFor="nexus_api_key">Nexus API key</Label>
+                          <Button
+                            type="button"
+                            variant="link"
+                            size="sm"
+                            onClick={async () => {
+                              const apiKeysUrl = "https://next.nexusmods.com/settings/api-keys#:~:text=Personal%20API%20Key";
+                              try {
+                                const { openInBrowser } = await import(
+                                  "../lib/tauri-utils"
+                                );
+                                await openInBrowser(apiKeysUrl);
+                              } catch (error) {
+                                console.error("Failed to open API keys page:", error);
+                              }
+                            }}
+                            style={{ padding: "0", height: "auto", fontSize: "0.875rem" }}
+                          >
+                            <ExternalLink className="h-3 w-3 mr-1" />
+                            Get API Key
+                          </Button>
+                        </div>
                         <Input
                           id="nexus_api_key"
                           type="password"

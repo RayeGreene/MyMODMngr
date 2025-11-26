@@ -21,6 +21,7 @@ interface ActiveModsViewProps {
   onConflictStateChanged?: () => void;
   viewMode: "grid" | "list";
   onViewModeChange: (mode: "grid" | "list") => void;
+  onRefresh?: () => void;
 }
 
 export function ActiveModsView({
@@ -33,6 +34,7 @@ export function ActiveModsView({
   onConflictStateChanged,
   viewMode,
   onViewModeChange,
+  onRefresh,
 }: ActiveModsViewProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState<string>("Recent");
@@ -384,6 +386,7 @@ export function ActiveModsView({
           onInstall={() => {}}
           onFavorite={onFavorite}
           onConflictStateChanged={onConflictStateChanged}
+          onRefresh={onRefresh}
         />
       )}
     </>

@@ -152,6 +152,7 @@ interface ModModalProps {
   onInstall: (modId: string) => void;
   onFavorite: (modId: string) => void;
   onConflictStateChanged?: () => void;
+  onRefresh?: () => void;
 }
 
 export function ModModal({
@@ -161,6 +162,7 @@ export function ModModal({
   onInstall,
   onFavorite,
   onConflictStateChanged,
+  onRefresh,
 }: ModModalProps) {
   const [details, setDetails] = useState<ApiModDetails | null>(null);
   // Files list from server is not needed for toggle UI; using local download contents instead
@@ -514,6 +516,8 @@ export function ModModal({
         setIsApplying(false);
         if (appliedSuccessfully) {
           onConflictStateChanged?.();
+          // Trigger parent refresh to update mod list
+          onRefresh?.();
         }
       }
     },
@@ -664,6 +668,13 @@ export function ModModal({
   const isDeletingSelectedEntry =
     deleteDialogEntry != null && deletingDownloadId === deleteDialogEntry.id;
 
+  // Compute if any pak files are currently activated across all downloads
+  const hasAnyActivePaks = useMemo(() => {
+    return Object.values(activeByDownload).some(
+      (activePaks) => Array.isArray(activePaks) && activePaks.length > 0
+    );
+  }, [activeByDownload]);
+
   // Comments tab removed per request
 
   // Note: we rely on local download contents for toggling, not Nexus file list.
@@ -812,12 +823,12 @@ export function ModModal({
 
               <div className="flex flex-col gap-2">
                 <Button
-                  variant={mod.isInstalled ? "secondary" : "default"}
+                  variant={hasAnyActivePaks ? "secondary" : "default"}
                   onClick={() => onInstall(mod.id)}
                   className="gap-2"
                 >
                   <Download className="w-4 h-4" />
-                  {mod.isInstalled ? "Installed" : "Install Mod"}
+                  {hasAnyActivePaks ? "Installed" : "Not Installed"}
                 </Button>
                 <Button
                   variant="outline"

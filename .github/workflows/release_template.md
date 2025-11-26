@@ -38,7 +38,7 @@ A powerful Marvel Rivals mod manager with native Rust performance, seamless Nexu
 4. Configure the required paths in Settings:
    - **Marvel Rivals game directory** → `marvel_rivals_root`
    - **Local downloads directory** → `marvel_rivals_local_downloads_root`
-5. (Optional) Add your [Nexus Mods API key](https://next.nexusmods.com/settings/api-keys) for automatic mod metadata
+5. Add your [Nexus Mods API key](https://next.nexusmods.com/settings/api-keys) for automatic mod metadata
 
 **No Python, Node.js, or Rust installation required** — everything is bundled!
 

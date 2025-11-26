@@ -295,6 +295,8 @@ export default function App() {
         const updated = await updateSettings(payload);
         setSettingsData(updated);
         toast.success("Settings updated");
+        // Auto-refresh after settings change
+        void refreshMods({ includeConflicts: true });
         return true;
       } catch (err) {
         const message =
@@ -553,6 +555,8 @@ export default function App() {
       const deduped = await fetchServerMods();
       setMods(deduped);
       toast.success(`${mod.name} removed from local downloads`);
+      // Auto-refresh after mod deletion
+      void refreshMods({ includeConflicts: true });
     } catch (e: any) {
       const message = e?.message ?? String(e);
       toast.error(`Failed to delete ${mod.name}: ${message}`);
@@ -604,6 +608,8 @@ export default function App() {
     ) => {
       responseLatestVersion = result.latest_version || responseLatestVersion;
       await refreshMods({ quiet: true });
+      // Auto-refresh after update completes
+      void refreshMods({ includeConflicts: true });
       // Force sidebar summary refresh (downloads summary / last-check)
       try {
         setConflictsReloadToken((t) => t + 1);
@@ -876,6 +882,8 @@ export default function App() {
           : `${mod.name} has been enabled!`
       );
     }
+    // Auto-refresh after mod toggle
+    void refreshMods({ includeConflicts: true });
   };
 
   const handleDisableAll = () => {
@@ -1552,6 +1560,7 @@ export default function App() {
                   onConflictStateChanged={notifyConflictsDirty}
                   viewMode={viewMode}
                   onViewModeChange={setViewMode}
+                  onRefresh={handleRefresh}
                 />
               ) : (
                 <ActiveModsView
@@ -1567,6 +1576,7 @@ export default function App() {
                   onConflictStateChanged={notifyConflictsDirty}
                   viewMode={viewMode}
                   onViewModeChange={setViewMode}
+                  onRefresh={handleRefresh}
                 />
               )}
             </div>

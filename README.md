@@ -68,13 +68,14 @@ _One desktop app to manage, activate, and validate Marvel Rivals mods with confl
 - Run the installer.
 - Launch the application after installation completes.
 
-### 3. Configure Paths (Auto-Detection Available)
+### 3. Configure Paths
 
 RivalNxt can **automatically detect** your Marvel Rivals installation if installed via Steam or Epic Games Store.
 
 In **Settings**:
-- **Marvel Rivals game directory** → Click "Auto-Detect" or manually select `marvel_rivals_root`
 - **Local downloads directory** → Manually select `marvel_rivals_local_downloads_root`
+- **Marvel Rivals game directory** → Click "Auto-Detect" or manually select `marvel_rivals_root`
+
 
 > 💡 **Tip**: The app also auto-detects archive tools (7-Zip/WinRAR) for extracting mod files.
 
@@ -88,9 +89,7 @@ Example: `CoolSkin-12345-1.0.0`
 
 This helps the app detect and track mods accurately.
 
-### 4. Nexus Personal API Key
-
-To enable automatic mod detail fetching and update notifications:
+### 4. Nexus Personal API Key (Required)
 
 1. Go to **[https://next.nexusmods.com/settings/api-keys](https://next.nexusmods.com/settings/api-keys)**
 2. Scroll **all the way down**
