@@ -73,9 +73,9 @@ _One desktop app to manage, activate, and validate Marvel Rivals mods with confl
 RivalNxt can **automatically detect** your Marvel Rivals installation if installed via Steam or Epic Games Store.
 
 In **Settings**:
+
 - **Local downloads directory** → Manually select `marvel_rivals_local_downloads_root`
 - **Marvel Rivals game directory** → Click "Auto-Detect" or manually select `marvel_rivals_root`
-
 
 > 💡 **Tip**: The app also auto-detects archive tools (7-Zip/WinRAR) for extracting mod files.
 
@@ -114,7 +114,7 @@ See the [Development Guide](#-development-guide) below.
     "rankSpacing": 40
   }
 }}%%
-flowchart-elk
+flowchart LR
     FE["🎨 React + Vite"]
     Tauri["🖥️ Tauri 2.0"]
     API["⚙️ FastAPI"]
