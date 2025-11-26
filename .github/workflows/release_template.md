@@ -1,7 +1,7 @@
-## 🎯 Pre-Release Announcement
-This is a beta pre-release focused on PyO3 Rust integration, automated CI/CD pipelines, and seamless Nexus Mods integration.
+## � RivalNxt - Production Release
+A powerful Marvel Rivals mod manager with native Rust performance, seamless NexusMods integration, and automated build pipelines.
 
-## ✨ New Features
+## ✨ Key Features
 
 ### 🦀 PyO3 Rust Integration
 - Integrated PyO3 for seamless Rust–Python interoperability.
@@ -11,7 +11,7 @@ This is a beta pre-release focused on PyO3 Rust integration, automated CI/CD pip
 ### 🌐 NXM Protocol Enhancements
 - Bi-directional handoff system for reliable mod downloads.
 - Background processing via the new `NxmBackgroundListener`.
-- Seamless “Download with Mod Manager” support from Nexus Mods.
+- Seamless "Download with Mod Manager" support from Nexus Mods.
 
 ### 🔧 Enhanced Build System
 - One-click build script (`build_local.bat`) for complete local setup.
@@ -29,6 +29,21 @@ This is a beta pre-release focused on PyO3 Rust integration, automated CI/CD pip
 - Rust integration: PyO3 with Maturin for performance-critical operations  
 - Build system: GitHub Actions for CI/CD plus batch scripts for local development  
 
+## 📥 Installation
+
+### Quick Start
+1. Download `<INSTALLER_FILENAME>` from the downloads table below
+2. Run the installer
+3. Launch RivalNxt from your Start Menu
+4. Configure the required paths in Settings:
+   - **Marvel Rivals game directory** → `marvel_rivals_root`
+   - **Local downloads directory** → `marvel_rivals_local_downloads_root`
+5. (Optional) Add your [Nexus Mods API key](https://next.nexusmods.com/settings/api-keys) for automatic mod metadata
+
+**No Python, Node.js, or Rust installation required** — everything is bundled!
+
+> 📖 **Need more help?** See the [full installation guide](https://github.com/Rounak77382/RivalNxt?tab=readme-ov-file#-installation) for detailed setup instructions.
+
 ## 📥 Downloads
 
 | File | Platform | Checksum |
@@ -39,4 +54,4 @@ This is a beta pre-release focused on PyO3 Rust integration, automated CI/CD pip
 
 ---
 
-**Note:** This is a beta pre-release intended for testing. Please report crashes, odd behavior, or Nexus Mods download issues via GitHub Issues
+**Questions or issues?** Please report bugs or feature requests via [GitHub Issues](https://github.com/Rounak77382/RivalNxt/issues).

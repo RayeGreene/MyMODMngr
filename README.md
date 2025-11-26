@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="./src-tauri/icons/frontendlogo.ico" alt="RivalNxt Logo" width="128" height="128">
+
 # RivalNxt
 
 ### Marvel Rivals Mod Manager
@@ -18,20 +20,14 @@ _One desktop app to manage, activate, and validate Marvel Rivals mods with confl
 
 ---
 
-### ⚠️ Beta Testing Phase
-
-> **This software is currently in beta and not production-ready.**  
-> RivalNxt v0.1.0 has been tested with a small group of users. You may encounter bugs or unexpected behavior. Please [report any issues](https://github.com/Rounak77382/Project_ModManager_Rivals/issues) you find to help improve the software.
-
----
-
 ## ✨ Features
 
 **🎯 Core Functionality**
 
 - **Smart Mod Management** - Activate, deactivate, and organize mods with per-mod and bulk actions
 - **Conflict Detection** - Automatic detection and resolution of mod conflicts with tag rebuilding
-- **One-Click Downloads** - Seamless NexusMods NXM protocol integration with bi-directional handoff system
+- **Auto-Detection** - Automatically detects Marvel Rivals installation path via Steam/Epic Games registry and archive tools (7-Zip/WinRAR)
+- **One-Click Downloads** - Click "Download with Mod Manager" on NexusMods to instantly download and install mods
 - **Background Processing** - Automatic download processing via NXM protocol without manual intervention
 
 **🔧 Technical Highlights**
@@ -44,11 +40,11 @@ _One desktop app to manage, activate, and validate Marvel Rivals mods with confl
 
 **🌐 NexusMods Integration**
 
-- API-powered metadata fetching and update notifications
-- Bi-directional NXM protocol with handoff system for background processing
-- Automatic download processing via `NxmBackgroundListener` component
-- Windows registry integration for seamless protocol handling
-- Test protocol functionality for validation
+- **Browser Integration** - "Download with Mod Manager" button on NexusMods automatically opens RivalNxt
+- **NXM Protocol** - Bi-directional handoff system with Windows registry integration
+- **Background Processing** - Automatic download processing via `NxmBackgroundListener` component
+- **API Integration** - Metadata fetching and update notifications
+- **Test Functionality** - Built-in protocol validation tools
 
 **⚡ Rust UE Tools Library**
 
@@ -72,14 +68,15 @@ _One desktop app to manage, activate, and validate Marvel Rivals mods with confl
 - Run the installer.
 - Launch the application after installation completes.
 
-### 3. Configure Required Paths
+### 3. Configure Paths (Auto-Detection Available)
 
-In **Settings**, fill in the following:
+RivalNxt can **automatically detect** your Marvel Rivals installation if installed via Steam or Epic Games Store.
 
-- **Marvel Rivals game directory** → `marvel_rivals_root`
-- **Local downloads directory** → `marvel_rivals_local_downloads_root`
+In **Settings**:
+- **Marvel Rivals game directory** → Click "Auto-Detect" or manually select `marvel_rivals_root`
+- **Local downloads directory** → Manually select `marvel_rivals_local_downloads_root`
 
-These paths are required for locating game files and managing mods properly.
+> 💡 **Tip**: The app also auto-detects archive tools (7-Zip/WinRAR) for extracting mod files.
 
 #### ⚠️ Mod Folder Naming Convention
 
