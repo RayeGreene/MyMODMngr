@@ -109,7 +109,6 @@ See the [Development Guide](#-development-guide) below.
 ```mermaid
 %%{init: {
   "flowchart": {
-    "curve": "linear",
     "nodeSpacing": 40,
     "rankSpacing": 40
   }
