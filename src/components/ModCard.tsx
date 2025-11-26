@@ -4,7 +4,7 @@ import { Card, CardContent } from "./ui/card";
 import { Button } from "./ui/button";
 // Badge is used by TagList; not needed directly here
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
-import { Download, Star, Eye, Calendar, User, Heart } from "lucide-react";
+import { Download, Star, Eye, Heart } from "lucide-react";
 import TagList from "./TagList";
 
 export interface Mod {
