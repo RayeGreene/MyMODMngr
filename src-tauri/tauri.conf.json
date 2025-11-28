@@ -21,7 +21,18 @@
     "externalBin": [
       "sidecars/rivalnxt_backend"
     ],
-    "windows": {}
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "",
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      },
+      "nsis": {
+        "displayLanguageSelector": false,
+        "installMode": "currentUser"
+      }
+    }
   },
   "app": {
     "windows": [
