@@ -479,8 +479,8 @@ See [`.github/workflows/release.yml`](file:///c:/Users/rouna/OneDrive/Documents/
 
 ```bash
 # 1. Tag your commit
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.2.2
+git push origin v0.2.2
 
 # 2. Create GitHub Release from tag
 # The workflow will automatically build and attach the installer

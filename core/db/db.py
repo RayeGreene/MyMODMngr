@@ -1270,19 +1270,12 @@ def delete_local_downloads(
             try:
                 active_paks = json.loads(active_paks_json)
                 if isinstance(active_paks, list) and active_paks:
-                    # Remove files from ~mods folder using the existing deactivation logic
-                    # We'll call the server endpoint to properly remove files
+                    # Remove files from ~mods folder - use active_paks to know what's actually active
                     mods_dir = _get_mods_folder_for_deletion()
                     
-                    # Extract pak names from contents for proper file removal
-                    pak_names = []
-                    if contents_json:
-                        try:
-                            contents = json.loads(contents_json)
-                            if isinstance(contents, list):
-                                pak_names = [os.path.basename(c) for c in contents if isinstance(c, str) and c.lower().endswith('.pak')]
-                        except Exception:
-                            pak_names = []
+                    # Use the ACTIVE pak names (what's actually in ~mods), not contents
+                    # active_paks contains the basenames of files that are currently active
+                    pak_names = [os.path.basename(p) for p in active_paks if isinstance(p, str)]
                     
                     # Remove files by stems (handles .pak/.utoc/.ucas)
                     removed_files = []

@@ -40,6 +40,13 @@ try:
         try:
             result = _unpacker.extract_pak_asset_map_from_folder(folder_path, aes_key)
             
+            # DEBUG: Print raw result from Rust
+            print(f"[DEBUG] Rust returned {len(result)} pak entries")
+            for pak_name, assets in result.items():
+                print(f"[DEBUG]   {pak_name}: {len(assets)} assets")
+                if len(assets) > 0:
+                    print(f"[DEBUG]     Sample: {assets[:3]}")
+            
             # Normalize paths to start with /Marvel/Content for consistency
             normalized_result = {}
             for pak_name, asset_paths in result.items():
@@ -48,6 +55,7 @@ try:
                     # Filter out metadata paths like "patched_files" and "/patched_files"
                     if (asset_path == "patched_files" or asset_path.startswith("patched_files") or
                         asset_path == "/patched_files" or asset_path.startswith("/patched_files")):
+                        print(f"[DEBUG] Filtered out: {asset_path}")
                         continue
                     
                     # Normalize path to start with /Marvel/Content
@@ -61,11 +69,14 @@ try:
                     
                     normalized_paths.append(normalized_path)
                 
+                print(f"[DEBUG] After normalization: {pak_name} has {len(normalized_paths)} assets")
                 normalized_result[pak_name] = normalized_paths
             
             return normalized_result
         except Exception as e:
             print(f"PyO3 folder extraction failed: {e}")
+            import traceback
+            traceback.print_exc()
             return {}
             
 except ImportError as e:

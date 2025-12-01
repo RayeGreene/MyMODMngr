@@ -548,10 +548,37 @@ export function ModModal({
       const toastId = `delete-download-${downloadId}`;
       setDeletingDownloadId(downloadId);
       setIsApplying(true);
-      toast.loading(`Deleting ${displayName}…`, { id: toastId });
 
       let success = false;
       try {
+        // Step 1: Deactivate all active paks first if any are active
+        const activePaks = activeByDownload[downloadId] ?? entry.active_paks ?? [];
+        if (activePaks.length > 0) {
+          toast.loading(`Deactivating ${displayName}…`, { id: toastId });
+          try {
+            await setActivePaks(downloadId, []);
+            await scanActive();
+            // Update local state to reflect deactivation
+            setActiveByDownload((prev) => ({
+              ...prev,
+              [downloadId]: [],
+            }));
+            setDownloadEntries((prev) =>
+              prev.map((e) =>
+                e.id === downloadId ? { ...e, active_paks: [] } : e
+              )
+            );
+          } catch (deactivateError) {
+            console.warn(
+              "[mod-modal] Failed to deactivate paks before deletion",
+              deactivateError
+            );
+            // Continue with deletion even if deactivation fails
+          }
+        }
+
+        // Step 2: Delete the mod
+        toast.loading(`Deleting ${displayName}…`, { id: toastId });
         const backendModId =
           typeof mod?.backendModId === "number" &&
           Number.isFinite(mod.backendModId)
@@ -574,6 +601,7 @@ export function ModModal({
         setPakStatusByDownload(lookup);
         toast.success(`Deleted ${displayName}`, { id: toastId, duration: 2000 });
         onConflictStateChanged?.();
+        onRefresh?.();
         success = true;
       } catch (error) {
         const message =
@@ -591,12 +619,14 @@ export function ModModal({
       return success;
     },
     [
+      activeByDownload,
       deletingDownloadId,
       fetchPakStatuses,
       hydrateDownloads,
       isApplying,
       mod?.backendModId,
       onConflictStateChanged,
+      onRefresh,
     ]
   );
 

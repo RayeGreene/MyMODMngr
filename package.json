@@ -1,6 +1,6 @@
 {
   "name": "rivalnxt",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "private": true,
   "dependencies": {
     "@radix-ui/react-accordion": "^1.2.3",

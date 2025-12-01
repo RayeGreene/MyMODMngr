@@ -1140,7 +1140,22 @@ def _ingest_resolved_download(
 				contents = collapse_pak_bundle(contents)
 				logger.info(f"[ingest] After collapsing bundles: {contents}")
 			else:
-				logger.warning(f"[ingest] No PAK files found in archive {path.name}")
+				logger.warning(f"[ingest] No PAK files found via asset map in archive {path.name}. Falling back to directory scan.")
+				fallback_paks = []
+				for root, _, files in os.walk(tmpdir):
+					for file in files:
+						lower = file.lower()
+						if lower.endswith(".pak") or lower.endswith(".utoc"):
+							fallback_paks.append(file)
+							# Populate pak_map with empty assets so io_store check works
+							pak_map[file] = []
+				
+				if fallback_paks:
+					contents = fallback_paks
+					contents = collapse_pak_bundle(contents)
+					logger.info(f"[ingest] Fallback found {len(contents)} PAK file(s): {contents}")
+				else:
+					logger.warning(f"[ingest] No PAK files found in archive {path.name}")
 		except Exception as e:
 			# Log the error but don't fail - we'll store minimal info
 			ingest_prep_error = e
@@ -1237,9 +1252,38 @@ def _ingest_resolved_download(
 		except Exception:
 			io_store_flag = None
 
+		# Merge paks (e.g. .pak + .utoc) into a single entry keyed by the .pak name
+		merged_pak_map: Dict[str, List[str]] = {}
+		merged_io_store: Dict[str, bool] = {}
+		
+		for raw_pak_name, assets in pak_map.items():
+			# Normalize extension: .utoc/.ucas -> .pak
+			lower_pak = raw_pak_name.lower()
+			if lower_pak.endswith(".utoc"):
+				normalized_name = raw_pak_name[:-5] + ".pak"
+			elif lower_pak.endswith(".ucas"):
+				normalized_name = raw_pak_name[:-5] + ".pak"
+			else:
+				normalized_name = raw_pak_name
+				
+			# Track if this bundle involves IoStore (if any part is .utoc)
+			is_utoc = lower_pak.endswith(".utoc")
+			if normalized_name not in merged_io_store:
+				merged_io_store[normalized_name] = False
+			if is_utoc:
+				merged_io_store[normalized_name] = True
+				
+			if normalized_name not in merged_pak_map:
+				merged_pak_map[normalized_name] = []
+			merged_pak_map[normalized_name].extend(assets)
+
 		total_paks = 0
 		total_assets = 0
-		for pak_name, assets in pak_map.items():
+		for pak_name, assets in merged_pak_map.items():
+			# Deduplicate assets
+			assets = sorted(list(set(assets)))
+			io_store = merged_io_store.get(pak_name, False)
+			
 			total_paks += 1
 			total_assets += len(assets)
 			upsert_mod_pak(
@@ -1248,7 +1292,7 @@ def _ingest_resolved_download(
 				mod_id=resolved_mod_id,
 				source_zip=source_zip,
 				local_download_id=local_download_id,
-				io_store=bool(io_store_flag) if io_store_flag is not None else None,
+				io_store=io_store,
 			)
 			bulk_upsert_pak_assets(conn, pak_name, assets, replace=True)
 			upsert_pak_assets_json(conn, pak_name, assets, mod_id=resolved_mod_id)
@@ -1279,14 +1323,43 @@ def _ingest_resolved_download(
 			if "metadata_warning" not in metadata_info:
 				try:
 					io_bool = bool(io_store_flag) if io_store_flag is not None else None
-					for pak_name, assets in pak_map.items():
+					# Merge paks when updating with discovered mod_id
+					update_merged_pak_map: Dict[str, List[str]] = {}
+					update_merged_io_store: Dict[str, bool] = {}
+					
+					for raw_pak_name, assets in pak_map.items():
+						# Normalize extension: .utoc/.ucas -> .pak
+						lower_pak = raw_pak_name.lower()
+						if lower_pak.endswith(".utoc"):
+							normalized_name = raw_pak_name[:-5] + ".pak"
+						elif lower_pak.endswith(".ucas"):
+							normalized_name = raw_pak_name[:-5] + ".pak"
+						else:
+							normalized_name = raw_pak_name
+							
+						# Track if this bundle involves IoStore
+						is_utoc = lower_pak.endswith(".utoc")
+						if normalized_name not in update_merged_io_store:
+							update_merged_io_store[normalized_name] = False
+						if is_utoc:
+							update_merged_io_store[normalized_name] = True
+							
+						if normalized_name not in update_merged_pak_map:
+							update_merged_pak_map[normalized_name] = []
+						update_merged_pak_map[normalized_name].extend(assets)
+					
+					for pak_name, assets in update_merged_pak_map.items():
+						# Deduplicate assets
+						assets = sorted(list(set(assets)))
+						io_store = update_merged_io_store.get(pak_name, False)
+						
 						upsert_mod_pak(
 							conn,
 							pak_name=pak_name,
 							mod_id=resolved_mod_id,
 							source_zip=source_zip,
 							local_download_id=local_download_id,
-							io_store=io_bool,
+							io_store=io_store,
 						)
 						upsert_pak_assets_json(conn, pak_name, assets, mod_id=resolved_mod_id)
 				except Exception:

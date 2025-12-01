@@ -28,6 +28,8 @@ import {
   updateMod,
   listNxmHandoffs,
   previewNxmHandoff,
+  setActivePaks,
+  scanActive,
   ApiError,
   type ApiDownload,
   type ApiNxmHandoffSummary,
@@ -541,16 +543,39 @@ export default function App() {
     }
 
     try {
-      // If the mod is active, deactivate it first
-      if (mod.isActive !== false) {
+      // Step 1: Deactivate all active paks first if the mod is active
+      if (mod.isActive !== false && downloadIds.length > 0) {
+        // Update UI state optimistically
         setMods((prev) =>
           prev.map((m) =>
             m.id === modId ? { ...m, isActive: false } : m
           )
         );
+        
+        // Actually deactivate on backend for each download
+        for (const downloadId of downloadIds) {
+          try {
+            await setActivePaks(downloadId, []);
+          } catch (deactivateError) {
+            console.warn(
+              `[App] Failed to deactivate download_id=${downloadId}`,
+              deactivateError
+            );
+            // Continue with other downloads and deletion even if one fails
+          }
+        }
+        
+        // Scan to update file system state
+        try {
+          await scanActive();
+        } catch (scanError) {
+          console.warn("[App] scanActive after deactivation failed", scanError);
+        }
+        
         toast.info(`${mod.name} deactivated before removal`);
       }
 
+      // Step 2: Delete the mod
       await deleteLocalDownloads(downloadIds, backendModId);
       const deduped = await fetchServerMods();
       setMods(deduped);

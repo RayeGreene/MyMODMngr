@@ -254,22 +254,51 @@ def main(argv=None) -> int:
                 if mod_id is not None:
                     if conn.execute("SELECT 1 FROM mods WHERE mod_id=?", (mod_id,)).fetchone():
                         resolved_mod_id = mod_id
-                for pak_name, assets in pak_map.items():
-                    declared = _map_declared_name(pak_name, contents)
-                    io_store = pak_name.lower().endswith(".utoc")
-                    log.debug("[%s] Upserting pak %s (declared as %s) with %d asset(s) (io_store=%s)",
-                              name, pak_name, declared, len(assets), io_store)
+                # Merge paks (e.g. .pak + .utoc) into a single entry keyed by the .pak name
+                merged_pak_map: Dict[str, List[str]] = {}
+                merged_io_store: Dict[str, bool] = {}
+                
+                for raw_pak_name, assets in pak_map.items():
+                    declared = _map_declared_name(raw_pak_name, contents)
+                    
+                    # Normalize extension: .utoc/.ucas -> .pak
+                    lower_declared = declared.lower()
+                    if lower_declared.endswith(".utoc"):
+                        normalized_name = declared[:-5] + ".pak"
+                    elif lower_declared.endswith(".ucas"):
+                        normalized_name = declared[:-5] + ".pak"
+                    else:
+                        normalized_name = declared
+                        
+                    # Track if this bundle involves IoStore (if any part is .utoc)
+                    is_utoc = raw_pak_name.lower().endswith(".utoc")
+                    if normalized_name not in merged_io_store:
+                        merged_io_store[normalized_name] = False
+                    if is_utoc:
+                        merged_io_store[normalized_name] = True
+                        
+                    if normalized_name not in merged_pak_map:
+                        merged_pak_map[normalized_name] = []
+                    merged_pak_map[normalized_name].extend(assets)
+
+                for pak_name, assets in merged_pak_map.items():
+                    # Deduplicate assets
+                    assets = sorted(list(set(assets)))
+                    io_store = merged_io_store.get(pak_name, False)
+                    
+                    log.debug("[%s] Upserting pak %s with %d asset(s) (io_store=%s)",
+                              name, pak_name, len(assets), io_store)
                     upsert_mod_pak(
                         conn,
-                        pak_name=declared,
+                        pak_name=pak_name,
                         mod_id=resolved_mod_id,
                         source_zip=str(Path(relpath or name).as_posix()),
                         local_download_id=download_id,
                         io_store=io_store,
                     )
                     paks_written += 1
-                    assets_written += bulk_upsert_pak_assets(conn, declared, assets, replace=True)
-                    upsert_pak_assets_json(conn, declared, assets, mod_id=resolved_mod_id)
+                    assets_written += bulk_upsert_pak_assets(conn, pak_name, assets, replace=True)
+                    upsert_pak_assets_json(conn, pak_name, assets, mod_id=resolved_mod_id)
             finally:
                 # Only clean up temp directory if we created one (for archives)
                 if tmpdir:
