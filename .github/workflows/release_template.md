@@ -43,7 +43,7 @@
 
 | File                                  | Platform    | Checksum                 |
 | ------------------------------------- | ----------- | ------------------------ |
-| [<INSTALLER_FILENAME>](INSTALLER_URL) | x64 Windows | [checksum](CHECKSUM_URL) |
+| [<INSTALLER_FILENAME>](<INSTALLER_URL>) | x64 Windows | [checksum](<CHECKSUM_URL>) |
 
 > To verify the download on Windows, run `certutil -hashfile <filename> SHA256` and compare it with the value in the `.sha256` file.
 
