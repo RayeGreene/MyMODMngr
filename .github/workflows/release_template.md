@@ -1,51 +1,49 @@
-## ✨ Key Features
+## 🎉 Version 0.2.2 - Patch Notes
 
-### 🦀 PyO3 Rust Integration
-- Integrated PyO3 for seamless Rust–Python interoperability.
-- Replaced external CLI tools with the native `rust-ue-tools` library.
-- Improved performance for PAK/UTOC asset processing via direct memory access.
+### 🔧 PAK Handling & Archive Extraction Improvements
 
-### 🌐 NXM Protocol Enhancements
-- Bi-directional handoff system for reliable mod downloads.
-- Background processing via the new `NxmBackgroundListener`.
-- Seamless "Download with Mod Manager" support from Nexus Mods.
+### Enhanced PAK File Processing
 
-### 🔧 Enhanced Build System
-- One-click build script (`build_local.bat`) for complete local setup.
-- Automated CI/CD workflows for consistent release generation.
-- Maturin integration for optimized Python wheel building.
+- **Fallback PAK Scanning**: Added reliable fallback mechanism when asset map extraction fails
+- **Unified File Organization**: Merged .pak/.utoc/.ucas files into unified entries for better mod management
+- **Improved Asset Processing**: Enhanced memory access patterns for faster PAK file operations
 
-### 📦 Build Improvements
-- Automatic PyO3 library compilation in CI/CD.
-- Size validation to ensure backend integrity.
-- Robust file-path detection for different build environments.
+### Archive Extraction Enhancements
 
-## 🛠️ Technical Details
-- Backend: Python 3.10+ with FastAPI  
-- Frontend: React 18 with Tauri 2.0  
-- Rust integration: PyO3 with Maturin for performance-critical operations  
-- Build system: GitHub Actions for CI/CD plus batch scripts for local development  
+- **7z Archive Support**: Enhanced 7z archive support with binary extraction fallback
+- **Robust Error Handling**: Better fallback behavior when primary extraction methods fail
+- **Debug Logging**: Added comprehensive debug logging for asset extraction and processing
+
+### Mod Deletion Workflow
+
+- **Proper Deactivation Sequence**: Improved mod deletion workflow with correct deactivation order
+- **Clean Removal Process**: Ensures complete mod cleanup with proper asset unregistration
+- **Enhanced User Experience**: More reliable and predictable mod removal process
+
+### Reliability Improvements
+
+- **Better Error Recovery**: Enhanced fallback mechanisms throughout the mod management pipeline
+- **Performance Optimizations**: Improved processing speeds for large mod collections
+- **Debug Capabilities**: Added detailed logging for troubleshooting complex mod scenarios
 
 ## 📥 Installation
 
 ### Quick Start
+
 1. Download `<INSTALLER_FILENAME>` from the downloads table below
 2. Run the installer
 3. Launch RivalNxt from your Start Menu
-4. Configure the required paths in Settings:
-   - **Marvel Rivals game directory** → `marvel_rivals_root`
-   - **Local downloads directory** → `marvel_rivals_local_downloads_root`
-5. Add your [Nexus Mods API key](https://next.nexusmods.com/settings/api-keys) for automatic mod metadata
-
-**No Python, Node.js, or Rust installation required** — everything is bundled!
+4. Configure in Settings:
+   - **Local downloads directory** → Select the folder where your Marvel Rivals mods are downloaded/saved (create anywhere or use existing folder)
+   - **Nexus Personal API Key** → Get your [API key](https://next.nexusmods.com/settings/api-keys) (scroll all the way down) and paste it into RivalNxt
 
 > 📖 **Need more help?** See the [full installation guide](https://github.com/Rounak77382/RivalNxt?tab=readme-ov-file#-installation) for detailed setup instructions.
 
 ## 📥 Downloads
 
-| File | Platform | Checksum |
-|------|----------|----------|
-| [<INSTALLER_FILENAME>](<INSTALLER_URL>) | x64 Windows | [checksum](<CHECKSUM_URL>) |
+| File                                  | Platform    | Checksum                 |
+| ------------------------------------- | ----------- | ------------------------ |
+| [<INSTALLER_FILENAME>](INSTALLER_URL) | x64 Windows | [checksum](CHECKSUM_URL) |
 
 > To verify the download on Windows, run `certutil -hashfile <filename> SHA256` and compare it with the value in the `.sha256` file.
 

@@ -74,8 +74,8 @@ RivalNxt can **automatically detect** your Marvel Rivals installation if install
 
 In **Settings**:
 
-- **Local downloads directory** → Manually select `marvel_rivals_local_downloads_root`
-- **Marvel Rivals game directory** → Click "Auto-Detect" or manually select `marvel_rivals_root`
+- **Local downloads directory** → Select the folder where your Marvel Rivals mods are downloaded/saved (create anywhere or use existing folder)
+- **Nexus Personal API Key** → Get your [API key](https://next.nexusmods.com/settings/api-keys) (scroll all the way down) and paste it into RivalNxt
 
 > 💡 **Tip**: The app also auto-detects archive tools (7-Zip/WinRAR) for extracting mod files.
 
@@ -88,13 +88,6 @@ Every mod inside your `marvel_rivals_local_downloads_root` directory must follow
 Example: `CoolSkin-12345-1.0.0`
 
 This helps the app detect and track mods accurately.
-
-### 4. Nexus Personal API Key (Required)
-
-1. Go to **[https://next.nexusmods.com/settings/api-keys](https://next.nexusmods.com/settings/api-keys)**
-2. Scroll **all the way down**
-3. Copy your **Personal API Key**
-4. Paste it into the API key field in the app's Settings
 
 ### 5. You're Ready to Use the App
 
