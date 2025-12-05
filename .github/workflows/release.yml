@@ -135,6 +135,13 @@ jobs:
       # Step 2: Build Python Backend with PyInstaller
       - name: Build Python Backend
         run: |
+          echo "Verifying directories that will be bundled..."
+          echo "Core directory exists: $(Test-Path core)"
+          echo "Scripts directory exists: $(Test-Path scripts)"
+          echo "Extracted wheel directory exists: $(Test-Path extracted_wheel/rust_ue_tools)"
+          if (Test-Path core) { echo "Core dir size: $((Get-ChildItem core -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB) MB" }
+          if (Test-Path scripts) { echo "Scripts dir size: $((Get-ChildItem scripts -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB) MB" }
+          
           echo "Cleaning previous builds..."
           if (Test-Path dist) { Remove-Item -Recurse -Force dist }
           if (Test-Path build) { Remove-Item -Recurse -Force build }
@@ -149,10 +156,12 @@ jobs:
 
           $backendSize = (Get-Item dist\rivalnxt_backend.exe).Length / 1MB
           echo "Backend size: $backendSize MB"
+          echo "Expected size: ~51 MB (based on local builds)"
 
-          # Adjusted threshold: The local build (114MB) likely includes debug symbols or unstripped binaries.
-          # The CI build (19MB + DLL) is optimized. We check for > 15MB to ensure core dependencies are present.
-          if ($backendSize -lt 15) {
+          # The local build produces ~51 MB executables.
+          # If CI build is significantly smaller, it may be missing dependencies or data files.
+          # Different binary structure can trigger antivirus false positives.
+          if ($backendSize -lt 30) {
             Write-Error "Backend size is too small ($backendSize MB). Dependencies might be missing!"
             exit 1
           }
