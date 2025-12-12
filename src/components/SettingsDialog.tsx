@@ -105,6 +105,12 @@ const TASKS: Array<{
     description:
       "Refresh conflict tables to reflect the current intersection of mods and assets.",
   },
+  {
+    key: "rebuild_character_data" as SettingsTask,
+    label: "Rebuild Character & Skin Data",
+    description:
+      "Re-extract character and skin names from Marvel Rivals PAK files and update the database.",
+  },
 ];
 
 function formatTimestamp(value?: string | null): string | null {
@@ -485,24 +491,38 @@ export function SettingsDialog({
                           gap: "10px",
                         }}
                       >
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                          }}
+                        >
                           <Label htmlFor="nexus_api_key">Nexus API key</Label>
                           <Button
                             type="button"
                             variant="link"
                             size="sm"
                             onClick={async () => {
-                              const apiKeysUrl = "https://next.nexusmods.com/settings/api-keys#:~:text=Personal%20API%20Key";
+                              const apiKeysUrl =
+                                "https://next.nexusmods.com/settings/api-keys#:~:text=Personal%20API%20Key";
                               try {
                                 const { openInBrowser } = await import(
                                   "../lib/tauri-utils"
                                 );
                                 await openInBrowser(apiKeysUrl);
                               } catch (error) {
-                                console.error("Failed to open API keys page:", error);
+                                console.error(
+                                  "Failed to open API keys page:",
+                                  error
+                                );
                               }
                             }}
-                            style={{ padding: "0", height: "auto", fontSize: "0.875rem" }}
+                            style={{
+                              padding: "0",
+                              height: "auto",
+                              fontSize: "0.875rem",
+                            }}
                           >
                             <ExternalLink className="h-3 w-3 mr-1" />
                             Get API Key

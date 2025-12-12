@@ -21,7 +21,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Separator } from "./ui/separator";
 import { ScrollArea } from "./ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
-import { Download, Star, Heart, Calendar, File, Trash2, ExternalLink } from "lucide-react";
+import { Download, Star, Heart, Calendar, File, Trash2, ExternalLink, Plus, X, ChevronLeft, ChevronRight } from "lucide-react";
 import type { Mod } from "./ModCard";
 import {
   useCallback,
@@ -34,8 +34,14 @@ import DOMPurify from "dompurify";
 import {
   getModChangelogs,
   getModDetails,
+  getPakAssets,
+  fetchModImages,
+  uploadModImages,
+  deleteModImage,
   type ApiChangelog,
   type ApiModDetails,
+  type ApiPakAsset,
+  type ModImage,
 } from "../lib/api";
 import { Switch } from "./ui/switch";
 import {
@@ -168,6 +174,7 @@ export function ModModal({
   // Files list from server is not needed for toggle UI; using local download contents instead
   // const [files, setFiles] = useState<ApiModFile[] | null>(null);
   const [changelogs, setChangelogs] = useState<ApiChangelog[] | null>(null);
+  const [pakAssets, setPakAssets] = useState<ApiPakAsset[]>([]);
 
   // Fetch from backend if we have a linked mods.mod_id
   const serverModId = useMemo(() => mod?.backendModId ?? null, [mod]);
@@ -193,6 +200,12 @@ export function ModModal({
   );
   const [deleteDialogEntry, setDeleteDialogEntry] =
     useState<DownloadEntry | null>(null);
+  
+  // Images state
+  const [modImages, setModImages] = useState<ModImage[]>([]);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [lightboxIndex, setLightboxIndex] = useState(0);
+  const [isUploadingImages, setIsUploadingImages] = useState(false);
 
   const overviewTags = useMemo(() => {
     const tags: string[] = [];
@@ -222,18 +235,21 @@ export function ModModal({
       if (!serverModId) {
         setDetails(null);
         setChangelogs(null);
+        setModImages([]);
         return;
       }
       try {
-        const [d, c] = await Promise.all([
+        const [d, c, images] = await Promise.all([
           getModDetails(serverModId),
           getModChangelogs(serverModId),
+          fetchModImages(serverModId),
         ]);
         const debugInfo = {
           hasDescription: !!d?.mod?.description,
           descriptionLength: d?.mod?.description?.length || 0,
           hasSummary: !!d?.mod?.summary,
           changelogsCount: c?.length || 0,
+          imagesCount: images?.length || 0,
           modKeys: d?.mod ? Object.keys(d.mod) : [],
         };
         console.log(
@@ -257,12 +273,14 @@ export function ModModal({
         if (!cancelled) {
           setDetails(d);
           setChangelogs(c);
+          setModImages(images || []);
         }
       } catch (error) {
         console.error("[ModModal] Error loading details:", error);
         if (!cancelled) {
           setDetails(null);
           setChangelogs(null);
+          setModImages([]);
         }
       }
     }
@@ -410,6 +428,31 @@ export function ModModal({
       cancelled = true;
     };
   }, [fetchPakStatuses]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadPakAssets() {
+      if (!mod || !downloadIds.length) {
+        setPakAssets([]);
+        return;
+      }
+      try {
+        const assets = await getPakAssets(downloadIds);
+        if (!cancelled) {
+          setPakAssets(assets);
+        }
+      } catch (error) {
+        console.error("[ModModal] Error loading pak assets:", error);
+        if (!cancelled) {
+          setPakAssets([]);
+        }
+      }
+    }
+    loadPakAssets();
+    return () => {
+      cancelled = true;
+    };
+  }, [downloadIds, isOpen, mod]);
 
   const downloadSections = useMemo(
     () =>
@@ -653,6 +696,95 @@ export function ModModal({
     }
   }, [deleteDialogEntry, handleDeleteDownload]);
 
+  // Image handlers
+  const handleImageUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0 || !serverModId) return;
+
+    setIsUploadingImages(true);
+    const toastId = toast.loading(`Uploading ${files.length} image(s)...`);
+
+    try {
+      const fileArray = Array.from(files);
+      await uploadModImages(serverModId, fileArray);
+      
+      // Refresh images
+      const updatedImages = await fetchModImages(serverModId);
+      setModImages(updatedImages);
+      
+      toast.success(`Uploaded ${files.length} image(s) successfully`, {
+        id: toastId,
+        duration: 2000,
+      });
+    } catch (error) {
+      toast.error((error as any)?.message || "Failed to upload images", {
+        id: toastId,
+        duration: 4000,
+      });
+    } finally {
+      setIsUploadingImages(false);
+      // Reset file input
+      event.target.value = "";
+    }
+  }, [serverModId]);
+
+  const openLightbox = useCallback((index: number) => {
+    setLightboxIndex(index);
+    setLightboxOpen(true);
+  }, []);
+
+  const closeLightbox = useCallback(() => {
+    setLightboxOpen(false);
+  }, []);
+
+  const nextImage = useCallback(() => {
+    setLightboxIndex((prev) => (prev + 1) % modImages.length);
+  }, [modImages.length]);
+
+  const prevImage = useCallback(() => {
+    setLightboxIndex((prev) => (prev - 1 + modImages.length) % modImages.length);
+  }, [modImages.length]);
+
+  // Keyboard navigation for lightbox
+  useEffect(() => {
+    if (!lightboxOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        closeLightbox();
+      } else if (e.key === "ArrowRight") {
+        nextImage();
+      } else if (e.key === "ArrowLeft") {
+        prevImage();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [lightboxOpen, closeLightbox, nextImage, prevImage]);
+
+  const handleDeleteImage = useCallback(async (imageId: number, event: React.MouseEvent) => {
+    event.stopPropagation(); // Prevent opening lightbox
+    
+    const toastId = toast.loading("Deleting image...");
+    try {
+      await deleteModImage(imageId);
+      
+      // Update local state
+      setModImages((prev) => prev.filter((img) => img.id !== imageId));
+      
+      toast.success("Image deleted successfully", {
+        id: toastId,
+        duration: 2000,
+      });
+    } catch (error) {
+      toast.error((error as any)?.message || "Failed to delete image", {
+        id: toastId,
+        duration: 4000,
+      });
+    }
+  }, []);
+
   if (!mod) return null;
 
   const formatNumber = (num: number) => {
@@ -890,7 +1022,9 @@ export function ModModal({
             >
               <TabsList className="mx-6 mt-4 mb-0 flex-shrink-0">
                 <TabsTrigger value="overview">Overview</TabsTrigger>
+                <TabsTrigger value="images">Images</TabsTrigger>
                 <TabsTrigger value="files">Files</TabsTrigger>
+                <TabsTrigger value="assets">Assets</TabsTrigger>
                 <TabsTrigger value="changelog">Changelog</TabsTrigger>
               </TabsList>
 
@@ -955,6 +1089,144 @@ export function ModModal({
                     </div>
                   </ScrollArea>
                 </TabsContent>
+
+                {/* Images Tab */}
+                <TabsContent
+                  value="images"
+                  className="!h-full m-0 data-[state=active]:!flex data-[state=active]:!flex-col data-[state=active]:!h-full overflow-hidden"
+                  style={{ height: "100%" }}
+                >
+                  <ScrollArea
+                    className="flex-1 min-h-0 overflow-auto"
+                    style={{ height: "100%" }}
+                  >
+                    <div className="px-6 py-4">
+                      <div className="flex flex-wrap gap-4">
+                        {/* Image thumbnails with 300px fixed height */}
+                        {modImages.map((image, index) => (
+                          <div
+                            key={`img-${image.id}-${index}`}
+                            style={{ height: '300px' }}
+                            className="bg-muted rounded-lg overflow-hidden cursor-pointer hover:opacity-80 transition-opacity relative group"
+                            onClick={() => openLightbox(index)}
+                          >
+                            <img
+                              src={image.source === 'nexus' ? image.url : `data:${image.mimeType};base64,${image.data}`}
+                              alt={image.filename || `Image ${index + 1}`}
+                              style={{ height: '100%', width: 'auto' }}
+                              className="object-contain"
+                            />
+                            
+                            {/* Delete button for custom images only */}
+                            {image.source === 'custom' && (
+                              <button
+                                className="absolute top-2 right-2 bg-destructive text-destructive-foreground rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-destructive/90"
+                                onClick={(e) => handleDeleteImage(image.id, e)}
+                                aria-label="Delete image"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+                        ))}
+
+                        {/* Plus button for upload */}
+                        {serverModId && (
+                          <div 
+                            style={{ width: '300px', height: '300px' }}
+                            className="bg-muted rounded-lg flex items-center justify-center cursor-pointer hover:bg-muted/70 transition-colors border-2 border-dashed border-border"
+                          >
+                            <label htmlFor="image-upload" className="cursor-pointer w-full h-full flex items-center justify-center">
+                              <Plus className="w-12 h-12 text-muted-foreground" />
+                              <input
+                                id="image-upload"
+                                type="file"
+                                accept="image/*"
+                                multiple
+                                style={{ display: 'none' }}
+                                onChange={handleImageUpload}
+                                disabled={isUploadingImages}
+                              />
+                            </label>
+                          </div>
+                        )}
+
+                        {/* Empty state */}
+                        {modImages.length === 0 && !serverModId && (
+                          <p className="text-sm text-muted-foreground italic">
+                            No images available for this mod.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </ScrollArea>
+                </TabsContent>
+
+                {/* Lightbox Gallery */}
+                {lightboxOpen && modImages.length > 0 && (
+                  <div
+                    className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center"
+                    onClick={closeLightbox}
+                  >
+                    {/* Close button */}
+                    <button
+                      className="absolute top-4 right-4 text-white hover:text-gray-300 transition-colors z-10"
+                      onClick={closeLightbox}
+                      aria-label="Close lightbox"
+                    >
+                      <X className="w-8 h-8" />
+                    </button>
+
+                    {/* Image counter */}
+                    <div className="absolute top-4 left-1/2 transform -translate-x-1/2 text-white text-lg font-medium z-10">
+                      {lightboxIndex + 1} / {modImages.length}
+                    </div>
+
+                    {/* Previous button */}
+                    {modImages.length > 1 && (
+                      <button
+                        className="absolute left-4 text-white hover:text-gray-300 transition-colors z-10"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          prevImage();
+                        }}
+                        aria-label="Previous image"
+                      >
+                        <ChevronLeft className="w-12 h-12" />
+                      </button>
+                    )}
+
+                    {/* Image */}
+                    <div
+                      className="max-w-[90vw] max-h-[90vh] flex items-center justify-center"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <img
+                        src={
+                          modImages[lightboxIndex]?.source === 'nexus'
+                            ? modImages[lightboxIndex]?.url
+                            : `data:${modImages[lightboxIndex]?.mimeType};base64,${modImages[lightboxIndex]?.data}`
+                        }
+                        alt={modImages[lightboxIndex]?.filename || `Image ${lightboxIndex + 1}`}
+                        className="max-w-full max-h-full object-contain"
+                      />
+                    </div>
+
+                    {/* Next button */}
+                    {modImages.length > 1 && (
+                      <button
+                        className="absolute right-4 text-white hover:text-gray-300 transition-colors z-10"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          nextImage();
+                        }}
+                        aria-label="Next image"
+                      >
+                        <ChevronRight className="w-12 h-12" />
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 <TabsContent
                   value="files"
@@ -1120,6 +1392,60 @@ export function ModModal({
                             );
                           })}
                         </div>
+                      </div>
+                    </div>
+                  </ScrollArea>
+                </TabsContent>
+
+                <TabsContent
+                  value="assets"
+                  className="!h-full m-0 data-[state=active]:!flex data-[state=active]:!flex-col data-[state=active]:!h-full overflow-hidden"
+                  style={{ height: "100%" }}
+                >
+                  <ScrollArea
+                    className="flex-1 min-h-0 overflow-auto"
+                    style={{ height: "100%" }}
+                  >
+                    <div className="px-6 py-4">
+                      <div className="space-y-4">
+                        <div className="flex items-center gap-2 mb-4">
+                          <h3 className="text-lg font-semibold flex items-center gap-2">
+                            <File className="w-5 h-5" />
+                            Assets
+                          </h3>
+                        </div>
+
+                        {pakAssets.length === 0 && (
+                          <div className="text-sm text-muted-foreground">
+                            No assets found for this mod.
+                          </div>
+                        )}
+
+                        {pakAssets.map((pakAsset) => (
+                          <div
+                            key={pakAsset.pak_name}
+                            className="border border-border rounded-xl p-4 space-y-3 bg-background"
+                          >
+                            <h4 className="font-semibold text-base">
+                              {pakAsset.pak_name}
+                            </h4>
+                            <div className="space-y-1">
+                              {pakAsset.assets.length === 0 && (
+                                <div className="text-sm text-muted-foreground italic">
+                                  No assets in this pak
+                                </div>
+                              )}
+                              {pakAsset.assets.map((asset, index) => (
+                                <div
+                                  key={`${pakAsset.pak_name}-${index}`}
+                                  className="text-sm font-mono text-muted-foreground"
+                                >
+                                  {asset}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   </ScrollArea>

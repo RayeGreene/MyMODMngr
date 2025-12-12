@@ -13,11 +13,10 @@ import { Checkbox } from "./ui/checkbox";
 import {
   Users,
   Palette,
-  Map,
+  Map as MapIcon,
   Settings,
   RefreshCw,
   AlertTriangle,
-  Clock,
   CheckCircle,
   ChevronDown,
   Heart,
@@ -34,13 +33,7 @@ import {
   AlertDialogTitle,
 } from "./ui/alert-dialog";
 
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "./ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
 
 import type { Mod } from "./ModCard";
 import {
@@ -51,6 +44,8 @@ import {
   type ApiConflict,
   getDownloadsSummary,
   type ApiDownloadsSummary,
+  type TagLookupResponse,
+  lookupTags,
 } from "../lib/api";
 import { toast } from "sonner";
 import {
@@ -76,7 +71,7 @@ const categories = [
   { id: "all", label: "All Installed", icon: CheckCircle },
   { id: "characters", label: "Characters", icon: Users },
   { id: "ui", label: "User Interface", icon: Palette },
-  { id: "maps", label: "Maps & Environments", icon: Map },
+  { id: "maps", label: "Maps & Environments", icon: MapIcon },
   { id: "audio", label: "Audio & Music", icon: Settings },
 ];
 
@@ -152,44 +147,166 @@ export function DownloadsSidebar({
 }: DownloadsSidebarProps) {
   const { theme } = useTheme();
   const isLightMode = theme === "light";
-  const installedMods = mods.filter((mod) => mod.isInstalled);
-  // Map category to character counts for installed mods in that category
-  const categoryCharacterCounts = useMemo(() => {
-    const counts: Record<string, Record<string, number>> = {};
+  const installedMods = useMemo(
+    () => mods.filter((mod) => mod.isInstalled),
+    [mods]
+  );
+
+  // Load character/skin map from database for proper tag identification
+  const [tagLookupMap, setTagLookupMap] = useState<TagLookupResponse>({});
+  const [isLoadingTagMap, setIsLoadingTagMap] = useState(true);
+
+  // Calculate a stable signature of all tags to prevent unnecessary re-fetches
+  // when other mod properties (like download progress) change
+  const tagsSignature = useMemo(() => {
+    const allTags = new Set<string>();
+    for (const mod of installedMods) {
+      const tags = extractNonCategoryTags(mod.tags);
+      tags.forEach((t) => allTags.add(t));
+    }
+    return Array.from(allTags).sort().join("|");
+  }, [installedMods]);
+
+  // Load all unique tags and lookup their types
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadTagMap() {
+      if (!tagsSignature) {
+        if (!cancelled) {
+          setTagLookupMap({});
+          setIsLoadingTagMap(false);
+        }
+        return;
+      }
+
+      try {
+        const tags = tagsSignature.split("|");
+        // Lookup which tags are characters vs skins
+        const lookup = await lookupTags(tags);
+        if (!cancelled) {
+          setTagLookupMap(lookup);
+          setIsLoadingTagMap(false);
+        }
+      } catch (err) {
+        console.error("Failed to load tag lookup map:", err);
+        if (!cancelled) {
+          setTagLookupMap({});
+          setIsLoadingTagMap(false);
+        }
+      }
+    }
+
+    loadTagMap();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [tagsSignature]);
+
+  // Build hierarchical character-to-skins structure per category using database lookup
+  const categoryCharacterHierarchy = useMemo(() => {
+    const hierarchy: Record<string, Record<string, Set<string>>> = {};
+
     for (const mod of installedMods) {
       const categoriesForMod = deriveCategoryTags(mod.tags);
       if (categoriesForMod.length === 0) {
         continue;
       }
-      const characterTags = extractNonCategoryTags(mod.tags);
-      if (characterTags.length === 0) {
+
+      const tags = extractNonCategoryTags(mod.tags);
+      if (tags.length === 0) {
         continue;
       }
-      for (const categoryId of categoriesForMod) {
-        if (!counts[categoryId]) {
-          counts[categoryId] = {};
+
+      // Separate tags into characters and skins using database lookup
+      const characters: string[] = [];
+      const skinsByParent: Map<string, string[]> = new Map();
+
+      for (const tag of tags) {
+        const tagInfo = tagLookupMap[tag];
+        if (!tagInfo) continue;
+
+        if (tagInfo.type === "character") {
+          characters.push(tag);
+        } else if (tagInfo.type === "skin") {
+          // Resolve effective parents (handle both legacy 'parent' and new 'parents' list)
+          let validParents: string[] = [];
+          if (tagInfo.parents && tagInfo.parents.length > 0) {
+            validParents = tagInfo.parents;
+          } else if (tagInfo.parent) {
+            validParents = [tagInfo.parent];
+          }
+
+          if (validParents.length > 0) {
+            // Context-aware disambiguation:
+            // If the current mod also tags any of the valid parents,
+            // we assign the skin ONLY to those parents.
+            // (e.g. Mod has "Invisible Woman" and "Life Fantastic" -> assign only to "Invisible Woman")
+            const activeParentsInMod = validParents.filter((p) =>
+              characters.includes(p)
+            );
+
+            // If we found specific parents in this mod, use them.
+            // Otherwise, fallback to all valid parents (ambiguous case).
+            const targetParents =
+              activeParentsInMod.length > 0 ? activeParentsInMod : validParents;
+
+            for (const parent of targetParents) {
+              if (!skinsByParent.has(parent)) {
+                skinsByParent.set(parent, []);
+              }
+              skinsByParent.get(parent)!.push(tag);
+            }
+          }
         }
-        for (const tag of characterTags) {
-          if (!tag) continue;
-          counts[categoryId][tag] = (counts[categoryId][tag] || 0) + 1;
+      }
+
+      for (const categoryId of categoriesForMod) {
+        if (!hierarchy[categoryId]) {
+          hierarchy[categoryId] = {};
+        }
+
+        // Add each character found in this mod
+        for (const character of characters) {
+          if (!hierarchy[categoryId][character]) {
+            hierarchy[categoryId][character] = new Set();
+          }
+
+          // Add skins that belong to this character
+          const skins = skinsByParent.get(character) || [];
+          for (const skin of skins) {
+            hierarchy[categoryId][character].add(skin);
+          }
+        }
+
+        // Also add characters that are parents of skins (even if not explicitly tagged)
+        for (const [parentChar, skins] of skinsByParent.entries()) {
+          if (!hierarchy[categoryId][parentChar]) {
+            hierarchy[categoryId][parentChar] = new Set();
+          }
+          for (const skin of skins) {
+            hierarchy[categoryId][parentChar].add(skin);
+          }
         }
       }
     }
-    return counts;
-  }, [installedMods]);
 
+    return hierarchy;
+  }, [installedMods, tagLookupMap]);
+
+  // Extract sorted character names per category
   const sortedCharactersByCategory = useMemo(() => {
     const result: Record<string, string[]> = {};
-    for (const [categoryId, characterCounts] of Object.entries(
-      categoryCharacterCounts
+    for (const [categoryId, characterMap] of Object.entries(
+      categoryCharacterHierarchy
     )) {
-      result[categoryId] = Object.entries(characterCounts)
-        .filter(([, count]) => count > 0)
-        .map(([char]) => char)
-        .sort((a, b) => a.localeCompare(b));
+      result[categoryId] = Object.keys(characterMap).sort((a, b) =>
+        a.localeCompare(b)
+      );
     }
     return result;
-  }, [categoryCharacterCounts]);
+  }, [categoryCharacterHierarchy]);
   const [conflictModalOpen, setConflictModalOpen] = useState(false);
   const [conflicts, setConflicts] = useState<ApiConflict[] | null>(null);
   const [downloadsSummary, setDownloadsSummary] =
@@ -201,6 +318,23 @@ export function DownloadsSidebar({
   const [updateConfirmOpen, setUpdateConfirmOpen] = useState(false);
   const [upiModalOpen, setUpiModalOpen] = useState(false);
   const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
+
+  // Track which characters are expanded to show their skins (default: all collapsed)
+  const [expandedCharacters, setExpandedCharacters] = useState<Set<string>>(
+    new Set()
+  );
+
+  const toggleCharacterExpand = useCallback((character: string) => {
+    setExpandedCharacters((prev) => {
+      const next = new Set(prev);
+      if (next.has(character)) {
+        next.delete(character);
+      } else {
+        next.add(character);
+      }
+      return next;
+    });
+  }, []);
 
   const uniqueModIds = useMemo(() => {
     const ids = new Set<number>();
@@ -445,8 +579,8 @@ export function DownloadsSidebar({
           {categories.map((category) => {
             const Icon = category.icon;
             const count = installedCounts[category.id] || 0;
-            const characterCountsForCategory =
-              categoryCharacterCounts[category.id] || {};
+            const characterHierarchy =
+              categoryCharacterHierarchy[category.id] || {};
             const charactersForCategory =
               sortedCharactersByCategory[category.id] || [];
 
@@ -509,31 +643,139 @@ export function DownloadsSidebar({
                         </Button>
                       </CollapsibleTrigger>
                       <CollapsibleContent className="space-y-2 mt-2">
-                        {charactersForCategory.map((character) => (
-                          <div
-                            key={character}
-                            className="flex items-center space-x-2"
-                          >
-                            <Checkbox
-                              id={`installed-character-${character}`}
-                              checked={selectedCharacters.includes(character)}
-                              onCheckedChange={() =>
-                                onCharacterToggle(character)
-                              }
-                            />
-                            <label
-                              htmlFor={`installed-character-${character}`}
-                              className="text-sm cursor-pointer flex-1 leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
-                            >
-                              {character}
-                              {characterCountsForCategory[character] > 0 && (
-                                <span className="ml-1 text-muted-foreground">
-                                  ({characterCountsForCategory[character]})
-                                </span>
-                              )}
-                            </label>
-                          </div>
-                        ))}
+                        {charactersForCategory.map((character) => {
+                          const skins = Array.from(
+                            characterHierarchy[character] || new Set()
+                          ).sort((a, b) => a.localeCompare(b));
+
+                          // Count mods that have this character
+                          const modCount = installedMods.filter((mod) => {
+                            const tags = extractNonCategoryTags(mod.tags);
+                            return tags.includes(character);
+                          }).length;
+
+                          return (
+                            <div key={character} className="space-y-1">
+                              {/* Character checkbox with optional expand arrow */}
+                              <div className="flex items-center space-x-2">
+                                {/* Collapse/Expand arrow (only show if character has skins) */}
+                                {skins.length > 0 && (
+                                  <ChevronDown
+                                    className={`h-3 w-3 transition-transform cursor-pointer shrink-0 ${
+                                      expandedCharacters.has(character)
+                                        ? ""
+                                        : "-rotate-90"
+                                    }`}
+                                    onClick={() =>
+                                      toggleCharacterExpand(character)
+                                    }
+                                  />
+                                )}
+                                {/* Spacer if no skins to maintain alignment */}
+                                {skins.length === 0 && (
+                                  <div className="w-3 shrink-0" />
+                                )}
+
+                                <Checkbox
+                                  id={`installed-character-${character}`}
+                                  checked={selectedCharacters.includes(
+                                    character
+                                  )}
+                                  onCheckedChange={() => {
+                                    // Toggle character AND all its skins
+                                    const isCharacterSelected =
+                                      selectedCharacters.includes(character);
+
+                                    if (isCharacterSelected) {
+                                      // Deselect character and all skins
+                                      onCharacterToggle(character);
+                                      skins.forEach((skin) => {
+                                        if (selectedCharacters.includes(skin)) {
+                                          onCharacterToggle(skin);
+                                        }
+                                      });
+                                    } else {
+                                      // Select character and all skins
+                                      onCharacterToggle(character);
+                                      skins.forEach((skin) => {
+                                        if (
+                                          !selectedCharacters.includes(skin)
+                                        ) {
+                                          onCharacterToggle(skin);
+                                        }
+                                      });
+                                      // Auto-expand to show selected skins
+                                      if (!expandedCharacters.has(character)) {
+                                        toggleCharacterExpand(character);
+                                      }
+                                    }
+                                  }}
+                                />
+                                <label
+                                  htmlFor={`installed-character-${character}`}
+                                  className="text-sm cursor-pointer flex-1 leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                                >
+                                  {character}
+                                  {modCount > 0 && (
+                                    <span className="ml-1 text-muted-foreground text-sm">
+                                      ({modCount})
+                                    </span>
+                                  )}
+                                </label>
+                              </div>
+
+                              {/* Skin sub-items - only show if expanded */}
+                              {skins.length > 0 &&
+                                expandedCharacters.has(character) && (
+                                  <div className="ml-6 space-y-1">
+                                    {skins.map((skin) => {
+                                      // Check if THIS specific character-skin pair is selected
+                                      const isSkinSelected =
+                                        selectedCharacters.includes(
+                                          character
+                                        ) && selectedCharacters.includes(skin);
+
+                                      return (
+                                        <div
+                                          key={`${character}-${skin}`}
+                                          className="flex items-center space-x-2"
+                                        >
+                                          <Checkbox
+                                            id={`installed-skin-${character}-${skin}`}
+                                            checked={isSkinSelected}
+                                            onCheckedChange={() => {
+                                              // Only toggle the skin itself
+                                              if (isSkinSelected) {
+                                                // Just remove this skin
+                                                onCharacterToggle(skin);
+                                              } else {
+                                                // Add character if not already selected
+                                                if (
+                                                  !selectedCharacters.includes(
+                                                    character
+                                                  )
+                                                ) {
+                                                  onCharacterToggle(character);
+                                                }
+                                                // Add the skin
+                                                onCharacterToggle(skin);
+                                              }
+                                            }}
+                                          />
+                                          <label
+                                            htmlFor={`installed-skin-${character}-${skin}`}
+                                            className="text-sm cursor-pointer flex-1 leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 text-muted-foreground"
+                                          >
+                                            {skin}
+                                          </label>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                            </div>
+                          );
+                        })}
                         {selectedCharacters.length > 0 && (
                           <Button
                             variant="ghost"

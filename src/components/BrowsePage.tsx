@@ -1,13 +1,8 @@
 import { useState } from "react";
-import { Sidebar } from "./Sidebar";
 import { SearchHeader } from "./SearchHeader";
 import { ModCard } from "./ModCard";
 import { ModModal } from "./ModModal";
 import type { Mod } from "./ModCard";
-import {
-  categoriesMatchTag,
-  extractNonCategoryTags,
-} from "../lib/categoryUtils";
 
 interface BrowsePageProps {
   mods: Mod[];
@@ -17,9 +12,6 @@ interface BrowsePageProps {
 
 export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("all");
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [selectedCharacters, setSelectedCharacters] = useState<string[]>([]);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [sortBy, setSortBy] = useState("Popular");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
@@ -28,31 +20,9 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
   // Build filtered mods from live data (no mock helpers)
   let filteredMods = [...mods];
 
-  // Category filter
-  if (selectedCategory && selectedCategory !== "all") {
-    filteredMods = filteredMods.filter(
-      (mod) =>
-        (Array.isArray(mod.categoryTags) &&
-          mod.categoryTags.includes(selectedCategory)) ||
-        categoriesMatchTag(mod.tags, selectedCategory)
-    );
-  }
+  // No category or character filters - BrowsePage shows all mods
 
-  // Character filter: match against any non-category tag on the mod
-  if (selectedCharacters && selectedCharacters.length > 0) {
-    filteredMods = filteredMods.filter((mod) =>
-      extractNonCategoryTags(mod.tags).some((tag) =>
-        selectedCharacters.includes(tag)
-      )
-    );
-  }
-
-  // Tag filter (if any provided via selectedTags)
-  if (selectedTags && selectedTags.length > 0) {
-    filteredMods = filteredMods.filter((mod) =>
-      selectedTags.every((tag) => (mod.tags || []).includes(tag))
-    );
-  }
+  // No tag filters
 
   // Search filter
   if (searchQuery) {
@@ -108,9 +78,7 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
   };
   const applyOrder = (val: number) => (sortOrder === "asc" ? -val : val);
 
-  const makeTimestampComparator = (
-    getter: (m: Mod) => number | null
-  ) => {
+  const makeTimestampComparator = (getter: (m: Mod) => number | null) => {
     return (a: Mod, b: Mod) => {
       const ta = getter(a);
       const tb = getter(b);
@@ -125,14 +93,16 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
   switch (sortBy) {
     case "Popular":
     case "Downloads":
-      filteredMods.sort((a, b) => applyOrder((b.downloads || 0) - (a.downloads || 0)));
+      filteredMods.sort((a, b) =>
+        applyOrder((b.downloads || 0) - (a.downloads || 0))
+      );
       break;
     case "Recent":
       // Recent: sort by backendModId (numeric), then by installDate for missing ids
       filteredMods.sort((a, b) => {
         const aId = a.backendModId;
         const bId = b.backendModId;
-        
+
         // If both have mod ids, sort by mod id
         if (aId != null && bId != null) {
           const idDiff = sortOrder === "asc" ? aId - bId : bId - aId;
@@ -145,11 +115,11 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
           if (bDate == null) return -1;
           return sortOrder === "asc" ? aDate - bDate : bDate - aDate;
         }
-        
+
         // If only one has mod id, that one comes first (regardless of sort order)
         if (aId != null && bId == null) return -1;
         if (aId == null && bId != null) return 1;
-        
+
         // If neither has mod id, sort by install date
         const aDate = toNullableTimestamp(a.installDate);
         const bDate = toNullableTimestamp(b.installDate);
@@ -168,11 +138,13 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
       );
       break;
     case "Rating":
-      filteredMods.sort((a, b) => applyOrder((b.rating || 0) - (a.rating || 0)));
+      filteredMods.sort((a, b) =>
+        applyOrder((b.rating || 0) - (a.rating || 0))
+      );
       break;
     case "Performance":
-      filteredMods.sort(
-        (a, b) => applyOrder((b.performanceImpact || 0) - (a.performanceImpact || 0))
+      filteredMods.sort((a, b) =>
+        applyOrder((b.performanceImpact || 0) - (a.performanceImpact || 0))
       );
       break;
     case "Name":
@@ -190,27 +162,6 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
   }
 
   // Event handlers
-  const handleTagToggle = (tag: string) => {
-    setSelectedTags((prev) =>
-      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
-    );
-  };
-
-  const handleCharacterToggle = (character: string) => {
-    setSelectedCharacters((prev) =>
-      prev.includes(character)
-        ? prev.filter((c) => c !== character)
-        : [...prev, character]
-    );
-  };
-
-  const handleCategoryChange = (category: string) => {
-    setSelectedCategory(category);
-    // Clear character filters when switching away from characters
-    if (category !== "characters") {
-      setSelectedCharacters([]);
-    }
-  };
 
   const handleViewMod = (mod: Mod) => {
     setSelectedMod(mod);
@@ -218,17 +169,6 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
 
   return (
     <div className="h-full flex">
-      {/* Sidebar */}
-      <Sidebar
-        selectedCategory={selectedCategory}
-        onCategoryChange={handleCategoryChange}
-        selectedTags={selectedTags}
-        onTagToggle={handleTagToggle}
-        selectedCharacters={selectedCharacters}
-        onCharacterToggle={handleCharacterToggle}
-        mods={mods}
-      />
-
       {/* Main Content */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Header */}
@@ -272,27 +212,11 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
         <div className="flex-1 overflow-auto p-6">
           {/* Results Info */}
           <div className="mb-6">
-            <h2 className="text-2xl font-semibold mb-2">
-              {selectedCategory === "all"
-                ? "All Mods"
-                : selectedCategory === "characters"
-                ? "Character Mods"
-                : selectedCategory === "ui"
-                ? "UI Mods"
-                : selectedCategory === "maps"
-                ? "Map Mods"
-                : selectedCategory === "audio"
-                ? "Audio Mods"
-                : "Mods"}
-            </h2>
+            <h2 className="text-2xl font-semibold mb-2">All Mods</h2>
             <p className="text-muted-foreground">
               {filteredMods.length} mod{filteredMods.length !== 1 ? "s" : ""}{" "}
               found
               {searchQuery && ` for "${searchQuery}"`}
-              {selectedCharacters.length > 0 &&
-                ` for ${selectedCharacters.join(", ")}`}
-              {selectedTags.length > 0 &&
-                ` with tags: ${selectedTags.join(", ")}`}
             </p>
           </div>
 
@@ -321,13 +245,7 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
               </p>
             </div>
           ) : (
-            <div
-              className={
-                viewMode === "grid"
-                  ? "mods-grid"
-                  : "space-y-0"
-              }
-            >
+            <div className={viewMode === "grid" ? "mods-grid" : "space-y-0"}>
               {filteredMods.map((mod) => (
                 <ModCard
                   key={mod.id}

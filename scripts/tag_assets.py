@@ -8,7 +8,49 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 # ---------- Entity map loading ----------
 
+def load_entity_map_from_db() -> Dict[str, str]:
+    """Load character and skin names from database."""
+    mapping: Dict[str, str] = {}
+    try:
+        # Add project root to path
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        
+        from core.db.db import get_connection, get_all_characters
+        
+        conn = get_connection()
+        try:
+            characters = get_all_characters(conn)
+            
+            # Add character names (character_id -> name)
+            for char in characters:
+                char_id = char['character_id']
+                char_name = char['name']
+                mapping[char_id] = char_name
+                
+                # Add skin names (skin ID -> just skin name, NOT "character - skin")
+                for skin in char['skins']:
+                    variant = skin['variant']
+                    skin_name = skin['name']
+                    skin_id = f"{char_id}{variant}"
+                    # Include ALL skins, even "default" (variant 001)
+                    # Store just the skin name (we'll add character separately in tags)
+                    mapping[skin_id] = skin_name
+            
+            return mapping
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"Warning: Failed to load from database: {e}", file=sys.stderr)
+        return {}
+
 def load_entity_map(path: Optional[str]) -> Dict[str, str]:
+    """Load entity mapping from database (preferred) or fallback to JSON file."""
+    # Try database first
+    db_mapping = load_entity_map_from_db()
+    if db_mapping:
+        return db_mapping
+    
+    # Fallback to JSON file if database fails
     mapping: Dict[str, str] = {}
     if not path:
         # Try default in repo root
@@ -106,64 +148,52 @@ def find_category(path: str) -> Optional[str]:
             continue
     return None
 
-def find_entity_key(path_segments: List[str]) -> Tuple[Optional[str], Optional[str]]:
-    # Returns (id4, alpha_key)
-    for i, seg in enumerate(path_segments):
-        seg_l = seg.lower()
-        if seg_l in ENTITY_SYNONYMS and i + 1 < len(path_segments):
-            nxt = path_segments[i + 1]
-            nxt_clean = nxt.strip().strip('_-')
-            if re.fullmatch(r"\d{4,}", nxt_clean):
-                return nxt_clean[:4], None
-            else:
-                return None, nxt_clean
-    # Prefer folder-based exact 4-digit ID nearest to the file (exclude filename)
-    if path_segments:
-        folder_segs = path_segments[:-1]  # exclude filename
-        for seg in reversed(folder_segs):
-            s = seg.strip().strip('_-')
-            if re.fullmatch(r"\d{4}", s):
-                return s, None
-    # No structured folder hit: prefer 7-digit then 8-digit then 6-digit tokens near filename
-    tail_segments = path_segments[-3:] if len(path_segments) >= 3 else path_segments
-    for seg in reversed(tail_segments):
-        # Exact 8-digit tokens -> drop leading digit, then take first 4 of the remaining 7
-        for tok in re.findall(r"\d{8}", seg):
-            return tok[1:5], None
-        # Exact 7-digit tokens -> take first 4 as id4
-        for tok in re.findall(r"\d{7}", seg):
-            return tok[:4], None
-        # 6-digit tokens -> take first 4 as id4
-        for tok in re.findall(r"\d{6}", seg):
-            return tok[:4], None
-    # Fallback: choose the last meaningful folder name as alpha key
-    for seg in reversed(path_segments):
-        s = seg.strip()
-        if not s or '.' in s:
-            # likely filename with extension or empty
-            continue
-        s_l = s.lower().strip('_-')
-        if s_l in STOPWORD_SEGMENTS:
-            continue
-        # skip folder tokens that are purely numeric or very short
-        if s_l.isdigit() or len(s_l) < 3:
-            continue
-        return None, s
-    return None, None
+def find_entity_key(path_segments: List[str]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    # Returns (char_id4, skin_id7, alpha_key)
+    # NEW LOGIC: Strict path-based pattern matching
+    # Look for /XXXXXXX/ (7-digit skin ID) first, then /XXXX/ (4-digit character ID)
+    
+    # Convert path segments to normalized path string for pattern matching
+    path_str = "/" + "/".join(path_segments) + "/"
+    
+    # Pattern 1: Look for 7-digit skin IDs in path (e.g., /1011100/)
+    skin_pattern = r'/(\d{7})/'
+    skin_matches = re.findall(skin_pattern, path_str)
+    if skin_matches:
+        # Take the last match (closest to filename)
+        skin_id7 = skin_matches[-1]
+        char_id4 = skin_id7[:4]
+        return char_id4, skin_id7, None
+    
+    # Pattern 2: Look for 4-digit character IDs in path (e.g., /1011/)
+    char_pattern = r'/(\d{4})/'
+    char_matches = re.findall(char_pattern, path_str)
+    if char_matches:
+        # Take the last match (closest to filename)
+        char_id4 = char_matches[-1]
+        return char_id4, None, None
+    
+    # No pattern match found
+    return None, None, None
 
-def resolve_entity(id4: Optional[str], alpha_key: Optional[str], entity_map: Dict[str, str]) -> str:
-    # If the numeric id is known, return the canonical name from the mapping
-    if id4 and id4 in entity_map:
-        return entity_map[id4]
+def resolve_entity(char_id4: Optional[str], skin_id7: Optional[str], alpha_key: Optional[str], entity_map: Dict[str, str]) -> str:
+    # If we have a 7-digit skin ID, look it up directly (highest priority)
+    if skin_id7 and skin_id7 in entity_map:
+        return entity_map[skin_id7]
+    
+    # If the 4-digit character ID is known, return the canonical name from the mapping
+    if char_id4 and char_id4 in entity_map:
+        return entity_map[char_id4]
+    
     # Fallback: try to match folder-derived alpha_key to known entity names (loose match)
     if alpha_key:
-        # Build loose name map from character_ids values
+        # Build loose name map from entity_map values
         def loose(s: str) -> str:
             # Normalize for matching only: lowercase and strip non-alphanumerics
             return re.sub(r"[^a-z0-9]", "", normalize_name(s))
         known: Dict[str, str] = {}
         for v in entity_map.values():
-            # Use original value for output so we "follow character_ids.json"
+            # Use original value for output
             k = loose(v)
             if k and k not in known:
                 known[k] = v
@@ -183,17 +213,33 @@ def tag_asset(path: str, entity_map: Dict[str, str]) -> str:
     norm = raw.replace('\\', '/').strip()
     segs = [s for s in norm.split('/') if s]
     cat = find_category(norm)
-    id4, alpha_key = find_entity_key(segs)
-    entity = resolve_entity(id4, alpha_key, entity_map)
-    # Return empty string if no meaningful tags can be generated
-    # Only return tags when we have both a known entity and category, or just a meaningful category
-    if entity == "unknown":
-        # Only return category if it's meaningful (not just "ui" or empty)
-        return (cat or "").lower() if cat else ""
-    if not cat:
-        # Don't return entity with trailing comma if no category
-        return ""
-    return f"{entity},{cat}".lower()
+    char_id4, skin_id7, alpha_key = find_entity_key(segs)
+    
+    # Build tags as a list
+    tags = []
+    
+    # If we found a skin ID, add both character and skin name
+    if skin_id7 and skin_id7 in entity_map:
+        # Add character name first
+        if char_id4 and char_id4 in entity_map:
+            tags.append(entity_map[char_id4])
+        # Add skin name second
+        tags.append(entity_map[skin_id7])
+    # Otherwise just add character if found
+    elif char_id4 and char_id4 in entity_map:
+        tags.append(entity_map[char_id4])
+    else:
+        # Try alpha key fallback
+        entity = resolve_entity(char_id4, skin_id7, alpha_key, entity_map)
+        if entity != "unknown":
+            tags.append(entity)
+    
+    # Add category if present
+    if cat:
+        tags.append(cat)
+    
+    # Return comma-separated tags (all lowercase)
+    return ",".join(tags).lower() if tags else ""
 
 # ---------- CLI ----------
 

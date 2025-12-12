@@ -80,13 +80,18 @@ from core.utils.pak_files import collapse_pak_bundle
 from core.utils.mod_filename import parse_mod_filename
 from core.utils.nexus_metadata import derive_changelogs_from_files, extract_description_text
 from core.config.settings import SETTINGS, configure, save_settings, load_settings
+from core.extraction.service import run_extraction_if_needed
 
 from field_prefs import filter_aggregate_payload, load_prefs
 
 # Global cache for Nexus preferences
 _NEXUS_PREFS_CACHE = None
 
-app = FastAPI(title="Mod Manager Backend", version="0.1.0")
+app = FastAPI(title="Mod Manager Backend", version="0.3.0")
+
+# Register character API routes
+from core.api.characters import router as characters_router
+app.include_router(characters_router)
 
 logger = logging.getLogger("modmanager.api")
 
@@ -100,6 +105,12 @@ logger.info(f"Data Directory: {SETTINGS.data_dir}")
 logger.info(f"Database Path: {SETTINGS.data_dir / 'mods.db'}")
 logger.info(f"Database Exists: {(SETTINGS.data_dir / 'mods.db').exists()}")
 logger.info("=" * 70)
+
+# Run character data extraction if needed (first build)
+try:
+	run_extraction_if_needed()
+except Exception as e:
+	logger.warning(f"Character data extraction failed: {e}")
 
 UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1 MiB chunks for uploads
 
@@ -347,6 +358,7 @@ SettingsTaskName = Literal[
 	"rebuild_tags",
 	"rebuild_conflicts",
 	"bootstrap_rebuild",
+	"rebuild_character_data",
 ]
 
 
@@ -649,6 +661,33 @@ def _task_rebuild_conflicts() -> int:
 	return 0
 
 
+def _task_rebuild_character_data() -> int:
+	"""Rebuild character and skin data from PAK files."""
+	from core.config.settings import load_settings
+	
+	# Reload settings to ensure we have the latest marvel_rivals_root path
+	# This is critical when called from bootstrap after user saves settings
+	current_settings = load_settings()
+	
+	# Verify marvel_rivals_root is configured
+	if not current_settings.marvel_rivals_root:
+		print("ERROR: marvel_rivals_root is not configured")
+		print("Please set your Marvel Rivals installation path in Settings")
+		return 1
+	
+	try:
+		from core.extraction.service import extract_and_ingest
+		print("Extracting character and skin data from PAK files...")
+		extract_and_ingest()
+		print("Character data rebuild complete!")
+		return 0
+	except Exception as exc:
+		print(f"Character data rebuild failed: {exc}")
+		import traceback
+		traceback.print_exc()
+		return 1
+
+
 def _task_bootstrap_rebuild() -> int:
 	"""Run full database rebuild including tags, conflicts, and all metadata.
 	
@@ -679,6 +718,37 @@ def _task_bootstrap_rebuild() -> int:
 	# that the API reads from. Without this, rebuild writes to project root but
 	# API reads from data_dir!
 	rebuild_args = ["--db", db_path, "--log-level", "INFO"]
+	
+	# CRITICAL: Extract character data BEFORE running rebuild_sqlite
+	# This ensures the character/skin database is populated when tag building happens,
+	# allowing tag_assets.py to load character data from the database
+	print("\n" + "=" * 70)
+	print("BOOTSTRAP REBUILD - Extracting character and skin data")
+	print("=" * 70)
+	
+	char_exit_code = _task_rebuild_character_data()
+	if char_exit_code != 0:
+		print(f"⚠ Warning: Character data extraction failed with code {char_exit_code}")
+		print("You can manually rebuild character data from Settings if needed")
+		# Don't fail the entire bootstrap if character extraction fails
+	else:
+		print("✓ Character data extraction completed successfully")
+		
+		# Count character and skin data
+		try:
+			conn = sqlite3.connect(db_path)
+			cur = conn.cursor()
+			
+			characters_count = cur.execute("SELECT COUNT(*) FROM characters").fetchone()[0]
+			skins_count = cur.execute("SELECT COUNT(*) FROM skins").fetchone()[0]
+			print(f"✓ characters: {characters_count} entries")
+			print(f"✓ skins: {skins_count} entries")
+			
+			conn.close()
+		except Exception as e:
+			print(f"Warning: Could not count character data: {e}")
+	
+	# Now run the main database rebuild - tags will use extracted character data
 	exit_code = int(rebuild.main(rebuild_args) or 0)
 	
 	if exit_code == 0:
@@ -886,6 +956,8 @@ def _run_settings_task(
 			return _task_rebuild_conflicts()
 		if task == "bootstrap_rebuild":
 			return _task_bootstrap_rebuild()
+		if task == "rebuild_character_data":
+			return _task_rebuild_character_data()
 		raise HTTPException(status_code=400, detail=f"Unknown task: {task}")
 
 	try:
@@ -1397,25 +1469,21 @@ def _ingest_resolved_download(
 			pass
 
 def _load_canonical_names() -> set[str]:
+	"""Load character names from database instead of character_ids.json."""
 	global _CANON_CHAR_NAMES
 	if _CANON_CHAR_NAMES is not None:
 		return _CANON_CHAR_NAMES
 	try:
-		cid_path = _ROOT / "character_ids.json"
-		canon: set[str] = set()
-		if cid_path.exists():
-			import json as _json
-			data = _json.loads(cid_path.read_text(encoding="utf-8"))
-			# character_ids.json is a list of single-entry dicts
-			if isinstance(data, list):
-				for item in data:
-					if isinstance(item, dict):
-						for _k, v in item.items():
-							if isinstance(v, str):
-								canon.add(v.strip().lower())
-		_CANON_CHAR_NAMES = canon
-		return canon
-	except Exception:
+		from core.db.db import get_connection, get_character_names
+		conn = get_connection()
+		try:
+			names = get_character_names(conn)
+			_CANON_CHAR_NAMES = set(names)
+			return _CANON_CHAR_NAMES
+		finally:
+			conn.close()
+	except Exception as e:
+		logger.warning(f"Failed to load character names from database: {e}")
 		_CANON_CHAR_NAMES = set()
 		return _CANON_CHAR_NAMES
 
@@ -3360,6 +3428,144 @@ def get_mod_changelogs_endpoint(mod_id: int, response: Response) -> List[Dict[st
 	return logs
 
 
+@app.get("/api/mods/{mod_id}/images")
+def get_mod_images(mod_id: int) -> Dict[str, Any]:
+	"""Get all images for a mod (Nexus images + custom uploaded images)."""
+	import logging
+	logger = logging.getLogger("modmanager.api")
+	conn = get_db()
+	try:
+		# Get Nexus image if available
+		cur = conn.cursor()
+		nexus_images = []
+		mod_row = cur.execute("SELECT picture_url FROM mods WHERE mod_id = ?", (mod_id,)).fetchone()
+		if mod_row and mod_row[0]:
+			nexus_images.append({
+				"id": 0,
+				"source": "nexus",
+				"url": mod_row[0],
+			})
+		
+		# Get custom uploaded images
+		custom_rows = cur.execute(
+			"SELECT id, image_data, filename, mime_type, uploaded_at FROM mod_custom_images WHERE mod_id = ? ORDER BY uploaded_at DESC",
+			(mod_id,)
+		).fetchall()
+		
+		custom_images = []
+		for img_id, image_data, filename, mime_type, uploaded_at in custom_rows:
+			custom_images.append({
+				"id": img_id,
+				"source": "custom",
+				"data": image_data,  # base64 data
+				"filename": filename,
+				"mimeType": mime_type,
+				"uploadedAt": uploaded_at,
+			})
+		
+		logger.info(f"[get_mod_images] mod_id={mod_id}, nexus_images={len(nexus_images)}, custom_images={len(custom_images)}")
+		return {
+			"ok": True,
+			"nexus_images": nexus_images,
+			"custom_images": custom_images,
+		}
+	except Exception as e:
+		logger.error(f"[get_mod_images] Error: {e}")
+		raise HTTPException(status_code=500, detail=str(e))
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+
+class UploadImagePayload(BaseModel):
+	images: List[Dict[str, str]]  # Each dict: { data: base64, filename: str, mimeType: str }
+
+
+@app.post("/api/mods/{mod_id}/images")
+def upload_mod_images(mod_id: int, payload: UploadImagePayload) -> Dict[str, Any]:
+	"""Upload custom images for a mod."""
+	import logging
+	logger = logging.getLogger("modmanager.api")
+	conn = get_db()
+	try:
+		# Ensure mod exists
+		cur = conn.cursor()
+		mod_exists = cur.execute("SELECT 1 FROM mods WHERE mod_id = ?", (mod_id,)).fetchone()
+		if not mod_exists:
+			raise HTTPException(status_code=404, detail=f"Mod {mod_id} not found")
+		
+		uploaded_ids = []
+		for img in payload.images:
+			image_data = img.get("data", "")
+			filename = img.get("filename", "")
+			mime_type = img.get("mimeType", "")
+			
+			if not image_data:
+				continue
+			
+			cur.execute(
+				"""
+				INSERT INTO mod_custom_images (mod_id, image_data, filename, mime_type)
+				VALUES (?, ?, ?, ?)
+				""",
+				(mod_id, image_data, filename, mime_type)
+			)
+			uploaded_ids.append(cur.lastrowid)
+		
+		conn.commit()
+		logger.info(f"[upload_mod_images] mod_id={mod_id}, uploaded {len(uploaded_ids)} images")
+		return {
+			"ok": True,
+			"uploaded_count": len(uploaded_ids),
+			"image_ids": uploaded_ids,
+		}
+	except HTTPException:
+		raise
+	except Exception as e:
+		logger.error(f"[upload_mod_images] Error: {e}")
+		conn.rollback()
+		raise HTTPException(status_code=500, detail=str(e))
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+
+@app.delete("/api/mods/images/{image_id}")
+def delete_mod_image(image_id: int) -> Dict[str, Any]:
+	"""Delete a custom uploaded image."""
+	import logging
+	logger = logging.getLogger("modmanager.api")
+	conn = get_db()
+	try:
+		cur = conn.cursor()
+		# Check if image exists
+		image_row = cur.execute("SELECT id FROM mod_custom_images WHERE id = ?", (image_id,)).fetchone()
+		if not image_row:
+			raise HTTPException(status_code=404, detail=f"Image {image_id} not found")
+		
+		# Delete the image
+		cur.execute("DELETE FROM mod_custom_images WHERE id = ?", (image_id,))
+		conn.commit()
+		
+		logger.info(f"[delete_mod_image] Deleted image_id={image_id}")
+		return {"ok": True, "deleted_id": image_id}
+	except HTTPException:
+		raise
+	except Exception as e:
+		logger.error(f"[delete_mod_image] Error: {e}")
+		conn.rollback()
+		raise HTTPException(status_code=500, detail=str(e))
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+
 @app.get("/api/downloads")
 def list_downloads(limit: int = 500) -> List[Dict[str, Any]]:
 	"""List local downloads with joined mod info and tags sourced strictly from v_local_downloads_with_tags.
@@ -3717,7 +3923,7 @@ def _search_mod_id_remote(name: str, api_key: str, game: str = DEFAULT_GAME) -> 
 	url = f"https://api.nexusmods.com/v1/games/{game}/mods.json?{params}"
 	headers = {
 		"apikey": api_key,
-		"User-Agent": "Project_ModManager_Rivals/0.1.0",
+		"User-Agent": "Project_ModManager_Rivals/0.3.0",
 		"Application-Name": "Project_ModManager_Rivals",
 	}
 	req = urllib.request.Request(url, headers=headers, method="GET")
@@ -3997,7 +4203,7 @@ def _resolve_nexus_download_candidates(
 	if api_key:
 		headers["apikey"] = api_key
 		headers["Application-Name"] = "MarvelRivalsModManager"
-		headers["Application-Version"] = "0.1.0"
+		headers["Application-Version"] = "0.3.0"
 	req = urllib.request.Request(api_url, headers=headers, method="GET")
 	try:
 		with urllib.request.urlopen(req, timeout=30) as resp:
@@ -5113,6 +5319,88 @@ def get_local_download(download_id: int) -> Dict[str, Any]:
 			"active_paks": active_paks,
 			"created_at": created_at,
 		}
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+
+@app.get("/api/pak-assets")
+def get_pak_assets(download_ids: Optional[str] = None) -> List[Dict[str, Any]]:
+	"""Fetch pak assets from pak_assets_json table for given download IDs.
+	
+	Query params:
+	  - download_ids: Comma-separated list of local download IDs
+	
+	Returns:
+	  List of objects with:
+	    - pak_name: str
+	    - assets: list of asset paths (strings)
+	"""
+	conn = get_db()
+	try:
+		if not download_ids:
+			return []
+			
+		# Parse download IDs
+		ids: Set[int] = set()
+		for token in re.split(r"[,\\s]+", str(download_ids)):
+			if not token:
+				continue
+			try:
+				value = int(token)
+			except (TypeError, ValueError):
+				continue
+			if value >= 0:
+				ids.add(value)
+				
+		if not ids:
+			return []
+			
+		# First, get all pak names associated with these download IDs from mod_paks table
+		cur = conn.cursor()
+		placeholders = ",".join("?" for _ in ids)
+		pak_rows = cur.execute(
+			f"""
+			SELECT DISTINCT pak_name
+			FROM mod_paks
+			WHERE local_download_id IN ({placeholders})
+			""",
+			tuple(ids),
+		).fetchall()
+		
+		if not pak_rows:
+			return []
+			
+		pak_names = [row[0] for row in pak_rows if row[0]]
+		
+		# Now fetch assets from pak_assets_json for these pak names
+		pak_placeholders = ",".join("?" for _ in pak_names)
+		asset_rows = cur.execute(
+			f"""
+			SELECT pak_name, assets_json
+			FROM pak_assets_json
+			WHERE pak_name IN ({pak_placeholders})
+			""",
+			tuple(pak_names),
+		).fetchall()
+		
+		result: List[Dict[str, Any]] = []
+		for pak_name, assets_json in asset_rows:
+			try:
+				assets = json.loads(assets_json) if assets_json else []
+				if not isinstance(assets, list):
+					assets = []
+			except Exception:
+				assets = []
+				
+			result.append({
+				"pak_name": pak_name,
+				"assets": assets,
+			})
+				
+		return result
 	finally:
 		try:
 			conn.close()

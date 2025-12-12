@@ -1871,3 +1871,120 @@ def rebuild_conflicts(conn: sqlite3.Connection, *, active_only: bool | None = No
     conn.commit()
     return results
 
+
+# ============================================================================
+# Character and Skin Data Functions
+# ============================================================================
+
+def has_character_data(conn: sqlite3.Connection) -> bool:
+    """Check if the database has character data."""
+    cur = conn.cursor()
+    result = cur.execute("SELECT COUNT(*) as count FROM characters").fetchone()
+    return result[0] > 0 if result else False
+
+
+def get_all_characters(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
+    """
+    Get all characters with their skins.
+    
+    Returns:
+        List of dicts with structure: {
+            "character_id": "1034",
+            "name": "iron man",
+            "skins": [
+                {"variant": "001", "name": "default"},
+                {"variant": "100", "name": "armor model 42"},
+                ...
+            ]
+        }
+    """
+    cur = conn.cursor()
+    
+    # Get all characters
+    chars = cur.execute("SELECT character_id, name FROM characters ORDER BY character_id").fetchall()
+    
+    result = []
+    for char_row in chars:
+        char_id, char_name = char_row
+        
+        # Get skins for this character
+        skins = cur.execute(
+            "SELECT variant, name FROM skins WHERE character_id = ? ORDER BY variant",
+            (char_id,)
+        ).fetchall()
+        
+        result.append({
+            "character_id": char_id,
+            "name": char_name,
+            "skins": [{"variant": v, "name": n} for v, n in skins]
+        })
+    
+    return result
+
+
+def get_character_skins(conn: sqlite3.Connection, character_id: str) -> List[Dict[str, str]]:
+    """
+    Get all skins for a specific character.
+    
+    Returns:
+        List of dicts: [{"variant": "001", "name": "default"}, ...]
+    """
+    cur = conn.cursor()
+    skins = cur.execute(
+        "SELECT variant, name FROM skins WHERE character_id = ? ORDER BY variant",
+        (character_id,)
+    ).fetchall()
+    
+    return [{"variant": v, "name": n} for v, n in skins]
+
+
+def get_character_names(conn: sqlite3.Connection) -> List[str]:
+    """
+    Get all character names (lowercase) for filtering/tagging.
+    Used as replacement for character_ids.json loading.
+    
+    Returns:
+        List of lowercase character names
+    """
+    cur = conn.cursor()
+    rows = cur.execute("SELECT name FROM characters ORDER BY name").fetchall()
+    return [row[0] for row in rows]
+
+
+def clear_character_data(conn: sqlite3.Connection) -> None:
+    """Clear all character and skin data (cascades to skins via FK)."""
+    cur = conn.cursor()
+    cur.execute("DELETE FROM skins")
+    cur.execute("DELETE FROM characters")
+    conn.commit()
+
+
+def insert_characters(conn: sqlite3.Connection, characters: List[Tuple[str, str]]) -> None:
+    """
+    Batch insert characters.
+    
+    Args:
+        characters: List of (character_id, name) tuples
+    """
+    cur = conn.cursor()
+    cur.executemany(
+        "INSERT OR REPLACE INTO characters (character_id, name) VALUES (?, ?)",
+        characters
+    )
+    conn.commit()
+
+
+def insert_skins(conn: sqlite3.Connection, skins: List[Tuple[str, str, str, str]]) -> None:
+    """
+    Batch insert skins.
+    
+    Args:
+        skins: List of (skin_id, character_id, variant, name) tuples
+    """
+    cur = conn.cursor()
+    cur.executemany(
+        "INSERT OR REPLACE INTO skins (skin_id, character_id, variant, name) VALUES (?, ?, ?, ?)",
+        skins
+    )
+    conn.commit()
+

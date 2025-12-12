@@ -76,12 +76,40 @@ export function DownloadsPage({
     );
   }
 
-  // Filter by character using canonical tags (match any non-category tag)
+  // Smart hierarchical filtering: separate character tags from skin tags
+  // Tags structure: [character, skin1, skin2, ...]
   if (selectedCharacters && selectedCharacters.length > 0) {
     filteredMods = filteredMods.filter((mod) => {
       const characterTags = extractNonCategoryTags(mod.tags);
       if (characterTags.length === 0) return false;
-      return characterTags.some((tag) => selectedCharacters.includes(tag));
+
+      // Extract character (first tag) and skins (remaining tags)
+      const modCharacter = characterTags[0];
+      const modSkins = characterTags.slice(1);
+
+      // Check which selected tags match this mod's character vs skins
+      const matchesCharacter = selectedCharacters.includes(modCharacter);
+      const matchingSkins = selectedCharacters.filter((tag) =>
+        modSkins.includes(tag)
+      );
+
+      // Logic: If character is selected, show all its mods (or filter by skins)
+      // If only skins selected (no character), don't show anything
+      if (matchesCharacter) {
+        // Character selected - show if no specific skins selected, OR any skin matches
+        if (matchingSkins.length > 0) {
+          return true; // Character matches and at least one skin matches
+        }
+        // Check if we have ANY skin tags selected at all
+        const hasAnySkinSelection = selectedCharacters.some(
+          (tag) =>
+            !characterTags.includes(tag) || characterTags.indexOf(tag) > 0
+        );
+        // If no skin-specific filtering, show all character mods
+        return !hasAnySkinSelection || matchingSkins.length > 0;
+      }
+
+      return false;
     });
   }
 
@@ -140,9 +168,7 @@ export function DownloadsPage({
   const applyOrder = (val: number) => (sortOrder === "asc" ? -val : val);
 
   // Comparator factory for nullable timestamps that must place NULLs last
-  const makeTimestampComparator = (
-    getter: (m: Mod) => number | null
-  ) => {
+  const makeTimestampComparator = (getter: (m: Mod) => number | null) => {
     return (a: Mod, b: Mod) => {
       const ta = getter(a);
       const tb = getter(b);
@@ -156,14 +182,16 @@ export function DownloadsPage({
 
   switch (sortBy) {
     case "Popular":
-      filteredMods.sort((a, b) => applyOrder((b.downloads || 0) - (a.downloads || 0)));
+      filteredMods.sort((a, b) =>
+        applyOrder((b.downloads || 0) - (a.downloads || 0))
+      );
       break;
     case "Recent":
       // Recent: sort by backendModId (numeric), then by installDate for missing ids
       filteredMods.sort((a, b) => {
         const aId = a.backendModId;
         const bId = b.backendModId;
-        
+
         // If both have mod ids, sort by mod id
         if (aId != null && bId != null) {
           const idDiff = sortOrder === "asc" ? aId - bId : bId - aId;
@@ -176,11 +204,11 @@ export function DownloadsPage({
           if (bDate == null) return -1;
           return sortOrder === "asc" ? aDate - bDate : bDate - aDate;
         }
-        
+
         // If only one has mod id, that one comes first (regardless of sort order)
         if (aId != null && bId == null) return -1;
         if (aId == null && bId != null) return 1;
-        
+
         // If neither has mod id, sort by install date
         const aDate = toNullableTimestamp(a.installDate);
         const bDate = toNullableTimestamp(b.installDate);
@@ -199,14 +227,18 @@ export function DownloadsPage({
       );
       break;
     case "Rating":
-      filteredMods.sort((a, b) => applyOrder((b.rating || 0) - (a.rating || 0)));
+      filteredMods.sort((a, b) =>
+        applyOrder((b.rating || 0) - (a.rating || 0))
+      );
       break;
     case "Downloads":
-      filteredMods.sort((a, b) => applyOrder((b.downloads || 0) - (a.downloads || 0)));
+      filteredMods.sort((a, b) =>
+        applyOrder((b.downloads || 0) - (a.downloads || 0))
+      );
       break;
     case "Performance":
-      filteredMods.sort(
-        (a, b) => applyOrder((b.performanceImpact || 0) - (a.performanceImpact || 0))
+      filteredMods.sort((a, b) =>
+        applyOrder((b.performanceImpact || 0) - (a.performanceImpact || 0))
       );
       break;
     case "Name":
@@ -292,9 +324,7 @@ export function DownloadsPage({
             {filteredMods.length > 0 ? (
               <div
                 className={
-                  viewMode === "grid"
-                    ? "mods-grid"
-                    : "flex flex-col gap-0"
+                  viewMode === "grid" ? "mods-grid" : "flex flex-col gap-0"
                 }
               >
                 {filteredMods.map((mod) => (

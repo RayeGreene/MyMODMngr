@@ -68,6 +68,9 @@ function summarizeBootstrap(raw: string): ParsedSummary {
   let conflictsStatus: StepStatus = "pending";
   let conflictCounts: ConflictCounts | null = null;
 
+  let ueExtractionStatus: StepStatus = "pending";
+  let ueExtractionDetail: string | undefined;
+
   let downloadsTotal: number | null = null;
   let syncTotal: number | null = null;
   let extractionTotal: number | null = null;
@@ -242,6 +245,35 @@ function summarizeBootstrap(raw: string): ParsedSummary {
       );
       return;
     }
+
+    // Marvel Rivals Extraction
+    if (matches(line, /\[1\/4\]|Extracting character names/i)) {
+      ueExtractionStatus = "active";
+      ueExtractionDetail = "Step 1/4: Extracting characters...";
+      return;
+    }
+    if (matches(line, /\[2\/4\]|Extracting skin ids/i)) {
+      ueExtractionStatus = "active";
+      ueExtractionDetail = "Step 2/4: Scanning skin variants...";
+      return;
+    }
+    if (matches(line, /\[3\/4\]|Extracting skin names/i)) {
+      ueExtractionStatus = "active";
+      ueExtractionDetail = "Step 3/4: Reading localization...";
+      return;
+    }
+    if (matches(line, /\[4\/4\]|Building final database/i)) {
+      ueExtractionStatus = "active";
+      ueExtractionDetail = "Step 4/4: Finalizing database...";
+      return;
+    }
+    if (
+      matches(line, /EXTRACTION AND INGESTION COMPLETE!|Total characters:/i)
+    ) {
+      ueExtractionStatus = "done";
+      ueExtractionDetail = "Extraction complete";
+      return;
+    }
   });
 
   if (syncStatus === "pending" && syncCurrent > 0) {
@@ -281,6 +313,15 @@ function summarizeBootstrap(raw: string): ParsedSummary {
       id: "database",
       label: "Database location found",
       status: databaseStatus,
+    });
+  }
+
+  if (ueExtractionStatus !== "pending") {
+    steps.push({
+      id: "ue_extraction",
+      label: "Game Data Extraction",
+      status: ueExtractionStatus,
+      detail: ueExtractionDetail,
     });
   }
 

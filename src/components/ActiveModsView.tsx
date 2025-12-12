@@ -77,12 +77,40 @@ export function ActiveModsView({
     );
   }
 
-  // Filter by character (if any selected)
+  // Smart hierarchical filtering: separate character tags from skin tags
+  // Tags structure: [character, skin1, skin2, ...]
   if (selectedCharacters && selectedCharacters.length > 0) {
     filteredMods = filteredMods.filter((mod) => {
       const nonCategoryTags = extractNonCategoryTags(mod.tags);
       if (nonCategoryTags.length === 0) return false;
-      return nonCategoryTags.some((tag) => selectedCharacters.includes(tag));
+
+      // Extract character (first tag) and skins (remaining tags)
+      const modCharacter = nonCategoryTags[0];
+      const modSkins = nonCategoryTags.slice(1);
+
+      // Check which selected tags match this mod's character vs skins
+      const matchesCharacter = selectedCharacters.includes(modCharacter);
+      const matchingSkins = selectedCharacters.filter((tag) =>
+        modSkins.includes(tag)
+      );
+
+      // Logic: If character is selected, show all its mods (or filter by skins)
+      // If only skins selected (no character), don't show anything
+      if (matchesCharacter) {
+        // Character selected - show if no specific skins selected, OR any skin matches
+        if (matchingSkins.length > 0) {
+          return true; // Character matches and at least one skin matches
+        }
+        // Check if we have ANY skin tags selected at all
+        const hasAnySkinSelection = selectedCharacters.some(
+          (tag) =>
+            !nonCategoryTags.includes(tag) || nonCategoryTags.indexOf(tag) > 0
+        );
+        // If no skin-specific filtering, show all character mods
+        return !hasAnySkinSelection || matchingSkins.length > 0;
+      }
+
+      return false;
     });
   }
 
@@ -163,7 +191,7 @@ export function ActiveModsView({
       filteredMods.sort((a, b) => {
         const aId = a.backendModId;
         const bId = b.backendModId;
-        
+
         // If both have mod ids, sort by mod id
         if (aId != null && bId != null) {
           const idDiff = sortOrder === "asc" ? aId - bId : bId - aId;
@@ -176,11 +204,11 @@ export function ActiveModsView({
           if (bDate == null) return -1;
           return sortOrder === "asc" ? aDate - bDate : bDate - aDate;
         }
-        
+
         // If only one has mod id, that one comes first (regardless of sort order)
         if (aId != null && bId == null) return -1;
         if (aId == null && bId != null) return 1;
-        
+
         // If neither has mod id, sort by install date
         const aDate = toNullableTimestamp(a.installDate);
         const bDate = toNullableTimestamp(b.installDate);

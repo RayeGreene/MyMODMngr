@@ -547,11 +547,9 @@ export default function App() {
       if (mod.isActive !== false && downloadIds.length > 0) {
         // Update UI state optimistically
         setMods((prev) =>
-          prev.map((m) =>
-            m.id === modId ? { ...m, isActive: false } : m
-          )
+          prev.map((m) => (m.id === modId ? { ...m, isActive: false } : m))
         );
-        
+
         // Actually deactivate on backend for each download
         for (const downloadId of downloadIds) {
           try {
@@ -564,14 +562,14 @@ export default function App() {
             // Continue with other downloads and deletion even if one fails
           }
         }
-        
+
         // Scan to update file system state
         try {
           await scanActive();
         } catch (scanError) {
           console.warn("[App] scanActive after deactivation failed", scanError);
         }
-        
+
         toast.info(`${mod.name} deactivated before removal`);
       }
 
@@ -783,9 +781,10 @@ export default function App() {
 
             // Mark this (mod_id, file_id) pair as managed BEFORE waiting for handoff
             // This prevents NxmBackgroundListener from processing it first
-            const trackingKey = expectedFileId != null 
-              ? `${expectedModId}:${expectedFileId}` 
-              : `${expectedModId}:*`;
+            const trackingKey =
+              expectedFileId != null
+                ? `${expectedModId}:${expectedFileId}`
+                : `${expectedModId}:*`;
             updateManagedPairsRef.current.add(trackingKey);
 
             const handoff = await waitForMatchingHandoff(
@@ -815,10 +814,10 @@ export default function App() {
             const progressDescription = controller?.getLastDescription();
             const toastId = controller?.toastId;
             controller?.stop();
-            
+
             // Remove from managed set since processing is complete
             updateManagedPairsRef.current.delete(trackingKey);
-            
+
             await applyUpdateSuccess(followUp, {
               toastId,
               progressDescription,
@@ -1114,15 +1113,18 @@ export default function App() {
 
   // Callback to check if a handoff is being managed by the update flow
   // Checks by (mod_id, file_id) pair since we track updates before handoff appears
-  const isHandoffManagedByUpdate = useCallback((handoff: ApiNxmHandoffSummary) => {
-    const modId = handoff.request?.mod_id;
-    const fileId = handoff.request?.file_id;
-    if (modId == null) return false;
-    
-    // Create key: "modId:fileId" or "modId:*" if no specific file
-    const key = fileId != null ? `${modId}:${fileId}` : `${modId}:*`;
-    return updateManagedPairsRef.current.has(key);
-  }, []);
+  const isHandoffManagedByUpdate = useCallback(
+    (handoff: ApiNxmHandoffSummary) => {
+      const modId = handoff.request?.mod_id;
+      const fileId = handoff.request?.file_id;
+      if (modId == null) return false;
+
+      // Create key: "modId:fileId" or "modId:*" if no specific file
+      const key = fileId != null ? `${modId}:${fileId}` : `${modId}:*`;
+      return updateManagedPairsRef.current.has(key);
+    },
+    []
+  );
 
   // On mount, try to get mods from API (doesn't replace mock cards yet, just signals connectivity)
   useEffect(() => {
@@ -1521,6 +1523,11 @@ export default function App() {
     return candidate;
   }
 
+  // Character/Skin Toggle Handler
+  // When a skin is clicked, both the character and skin tags are added to the filter.
+  // The filter logic uses .every() to ensure ALL selected tags must be present.
+  // Example: Clicking "default" under "emma frost" adds both to selectedCharacters,
+  // so only mods with BOTH "emma frost" AND "default" will show.
   const handleCharacterToggle = (character: string) => {
     setSelectedCharacters((prev) =>
       prev.includes(character)

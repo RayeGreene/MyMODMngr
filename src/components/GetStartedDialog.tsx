@@ -601,24 +601,38 @@ export function GetStartedDialog({
                   </div>
 
                   <div className="space-y-2">
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                      }}
+                    >
                       <Label htmlFor="nexus_api_key">Nexus API key</Label>
                       <Button
                         type="button"
                         variant="link"
                         size="sm"
                         onClick={async () => {
-                          const apiKeysUrl = "https://next.nexusmods.com/settings/api-keys#:~:text=Personal%20API%20Key";
+                          const apiKeysUrl =
+                            "https://next.nexusmods.com/settings/api-keys#:~:text=Personal%20API%20Key";
                           try {
                             const { openInBrowser } = await import(
                               "../lib/tauri-utils"
                             );
                             await openInBrowser(apiKeysUrl);
                           } catch (error) {
-                            console.error("Failed to open API keys page:", error);
+                            console.error(
+                              "Failed to open API keys page:",
+                              error
+                            );
                           }
                         }}
-                        style={{ padding: "0", height: "auto", fontSize: "0.875rem" }}
+                        style={{
+                          padding: "0",
+                          height: "auto",
+                          fontSize: "0.875rem",
+                        }}
                       >
                         <ExternalLink className="h-3 w-3 mr-1" />
                         Get API Key
@@ -899,11 +913,11 @@ export function GetStartedDialog({
                 >
                   Cancel
                 </Button>
-                <Button 
-                  type="submit" 
+                <Button
+                  type="submit"
                   disabled={
-                    isSaving || 
-                    !formValues.marvel_rivals_local_downloads_root?.trim() || 
+                    isSaving ||
+                    !formValues.marvel_rivals_local_downloads_root?.trim() ||
                     !formValues.nexus_api_key?.trim()
                   }
                 >
@@ -1014,12 +1028,6 @@ export function GetStartedDialog({
 
           {stage === "running" ? (
             <div className="space-y-4">
-              <div className="flex items-center gap-3 rounded-lg border border-border/40 bg-muted/5 p-4 text-sm">
-                <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                <span>
-                  Initial build is running. This may take a few minutes.
-                </span>
-              </div>
               <div className="space-y-2">
                 <Label>Task output</Label>
                 <TaskOutputSummary

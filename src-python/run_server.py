@@ -96,7 +96,17 @@ def main() -> None:
     args = _parse_args()
     
     # For production builds, also log to a file for debugging
-    stream_handler = logging.StreamHandler()
+    # Use a custom StreamHandler that ignores OSError on flush (Windows issue)
+    class SafeStreamHandler(logging.StreamHandler):
+        """StreamHandler that ignores OSError during flush (Windows console issues)."""
+        def flush(self):
+            try:
+                super().flush()
+            except (OSError, ValueError):
+                # Ignore errors when stream is not available (common on Windows)
+                pass
+    
+    stream_handler = SafeStreamHandler()
     stream_handler.setLevel(getattr(logging, args.log_level))
     log_handlers = [stream_handler]
     if getattr(sys, "frozen", False):
@@ -198,6 +208,25 @@ def main() -> None:
     port = SETTINGS.backend_port
 
     logger.info(f"Starting server on {host}:{port}...")
+    
+    # Suppress spammy polling logs from backend console
+    # Show the first one so we know it's working, but hide the rest
+    class EndpointFilter(logging.Filter):
+        def __init__(self, path_substring: str):
+            super().__init__()
+            self.path_substring = path_substring
+            self.has_logged = False
+            
+        def filter(self, record: logging.LogRecord) -> bool:
+            if self.path_substring in record.getMessage():
+                if not self.has_logged:
+                    self.has_logged = True
+                    return True
+                return False
+            return True
+            
+    # Add filter to uvicorn access logger
+    logging.getLogger("uvicorn.access").addFilter(EndpointFilter("GET /api/nxm/handoffs"))
     
     uvicorn.run(
         app,

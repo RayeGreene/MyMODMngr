@@ -207,7 +207,8 @@ export type SettingsTask =
   | "sync_nexus"
   | "rebuild_tags"
   | "rebuild_conflicts"
-  | "bootstrap_rebuild";
+  | "bootstrap_rebuild"
+  | "rebuild_character_data";
 
 export type ApiSettingsTaskStatus =
   | "pending"
@@ -248,6 +249,39 @@ export type ApiHealthResponse = {
   assets?: number;
   error?: string;
 };
+
+// Marvel Rivals Character and Skin Types
+export type CharacterSkin = {
+  variant: string;
+  name: string;
+};
+
+export type Character = {
+  character_id: string;
+  name: string;
+  skins: CharacterSkin[];
+};
+
+export type RebuildCharacterDataResponse = {
+  success: boolean;
+  message: string;
+  characters_count: number;
+  skins_count: number;
+};
+
+// Tag Lookup Types
+export type TagInfo = {
+  type: "character" | "skin";
+  character_id?: string;
+  parent?: string; // Parent character name for skins
+  parents?: string[]; // All possible parents for disambiguation
+};
+
+export type TagLookupRequest = {
+  tags: string[];
+};
+
+export type TagLookupResponse = Record<string, TagInfo>;
 
 const BASE_URL =
   (import.meta as any).env?.VITE_API_BASE_URL || "http://127.0.0.1:8000";
@@ -618,6 +652,71 @@ export async function getModChangelogs(modId: number): Promise<ApiChangelog[]> {
   return getJson<ApiChangelog[]>(`/api/mods/${modId}/changelogs`);
 }
 
+// Mod Images
+export type ModImage = {
+  id: number;
+  source: "nexus" | "custom";
+  url?: string; // For nexus images
+  data?: string; // For custom images (base64)
+  filename?: string;
+  mimeType?: string;
+  uploadedAt?: string;
+};
+
+export type ApiModImagesResponse = {
+  ok: boolean;
+  nexus_images: ModImage[];
+  custom_images: ModImage[];
+};
+
+export async function fetchModImages(modId: number): Promise<ModImage[]> {
+  const response = await getJson<ApiModImagesResponse>(
+    `/api/mods/${modId}/images`
+  );
+  return [...response.nexus_images, ...response.custom_images];
+}
+
+export async function uploadModImages(
+  modId: number,
+  files: File[]
+): Promise<{ ok: boolean; uploaded_count: number; image_ids: number[] }> {
+  // Convert files to base64
+  const images = await Promise.all(
+    files.map(async (file) => {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result as string;
+          // Extract base64 data (remove data:image/...;base64, prefix)
+          const base64Data = result.split(",")[1] || result;
+          resolve(base64Data);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      return {
+        data: base64,
+        filename: file.name,
+        mimeType: file.type,
+      };
+    })
+  );
+
+  return postJson<
+    { images: Array<{ data: string; filename: string; mimeType: string }> },
+    { ok: boolean; uploaded_count: number; image_ids: number[] }
+  >(`/api/mods/${modId}/images`, { images });
+}
+
+export async function deleteModImage(
+  imageId: number
+): Promise<{ ok: boolean; deleted_id: number }> {
+  return deleteJson<{ ok: boolean; deleted_id: number }>(
+    `/api/mods/images/${imageId}`
+  );
+}
+
 // Downloads
 export type ApiDownload = {
   id: number;
@@ -669,6 +768,11 @@ export interface ApiPakVersionStatus {
     | "missing_remote_version";
   needs_update: boolean;
   display_version?: string | null;
+}
+
+export interface ApiPakAsset {
+  pak_name: string;
+  assets: string[];
 }
 
 export async function listDownloads(limit = 500): Promise<ApiDownload[]> {
@@ -746,6 +850,17 @@ export async function deactivateByName(
     `/api/local_downloads/deactivate-by-name`,
     { name }
   );
+}
+
+export async function getPakAssets(
+  downloadIds: number[]
+): Promise<ApiPakAsset[]> {
+  if (!downloadIds || downloadIds.length === 0) {
+    return [];
+  }
+  const search = new URLSearchParams();
+  search.set("download_ids", downloadIds.join(","));
+  return getJson<ApiPakAsset[]>(`/api/pak-assets?${search.toString()}`);
 }
 
 export type ApiCheckModUpdateResponse = {
@@ -890,6 +1005,31 @@ export async function ingestNxmHandoff(
   return postJson<Record<string, unknown>, ApiNxmIngestResponse>(
     `/api/nxm/handoff/${encoded}/ingest`,
     payload
+  );
+}
+
+// Character and Skin Data API
+export async function getCharacters(): Promise<Character[]> {
+  return getJson<Character[]>("/api/characters");
+}
+
+export async function getCharacterSkins(
+  characterId: string
+): Promise<CharacterSkin[]> {
+  return getJson<CharacterSkin[]>(`/api/characters/${characterId}/skins`);
+}
+
+export async function rebuildCharacterData(): Promise<RebuildCharacterDataResponse> {
+  return postJson<{}, RebuildCharacterDataResponse>(
+    "/api/rebuild-character-data",
+    {}
+  );
+}
+
+export async function lookupTags(tags: string[]): Promise<TagLookupResponse> {
+  return postJson<TagLookupRequest, TagLookupResponse>(
+    "/api/characters/lookup-tags",
+    { tags }
   );
 }
 
