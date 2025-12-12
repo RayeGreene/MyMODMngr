@@ -223,41 +223,45 @@ export function DownloadsSidebar({
       const characters: string[] = [];
       const skinsByParent: Map<string, string[]> = new Map();
 
+      // First pass: Identify all explicit character tags in this mod
       for (const tag of tags) {
         const tagInfo = tagLookupMap[tag];
-        if (!tagInfo) continue;
-
-        if (tagInfo.type === "character") {
+        if (tagInfo?.type === "character") {
           characters.push(tag);
-        } else if (tagInfo.type === "skin") {
-          // Resolve effective parents (handle both legacy 'parent' and new 'parents' list)
-          let validParents: string[] = [];
-          if (tagInfo.parents && tagInfo.parents.length > 0) {
-            validParents = tagInfo.parents;
-          } else if (tagInfo.parent) {
-            validParents = [tagInfo.parent];
-          }
+        }
+      }
 
-          if (validParents.length > 0) {
-            // Context-aware disambiguation:
-            // If the current mod also tags any of the valid parents,
-            // we assign the skin ONLY to those parents.
-            // (e.g. Mod has "Invisible Woman" and "Life Fantastic" -> assign only to "Invisible Woman")
-            const activeParentsInMod = validParents.filter((p) =>
-              characters.includes(p)
-            );
+      // Second pass: Process skins, using identified characters for context-aware disambiguation
+      for (const tag of tags) {
+        const tagInfo = tagLookupMap[tag];
+        if (!tagInfo || tagInfo.type !== "skin") continue;
 
-            // If we found specific parents in this mod, use them.
-            // Otherwise, fallback to all valid parents (ambiguous case).
-            const targetParents =
-              activeParentsInMod.length > 0 ? activeParentsInMod : validParents;
+        // Resolve effective parents (handle both legacy 'parent' and new 'parents' list)
+        let validParents: string[] = [];
+        if (tagInfo.parents && tagInfo.parents.length > 0) {
+          validParents = tagInfo.parents;
+        } else if (tagInfo.parent) {
+          validParents = [tagInfo.parent];
+        }
 
-            for (const parent of targetParents) {
-              if (!skinsByParent.has(parent)) {
-                skinsByParent.set(parent, []);
-              }
-              skinsByParent.get(parent)!.push(tag);
+        if (validParents.length > 0) {
+          // Context-aware disambiguation:
+          // If the current mod also tags any of the valid parents,
+          // we assign the skin ONLY to those parents.
+          const activeParentsInMod = validParents.filter((p) =>
+            characters.includes(p)
+          );
+
+          // If we found specific parents in this mod, use them.
+          // Otherwise, fallback to all valid parents (ambiguous case).
+          const targetParents =
+            activeParentsInMod.length > 0 ? activeParentsInMod : validParents;
+
+          for (const parent of targetParents) {
+            if (!skinsByParent.has(parent)) {
+              skinsByParent.set(parent, []);
             }
+            skinsByParent.get(parent)!.push(tag);
           }
         }
       }
@@ -648,10 +652,16 @@ export function DownloadsSidebar({
                             characterHierarchy[character] || new Set()
                           ).sort((a, b) => a.localeCompare(b));
 
-                          // Count mods that have this character
+                          // Count mods that have this character AND belong to the current category
                           const modCount = installedMods.filter((mod) => {
                             const tags = extractNonCategoryTags(mod.tags);
-                            return tags.includes(character);
+                            const hasCharacter = tags.includes(character);
+                            if (!hasCharacter) return false;
+
+                            // If we are in "all" category (though this block is skipped for 'all' above),
+                            // we would count everything. But for specific categories:
+                            const modCategories = deriveCategoryTags(mod.tags);
+                            return modCategories.includes(category.id);
                           }).length;
 
                           return (
