@@ -1,32 +1,15 @@
-## 🎉 Version 0.3.0 - Patch Notes
+## 🎉 Version 0.3.0 – What’s New
 
-### 🔧 PAK Handling & Archive Extraction Improvements
+### ✨ New Features
 
-### Enhanced PAK File Processing
+- **All‑in‑one character & skin extraction** – RivalNxt now pulls every character and skin directly from the game files. No internet required.
+- **New API endpoints** – Access character data programmatically.
+- **Improved UI** – Downloads sidebar now shows skins under their characters with badge counts.
+- **Clearer logging** – Progress and error messages are easier to read.
+- **Mod Modal – Assets section** – Shows a grouped list of all assets belonging to a mod, with file type, size, and quick copy‑path actions.
+- **Mod Modal – Images section** – Displays uploaded custom images for the mod in a responsive grid, allowing drag‑and‑drop uploads, preview, and deletion.
 
-- **Fallback PAK Scanning**: Added reliable fallback mechanism when asset map extraction fails
-- **Unified File Organization**: Merged .pak/.utoc/.ucas files into unified entries for better mod management
-- **Improved Asset Processing**: Enhanced memory access patterns for faster PAK file operations
-
-### Archive Extraction Enhancements
-
-- **7z Archive Support**: Enhanced 7z archive support with binary extraction fallback
-- **Robust Error Handling**: Better fallback behavior when primary extraction methods fail
-- **Debug Logging**: Added comprehensive debug logging for asset extraction and processing
-
-### Mod Deletion Workflow
-
-- **Proper Deactivation Sequence**: Improved mod deletion workflow with correct deactivation order
-- **Clean Removal Process**: Ensures complete mod cleanup with proper asset unregistration
-- **Enhanced User Experience**: More reliable and predictable mod removal process
-
-### Reliability Improvements
-
-- **Better Error Recovery**: Enhanced fallback mechanisms throughout the mod management pipeline
-- **Performance Optimizations**: Improved processing speeds for large mod collections
-- **Debug Capabilities**: Added detailed logging for troubleshooting complex mod scenarios
-
-## 📥 Installation
+### 📥 Installation
 
 ### Quick Start
 
@@ -39,13 +22,13 @@
 
 > 📖 **Need more help?** See the [full installation guide](https://github.com/Rounak77382/RivalNxt?tab=readme-ov-file#-installation) for detailed setup instructions.
 
-## 📥 Downloads
+### 📥 Downloads
 
 | File                                  | Platform    | Checksum                 |
 | ------------------------------------- | ----------- | ------------------------ |
 | [<INSTALLER_FILENAME>](INSTALLER_URL) | x64 Windows | [checksum](CHECKSUM_URL) |
 
-> To verify the download on Windows, run `certutil -hashfile <filename> SHA256` and compare it with the value in the `.sha256` file.
+> To verify the download on Windows, run `certutil -hashfile <filename> SHA256` and compare it with the `.sha256` file.
 
 ---
 
