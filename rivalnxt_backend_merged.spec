@@ -59,7 +59,8 @@ _hiddenimports.extend([
     'python_multipart',
     'pydantic',
     'psutil',
-    'rust_ue_tools'
+    'rust_ue_tools',
+    'pylocres'
 ])
 
 # Add the project root to pathex so PyInstaller can find the modules
