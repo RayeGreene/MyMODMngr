@@ -9,6 +9,13 @@
 - **Mod Modal – Assets section** – Shows a grouped list of all assets belonging to a mod, with file type, size, and quick copy‑path actions.
 - **Mod Modal – Images section** – Displays uploaded custom images for the mod in a responsive grid, allowing drag‑and‑drop uploads, preview, and deletion.
 
+### 🔧 Bug Fixes
+
+- **Enhanced NXM handoff reliability** – Added smart retry system that prevents infinite loops and provides better error feedback when downloads fail
+- **Improved API key validation** – System now catches configuration issues early to save time and processing resources
+- **Better error message handling** – Reduced repetitive error notifications and provided clearer guidance for users
+
+
 ### 📥 Installation
 
 ### Quick Start

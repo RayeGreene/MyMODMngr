@@ -43,6 +43,9 @@ from core.api.services.handoffs import (
 	delete_handoff,
 	get_handoff_or_404,
 	list_handoffs,
+	register_handoff_failure,
+	clear_handoff_failure,
+	should_skip_handoff,
 	register_handoff,
 	serialize_handoff,
 	snapshot_metadata,
@@ -2365,8 +2368,31 @@ def check_mod_update(mod_id: int) -> Dict[str, Any]:
 def ingest_nxm_handoff(handoff_id: str, payload: Optional[Dict[str, Any]] = Body(default=None)) -> Dict[str, Any]:
 	if not handoff_id:
 		raise HTTPException(status_code=400, detail="handoff_id is required")
+	
+	# Circuit breaker: Check if this handoff should be skipped due to repeated failures
+	should_skip, skip_reason = should_skip_handoff(handoff_id)
+	if should_skip:
+		logger.warning(f"[nxm_handoff] Skipping handoff {handoff_id}: {skip_reason}")
+		raise HTTPException(status_code=429, detail=f"Too many failed attempts. {skip_reason}")
+	
 	record = get_handoff_or_404(handoff_id)
 	handoff_identifier = record.get("id") if isinstance(record.get("id"), str) else None
+	
+	# Early API key validation to prevent wasted processing
+	api_key = get_api_key()
+	if not api_key:
+		error_msg = "NEXUS_API_KEY not configured. Please add your Nexus Mods API key in Settings."
+		logger.error(f"[nxm_handoff] {error_msg}")
+		if handoff_identifier:
+			update_handoff_progress(
+				handoff_identifier,
+				stage="failed",
+				error=error_msg,
+				message=error_msg,
+			)
+			register_handoff_failure(handoff_identifier, error_msg)
+		raise HTTPException(status_code=400, detail=error_msg)
+	
 	if handoff_identifier:
 		update_handoff_progress(
 			handoff_identifier,
@@ -2398,26 +2424,30 @@ def ingest_nxm_handoff(handoff_id: str, payload: Optional[Dict[str, Any]] = Body
 		requested_file_id = req_file_id
 	selected_entry = _select_file_entry(files_summary, requested_file_id)
 	if not selected_entry:
+		error_msg = "Unable to resolve target file from Nexus metadata"
 		if handoff_identifier:
 			update_handoff_progress(
 				handoff_identifier,
 				stage="failed",
-				error="Unable to resolve target file from Nexus metadata",
-				message="Unable to resolve target file from Nexus metadata",
+				error=error_msg,
+				message=error_msg,
 			)
-		raise HTTPException(status_code=404, detail="Unable to resolve target file from Nexus metadata")
+			register_handoff_failure(handoff_identifier, error_msg)
+		raise HTTPException(status_code=404, detail=error_msg)
 	file_id = selected_entry["file_id"]
 	req_data = record.get("request", {})
 	mod_id = req_data.get("mod_id")
 	if not isinstance(mod_id, int):
+		error_msg = "nxm handoff missing mod id"
 		if handoff_identifier:
 			update_handoff_progress(
 				handoff_identifier,
 				stage="failed",
-				error="nxm handoff missing mod id",
+				error=error_msg,
 				message="NXM handoff missing mod id",
 			)
-		raise HTTPException(status_code=400, detail="nxm handoff missing mod id")
+			register_handoff_failure(handoff_identifier, error_msg)
+		raise HTTPException(status_code=400, detail=error_msg)
 	logger.info(
 		"[nxm_handoff] resolving mod_id=%s file_id=%s handoff=%s via nxm redirect", mod_id, file_id, record.get("id")
 	)
@@ -2453,6 +2483,7 @@ def ingest_nxm_handoff(handoff_id: str, payload: Optional[Dict[str, Any]] = Body
 				error=str(exc),
 				message="Duplicate download detected",
 			)
+			register_handoff_failure(handoff_identifier, str(exc))
 		raise HTTPException(status_code=409, detail=_duplicate_detail_from_error(exc))
 	new_download_id = ingest_result.get("download_id")
 	if not isinstance(new_download_id, int):
@@ -2536,7 +2567,11 @@ def ingest_nxm_handoff(handoff_id: str, payload: Optional[Dict[str, Any]] = Body
 			bytes_downloaded=final_size or 0,
 			bytes_total=final_size,
 		)
-
+	
+	# Clear failure tracking on success
+	if handoff_identifier:
+		clear_handoff_failure(handoff_identifier)
+	
 	delete_handoff(handoff_id)
 	response: Dict[str, Any] = {
 		"ok": True,

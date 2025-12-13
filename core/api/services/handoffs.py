@@ -4,15 +4,22 @@ from __future__ import annotations
 import threading
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
 
 from core.nexus.nxm import NXMRequest
 
 NXM_HANDOFF_TTL_SECONDS = 600
+MAX_HANDOFF_RETRIES = 3
+HANDOFF_FAILURE_BACKOFF_SECONDS = 60
+
 _HANDOFFS: Dict[str, Dict[str, Any]] = {}
 _HANDOFF_LOCK = threading.Lock()
+
+# Track handoff failures to prevent infinite retry loops
+_HANDOFF_FAILURES: Dict[str, Dict[str, Any]] = {}
+_FAILURE_LOCK = threading.Lock()
 
 
 def _purge_expired_locked(now: Optional[float] = None) -> None:
@@ -25,6 +32,19 @@ def _purge_expired_locked(now: Optional[float] = None) -> None:
 def _purge_expired(now: Optional[float] = None) -> None:
     with _HANDOFF_LOCK:
         _purge_expired_locked(now)
+
+
+def _purge_expired_failures(now: Optional[float] = None) -> None:
+    """Remove failure records that are beyond the backoff window."""
+    current = time.time() if now is None else now
+    with _FAILURE_LOCK:
+        expired = [
+            handoff_id
+            for handoff_id, failure in list(_HANDOFF_FAILURES.items())
+            if current - failure.get("last_attempt", 0) > HANDOFF_FAILURE_BACKOFF_SECONDS * 2
+        ]
+        for handoff_id in expired:
+            _HANDOFF_FAILURES.pop(handoff_id, None)
 
 
 def register_handoff(nxm: NXMRequest, *, metadata: Dict[str, Any]) -> Dict[str, Any]:
@@ -80,7 +100,12 @@ def delete_handoff(handoff_id: str) -> Dict[str, Any]:
         if record is None:
             raise HTTPException(status_code=404, detail="handoff not found or expired")
         _HANDOFFS.pop(handoff_id, None)
-        return record
+    
+    # Clear failure record when handoff is deleted
+    with _FAILURE_LOCK:
+        _HANDOFF_FAILURES.pop(handoff_id, None)
+    
+    return record
 
 
 def update_handoff_progress(
@@ -146,8 +171,71 @@ def serialize_handoff(record: Dict[str, Any], *, include_metadata: bool = False)
     return payload
 
 
+def register_handoff_failure(handoff_id: str, error: str) -> None:
+    """Track a handoff failure for circuit breaker logic."""
+    _purge_expired_failures()
+    with _FAILURE_LOCK:
+        failure = _HANDOFF_FAILURES.get(handoff_id, {"count": 0, "errors": []})
+        failure["count"] = failure.get("count", 0) + 1
+        failure["last_attempt"] = time.time()
+        failure["last_error"] = error
+        
+        # Keep a history of errors (max 5)
+        errors = failure.get("errors", [])
+        errors.append({"error": error, "timestamp": time.time()})
+        failure["errors"] = errors[-5:]
+        
+        _HANDOFF_FAILURES[handoff_id] = failure
+
+
+def get_handoff_failure_count(handoff_id: str) -> int:
+    """Get the number of failures for a handoff."""
+    _purge_expired_failures()
+    with _FAILURE_LOCK:
+        failure = _HANDOFF_FAILURES.get(handoff_id)
+        return failure.get("count", 0) if failure else 0
+
+
+def clear_handoff_failure(handoff_id: str) -> None:
+    """Clear failure record for a handoff (e.g., after successful processing)."""
+    with _FAILURE_LOCK:
+        _HANDOFF_FAILURES.pop(handoff_id, None)
+
+
+def should_skip_handoff(handoff_id: str) -> Tuple[bool, Optional[str]]:
+    """
+    Check if a handoff should be skipped due to repeated failures.
+    
+    Returns:
+        Tuple of (should_skip, reason)
+    """
+    _purge_expired_failures()
+    with _FAILURE_LOCK:
+        failure = _HANDOFF_FAILURES.get(handoff_id)
+        if not failure:
+            return False, None
+        
+        failure_count = failure.get("count", 0)
+        if failure_count >= MAX_HANDOFF_RETRIES:
+            last_error = failure.get("last_error", "Unknown error")
+            reason = f"Handoff has failed {failure_count} times (max {MAX_HANDOFF_RETRIES}). Last error: {last_error}"
+            return True, reason
+        
+        # Check if we're still in backoff period
+        last_attempt = failure.get("last_attempt", 0)
+        time_since_last = time.time() - last_attempt
+        if time_since_last < HANDOFF_FAILURE_BACKOFF_SECONDS:
+            remaining = int(HANDOFF_FAILURE_BACKOFF_SECONDS - time_since_last)
+            reason = f"Handoff is in backoff period ({remaining}s remaining after {failure_count} failures)"
+            return True, reason
+        
+        return False, None
+
+
 __all__ = [
     "NXM_HANDOFF_TTL_SECONDS",
+    "MAX_HANDOFF_RETRIES",
+    "HANDOFF_FAILURE_BACKOFF_SECONDS",
     "delete_handoff",
     "get_handoff_or_404",
     "list_handoffs",
@@ -155,4 +243,8 @@ __all__ = [
     "serialize_handoff",
     "snapshot_metadata",
     "update_handoff_progress",
+    "register_handoff_failure",
+    "get_handoff_failure_count",
+    "clear_handoff_failure",
+    "should_skip_handoff",
 ]

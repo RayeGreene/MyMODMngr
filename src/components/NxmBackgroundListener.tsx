@@ -6,6 +6,7 @@ import {
   type ApiNxmHandoffSummary,
 } from "../lib/api";
 import { createNxmProgressController } from "../lib/nxmHelpers";
+import { createToastDeduplicator, calculateBackoff } from "../lib/toastHelpers";
 
 interface NxmBackgroundListenerProps {
   enabled: boolean;
@@ -13,9 +14,27 @@ interface NxmBackgroundListenerProps {
   isHandoffExcluded?: (handoff: ApiNxmHandoffSummary) => boolean;
 }
 
+// Circuit breaker configuration
+const MAX_RETRIES = 3;
+const TOAST_DEDUPE_WINDOW_MS = 5000; // Don't show same error within 5 seconds
+const BASE_POLLING_INTERVAL_MS = 2000;
+const IDLE_POLLING_INTERVAL_MS = 5000; // Slower polling when no work
+
+interface HandoffFailure {
+  count: number;
+  lastAttempt: number;
+  lastError: string;
+  permanentlyFailed: boolean;
+}
+
 /**
  * Background listener that continuously monitors for NXM handoffs
- * and automatically processes them without user interaction
+ * and automatically processes them without user interaction.
+ *
+ * Features anti-loop protection:
+ * - Exponential backoff on failures (5s, 10s, 20s, 40s, 60s)
+ * - Maximum 3 retry attempts before permanent failure
+ * - Toast deduplication to prevent spam
  */
 export function NxmBackgroundListener({
   enabled,
@@ -24,6 +43,10 @@ export function NxmBackgroundListener({
 }: NxmBackgroundListenerProps) {
   const processedHandoffsRef = useRef<Set<string>>(new Set());
   const processingRef = useRef<Set<string>>(new Set());
+  const failedHandoffsRef = useRef<Map<string, HandoffFailure>>(new Map());
+  const toastDeduplicator = useRef(
+    createToastDeduplicator(TOAST_DEDUPE_WINDOW_MS)
+  );
 
   useEffect(() => {
     if (!enabled) {
@@ -38,13 +61,16 @@ export function NxmBackgroundListener({
 
       try {
         const handoffs = await listNxmHandoffs();
+        let hasWork = false;
 
         for (const handoff of handoffs) {
-          // Skip if already processed or currently processing
-          if (
-            processedHandoffsRef.current.has(handoff.id) ||
-            processingRef.current.has(handoff.id)
-          ) {
+          // Skip if already successfully processed
+          if (processedHandoffsRef.current.has(handoff.id)) {
+            continue;
+          }
+
+          // Skip if currently processing
+          if (processingRef.current.has(handoff.id)) {
             continue;
           }
 
@@ -53,19 +79,59 @@ export function NxmBackgroundListener({
             continue;
           }
 
+          // Check if this handoff has permanently failed
+          const failure = failedHandoffsRef.current.get(handoff.id);
+          if (failure?.permanentlyFailed) {
+            console.info(
+              `[NxmBackgroundListener] Skipping permanently failed handoff ${handoff.id} (${failure.count} failed attempts)`
+            );
+            continue;
+          }
+
+          // Check if we should skip due to backoff
+          if (failure && failure.count > 0) {
+            const backoffMs = calculateBackoff(failure.count - 1);
+            const timeSinceLastAttempt = Date.now() - failure.lastAttempt;
+
+            if (timeSinceLastAttempt < backoffMs) {
+              console.debug(
+                `[NxmBackgroundListener] Handoff ${
+                  handoff.id
+                } in backoff period (${Math.round(
+                  (backoffMs - timeSinceLastAttempt) / 1000
+                )}s remaining)`
+              );
+              hasWork = true; // Still has pending work
+              continue;
+            }
+          }
+
           // Mark as processing to prevent duplicate processing
           processingRef.current.add(handoff.id);
+          hasWork = true;
 
           // Process this handoff in the background
           void processHandoff(handoff);
         }
+
+        // Use slower polling if no work to do
+        const nextInterval = hasWork
+          ? BASE_POLLING_INTERVAL_MS
+          : IDLE_POLLING_INTERVAL_MS;
+
+        if (!cancelled) {
+          timeoutId = window.setTimeout(checkAndProcessHandoffs, nextInterval);
+        }
       } catch (err) {
         console.warn("[NxmBackgroundListener] Failed to list handoffs:", err);
-      }
 
-      // Schedule next check
-      if (!cancelled) {
-        timeoutId = window.setTimeout(checkAndProcessHandoffs, 2000);
+        // Continue polling even if listing fails
+        if (!cancelled) {
+          timeoutId = window.setTimeout(
+            checkAndProcessHandoffs,
+            BASE_POLLING_INTERVAL_MS
+          );
+        }
       }
     };
 
@@ -109,9 +175,10 @@ export function NxmBackgroundListener({
           toast.warning(ingest.activation_warning);
         }
 
-        // Mark as successfully processed
+        // Mark as successfully processed and clear any failure record
         processedHandoffsRef.current.add(handoff.id);
         processingRef.current.delete(handoff.id);
+        failedHandoffsRef.current.delete(handoff.id);
 
         // Notify parent component
         if (onModAdded) {
@@ -123,19 +190,54 @@ export function NxmBackgroundListener({
         const errorMessage =
           err instanceof Error ? err.message : String(err ?? "Unknown error");
 
-        toast.error(`Failed to auto-process ${modLabel}`, {
-          id: controller.toastId,
-          description: errorMessage,
-          duration: 5000,
+        // Track this failure
+        const currentFailure = failedHandoffsRef.current.get(handoff.id);
+        const failureCount = (currentFailure?.count ?? 0) + 1;
+        const permanentlyFailed = failureCount >= MAX_RETRIES;
+
+        failedHandoffsRef.current.set(handoff.id, {
+          count: failureCount,
+          lastAttempt: Date.now(),
+          lastError: errorMessage,
+          permanentlyFailed,
         });
 
+        // Only show toast if it's not a duplicate within the deduplication window
+        const toastKey = `nxm-error:${handoff.id}:${errorMessage}`;
+        if (toastDeduplicator.current.shouldShow(toastKey)) {
+          let description = permanentlyFailed
+            ? `${errorMessage} (Max retries reached, giving up)`
+            : `${errorMessage} (Attempt ${failureCount}/${MAX_RETRIES})`;
+
+          // Add advice for common causes of persistent failure
+          if (
+            permanentlyFailed ||
+            errorMessage.toLowerCase().includes("api key") ||
+            errorMessage.includes("401") ||
+            errorMessage.includes("403")
+          ) {
+            description += ". Please check your Nexus API Key in Settings.";
+          }
+
+          toast.error(`Failed to auto-process ${modLabel}`, {
+            id: controller.toastId,
+            description,
+            duration: permanentlyFailed ? 8000 : 5000,
+          });
+        }
+
         console.error(
-          `[NxmBackgroundListener] Failed to process handoff ${handoff.id}:`,
+          `[NxmBackgroundListener] Failed to process handoff ${handoff.id} (attempt ${failureCount}/${MAX_RETRIES}):`,
           err
         );
 
-        // Remove from processing set but don't mark as processed
-        // so it can be retried later if needed
+        if (permanentlyFailed) {
+          console.error(
+            `[NxmBackgroundListener] Handoff ${handoff.id} permanently failed after ${MAX_RETRIES} attempts. Last error: ${errorMessage}`
+          );
+        }
+
+        // Remove from processing set
         processingRef.current.delete(handoff.id);
       }
     };
@@ -149,7 +251,7 @@ export function NxmBackgroundListener({
         window.clearTimeout(timeoutId);
       }
     };
-  }, [enabled, onModAdded]);
+  }, [enabled, onModAdded, isHandoffExcluded]);
 
   // This component doesn't render anything
   return null;

@@ -11,16 +11,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "nsis"
-    ],
-    "icon": [
-      "icons/frontendlogo.ico"
-    ],
+    "targets": ["nsis"],
+    "icon": ["icons/frontendlogo.ico"],
     "resources": [],
-    "externalBin": [
-      "sidecars/rivalnxt_backend"
-    ],
+    "externalBin": ["sidecars/rivalnxt_backend"],
     "windows": {
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
@@ -30,7 +24,8 @@
       },
       "nsis": {
         "displayLanguageSelector": false,
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "installerHooks": "nsis-hooks.nsh"
       }
     }
   },
@@ -56,9 +51,7 @@
       "open": "^(https?|nxm)://.*"
     },
     "deepLink": {
-      "schemes": [
-        "nxm"
-      ]
+      "schemes": ["nxm"]
     }
   }
 }
