@@ -420,7 +420,10 @@ export function GetStartedDialog({
             : "Database already contains records. Rerunning will refresh everything."}
         </span>
       </div>
-      <div className="mt-3 grid grid-cols-2 gap-3 text-xs text-muted-foreground">
+      <div
+        className="mt-3 grid gap-3 text-xs text-muted-foreground"
+        style={{ gridTemplateColumns: "60% 40%" }}
+      >
         <div>
           <p className="font-semibold text-foreground">Database file</p>
           <p className="break-all">
@@ -495,6 +498,7 @@ export function GetStartedDialog({
                 display: "flex",
                 flexDirection: "column",
                 gap: "1.5rem",
+                marginTop: "1.5rem",
               }}
             >
               <div
@@ -940,6 +944,7 @@ export function GetStartedDialog({
                 display: "flex",
                 flexDirection: "column",
                 gap: "1.5rem",
+                marginTop: "1.5rem",
               }}
             >
               <div className="flex items-start gap-3 rounded-lg border border-border/40 bg-muted/5 p-4">
@@ -1027,7 +1032,7 @@ export function GetStartedDialog({
           ) : null}
 
           {stage === "running" ? (
-            <div className="space-y-4">
+            <div className="space-y-4" style={{ marginTop: "1.5rem" }}>
               <div className="space-y-2">
                 <Label>Task output</Label>
                 <TaskOutputSummary
@@ -1046,6 +1051,7 @@ export function GetStartedDialog({
                 display: "flex",
                 flexDirection: "column",
                 gap: "1.5rem",
+                marginTop: "1.5rem",
               }}
             >
               <div className="flex items-start gap-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-4">

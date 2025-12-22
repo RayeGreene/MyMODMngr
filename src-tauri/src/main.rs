@@ -29,6 +29,15 @@ impl BackendChild {
             *guard = Some(child);
         }
     }
+
+    fn kill(&self) {
+        if let Ok(mut guard) = self.0.lock() {
+            if let Some(child) = guard.take() {
+                println!("[Backend] Killing backend process...");
+                let _ = child.kill();
+            }
+        }
+    }
 }
 
 // Tauri command to open folder selection dialog
@@ -1209,6 +1218,11 @@ async fn launch_backend(app_handle: AppHandle, backend_state: BackendChild) -> R
             println!("[DEV] Workspace root: {}", workspace_root.display());
             println!("[DEV] Looking for Python script at: {}", python_script.display());
             
+            // Get PID for heartbeat monitoring (same as production)
+            let current_pid = std::process::id();
+            println!("[DEV] Current frontend PID: {}", current_pid);
+            println!("[DEV] Setting RIVALNXT_PID={} for backend monitoring", current_pid);
+            
             if !python_script.exists() {
                 eprintln!("Python script not found at: {}", python_script.display());
                 eprintln!("Falling back to sidecar...");
@@ -1219,6 +1233,7 @@ async fn launch_backend(app_handle: AppHandle, backend_state: BackendChild) -> R
                     .env("MM_BACKEND_HOST", "127.0.0.1")
                     .env("MM_BACKEND_PORT", "8000")
                     .env("PYTHONPATH", workspace_root.to_str().unwrap())
+                    .env("RIVALNXT_PID", current_pid.to_string())
                     .envs(if let Ok(data_dir) = app_handle.path().app_data_dir() {
                         println!("Using MODMANAGER_DATA_DIR at {}", data_dir.display());
                         if let Err(err) = fs::create_dir_all(&data_dir) {
@@ -1272,11 +1287,17 @@ async fn launch_backend(app_handle: AppHandle, backend_state: BackendChild) -> R
         
         // Production mode or fallback: use compiled sidecar
         println!("[PRODUCTION MODE] Using compiled sidecar");
+    
+    // Get the current process ID to pass to the backend for heartbeat monitoring
+    let current_pid = std::process::id();
+    println!("[App] Current PID: {}", current_pid);
+
     match app_handle.shell().sidecar("rivalnxt_backend") {
             Ok(command) => {
                 let mut command = command
                     .env("MM_BACKEND_HOST", "127.0.0.1")
-                    .env("MM_BACKEND_PORT", "8000");
+                    .env("MM_BACKEND_PORT", "8000")
+                    .env("RIVALNXT_PID", current_pid.to_string());
 
                 if let Ok(data_dir) = app_handle.path().app_data_dir() {
                     println!("[PRODUCTION] App data directory: {}", data_dir.display());
@@ -1444,6 +1465,14 @@ fn main() {
             });
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| match event {
+            tauri::RunEvent::ExitRequested { .. } => {
+                println!("[App] Exit requested, cleaning up...");
+                let backend = app_handle.state::<BackendChild>();
+                backend.kill();
+            }
+            _ => {}
+        });
 }

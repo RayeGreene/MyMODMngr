@@ -21,7 +21,23 @@ import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Separator } from "./ui/separator";
 import { ScrollArea } from "./ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
-import { Download, Star, Heart, Calendar, File, Trash2, ExternalLink, Plus, X, ChevronLeft, ChevronRight } from "lucide-react";
+import { Textarea } from "./ui/textarea";
+import {
+  Download,
+  Star,
+  Heart,
+  Calendar,
+  File,
+  Trash2,
+  ExternalLink,
+  Plus,
+  X,
+  ChevronLeft,
+  ChevronRight,
+  Pencil,
+  Check,
+  X as XIcon,
+} from "lucide-react";
 import type { Mod } from "./ModCard";
 import {
   useCallback,
@@ -38,6 +54,7 @@ import {
   fetchModImages,
   uploadModImages,
   deleteModImage,
+  updateModDetails,
   type ApiChangelog,
   type ApiModDetails,
   type ApiPakAsset,
@@ -54,6 +71,7 @@ import {
   type ApiPakVersionStatus,
 } from "../lib/api";
 import { toast } from "sonner";
+import React from "react";
 
 type DownloadEntry = {
   id: number;
@@ -176,7 +194,17 @@ export function ModModal({
   const [changelogs, setChangelogs] = useState<ApiChangelog[] | null>(null);
   const [pakAssets, setPakAssets] = useState<ApiPakAsset[]>([]);
 
-  // Fetch from backend if we have a linked mods.mod_id
+  // Determine effective mod ID for images (Nexus ID or negative local download ID)
+  const effectiveModId = useMemo(() => {
+    if (mod?.backendModId) return mod.backendModId;
+    if (mod?.sourceDownloadIds && mod.sourceDownloadIds.length > 0) {
+      // Use the first source download ID as a stable negative ID for local mods
+      return -mod.sourceDownloadIds[0];
+    }
+    return null;
+  }, [mod]);
+
+  // Fetch from backend if we have a linked mods.mod_id which is strictly for Nexus details
   const serverModId = useMemo(() => mod?.backendModId ?? null, [mod]);
   const [isApplying, setIsApplying] = useState(false);
   const downloadIds = useMemo(
@@ -200,12 +228,20 @@ export function ModModal({
   );
   const [deleteDialogEntry, setDeleteDialogEntry] =
     useState<DownloadEntry | null>(null);
-  
+
   // Images state
   const [modImages, setModImages] = useState<ModImage[]>([]);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [isUploadingImages, setIsUploadingImages] = useState(false);
+
+  // Description editing state
+  const [isEditingDescription, setIsEditingDescription] = useState(false);
+  const [editDescriptionValue, setEditDescriptionValue] = useState("");
+  const [isSavingDescription, setIsSavingDescription] = useState(false);
+  const [isBBCodeMode, setIsBBCodeMode] = useState(false);
+
+  // Custom preset that includes standard HTML5 tags + size, font, alignment
 
   const overviewTags = useMemo(() => {
     const tags: string[] = [];
@@ -232,18 +268,26 @@ export function ModModal({
   useEffect(() => {
     let cancelled = false;
     async function loadDetails() {
-      if (!serverModId) {
+      // Allow fetching images if we have an effective ID (even synthetic)
+      if (!effectiveModId) {
         setDetails(null);
         setChangelogs(null);
         setModImages([]);
         return;
       }
       try {
-        const [d, c, images] = await Promise.all([
-          getModDetails(serverModId),
-          getModChangelogs(serverModId),
-          fetchModImages(serverModId),
-        ]);
+        const promises: Promise<any>[] = [];
+        // Use effectiveModId for fetching details (works for both Nexus and local mods)
+        if (effectiveModId) {
+          promises.push(getModDetails(effectiveModId));
+          promises.push(getModChangelogs(effectiveModId));
+        } else {
+          promises.push(Promise.resolve(null));
+          promises.push(Promise.resolve(null));
+        }
+        promises.push(fetchModImages(effectiveModId));
+
+        const [d, c, images] = await Promise.all(promises);
         const debugInfo = {
           hasDescription: !!d?.mod?.description,
           descriptionLength: d?.mod?.description?.length || 0,
@@ -288,7 +332,7 @@ export function ModModal({
     return () => {
       cancelled = true;
     };
-  }, [serverModId, isOpen]);
+  }, [serverModId, effectiveModId, isOpen]);
 
   const hydrateDownloads = useCallback(
     async (options?: { skipScan?: boolean }) => {
@@ -595,7 +639,8 @@ export function ModModal({
       let success = false;
       try {
         // Step 1: Deactivate all active paks first if any are active
-        const activePaks = activeByDownload[downloadId] ?? entry.active_paks ?? [];
+        const activePaks =
+          activeByDownload[downloadId] ?? entry.active_paks ?? [];
         if (activePaks.length > 0) {
           toast.loading(`Deactivating ${displayName}…`, { id: toastId });
           try {
@@ -642,7 +687,10 @@ export function ModModal({
         setActiveByDownload(toActiveMap(refreshed));
         const lookup = await fetchPakStatuses();
         setPakStatusByDownload(lookup);
-        toast.success(`Deleted ${displayName}`, { id: toastId, duration: 2000 });
+        toast.success(`Deleted ${displayName}`, {
+          id: toastId,
+          duration: 2000,
+        });
         onConflictStateChanged?.();
         onRefresh?.();
         success = true;
@@ -697,36 +745,44 @@ export function ModModal({
   }, [deleteDialogEntry, handleDeleteDownload]);
 
   // Image handlers
-  const handleImageUpload = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
-    if (!files || files.length === 0 || !serverModId) return;
+  const handleImageUpload = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const files = event.target.files;
+      if (!files || files.length === 0 || !effectiveModId) return;
 
-    setIsUploadingImages(true);
-    const toastId = toast.loading(`Uploading ${files.length} image(s)...`);
+      setIsUploadingImages(true);
+      const toastId = toast.loading(`Uploading ${files.length} image(s)...`);
 
-    try {
-      const fileArray = Array.from(files);
-      await uploadModImages(serverModId, fileArray);
-      
-      // Refresh images
-      const updatedImages = await fetchModImages(serverModId);
-      setModImages(updatedImages);
-      
-      toast.success(`Uploaded ${files.length} image(s) successfully`, {
-        id: toastId,
-        duration: 2000,
-      });
-    } catch (error) {
-      toast.error((error as any)?.message || "Failed to upload images", {
-        id: toastId,
-        duration: 4000,
-      });
-    } finally {
-      setIsUploadingImages(false);
-      // Reset file input
-      event.target.value = "";
-    }
-  }, [serverModId]);
+      try {
+        const fileArray = Array.from(files);
+        await uploadModImages(effectiveModId, fileArray);
+
+        // Refresh images
+        const updatedImages = await fetchModImages(effectiveModId);
+        setModImages(updatedImages);
+
+        toast.success(`Uploaded ${files.length} image(s) successfully`, {
+          id: toastId,
+          duration: 2000,
+        });
+
+        // Refresh the mod list to update the card image
+        if (onRefresh) {
+          onRefresh();
+        }
+      } catch (error) {
+        toast.error((error as any)?.message || "Failed to upload images", {
+          id: toastId,
+          duration: 4000,
+        });
+      } finally {
+        setIsUploadingImages(false);
+        // Reset file input
+        event.target.value = "";
+      }
+    },
+    [effectiveModId, onRefresh]
+  );
 
   const openLightbox = useCallback((index: number) => {
     setLightboxIndex(index);
@@ -742,7 +798,9 @@ export function ModModal({
   }, [modImages.length]);
 
   const prevImage = useCallback(() => {
-    setLightboxIndex((prev) => (prev - 1 + modImages.length) % modImages.length);
+    setLightboxIndex(
+      (prev) => (prev - 1 + modImages.length) % modImages.length
+    );
   }, [modImages.length]);
 
   // Keyboard navigation for lightbox
@@ -763,26 +821,79 @@ export function ModModal({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [lightboxOpen, closeLightbox, nextImage, prevImage]);
 
-  const handleDeleteImage = useCallback(async (imageId: number, event: React.MouseEvent) => {
-    event.stopPropagation(); // Prevent opening lightbox
-    
-    const toastId = toast.loading("Deleting image...");
-    try {
-      await deleteModImage(imageId);
-      
-      // Update local state
-      setModImages((prev) => prev.filter((img) => img.id !== imageId));
-      
-      toast.success("Image deleted successfully", {
-        id: toastId,
-        duration: 2000,
-      });
-    } catch (error) {
-      toast.error((error as any)?.message || "Failed to delete image", {
-        id: toastId,
-        duration: 4000,
-      });
+  const handleDeleteImage = useCallback(
+    async (imageId: number, event: React.MouseEvent) => {
+      event.stopPropagation(); // Prevent opening lightbox
+
+      const toastId = toast.loading("Deleting image...");
+      try {
+        await deleteModImage(imageId);
+
+        // Update local state
+        setModImages((prev) => prev.filter((img) => img.id !== imageId));
+
+        toast.success("Image deleted successfully", {
+          id: toastId,
+          duration: 2000,
+        });
+
+        // Refresh the mod list to update the card image
+        if (onRefresh) {
+          onRefresh();
+        }
+      } catch (error) {
+        toast.error((error as any)?.message || "Failed to delete image", {
+          id: toastId,
+          duration: 4000,
+        });
+      }
+    },
+    [onRefresh]
+  );
+
+  const handleEditDescription = useCallback(() => {
+    if (!mod && !details?.mod) return;
+    const current =
+      details?.mod?.description_bbcode || details?.mod?.description || "";
+    setEditDescriptionValue(current);
+    setIsEditingDescription(true);
+    // Auto-detect if it looks like BBCode or if we have explicit BBCode content
+    if (
+      details?.mod?.description_bbcode ||
+      /\[(b|i|u|url|img|color|size|font|center|quote)/i.test(current)
+    ) {
+      setIsBBCodeMode(true);
+    } else {
+      setIsBBCodeMode(false);
     }
+  }, [mod, details]);
+
+  const handleSaveDescription = useCallback(async () => {
+    if (!effectiveModId) return;
+    setIsSavingDescription(true);
+    try {
+      await updateModDetails(effectiveModId, {
+        description: editDescriptionValue,
+      });
+
+      // Refetch details from server to ensure UI matches what was actually saved
+      // (backend does HTML escaping and newline conversion)
+      const freshDetails = await getModDetails(effectiveModId);
+      setDetails(freshDetails);
+
+      setIsEditingDescription(false);
+      toast.success("Description updated");
+    } catch (e) {
+      console.error("Failed to save description", e);
+      toast.error("Failed to save description");
+    } finally {
+      setIsSavingDescription(false);
+    }
+  }, [effectiveModId, editDescriptionValue]);
+
+  const handleCancelEditDescription = useCallback(() => {
+    setIsEditingDescription(false);
+    setEditDescriptionValue("");
   }, []);
 
   if (!mod) return null;
@@ -803,8 +914,14 @@ export function ModModal({
   };
 
   // Stronger client-side sanitization using DOMPurify
+  // Allow img tags and necessary attributes for BBCode-generated HTML
+  // usage of USE_PROFILES: { html: true } with ADD_TAGS is the recommended way to extend defaults
   const sanitizeHtml = (html: string) =>
-    DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+    DOMPurify.sanitize(html, {
+      USE_PROFILES: { html: true },
+      ADD_TAGS: ["img"],
+      ADD_ATTR: ["target"],
+    });
 
   const resolvedChangelogs: ApiChangelog[] = changelogs ?? [];
 
@@ -857,6 +974,51 @@ export function ModModal({
         showCloseButton={false}
       >
         <div className="flex flex-col h-full min-h-0 overflow-hidden">
+          {/* Fixed save/cancel buttons for description editing */}
+          {isEditingDescription && (
+            <div
+              style={{
+                position: "absolute",
+                bottom: "92px",
+                left: "24px",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                backgroundColor: "rgba(0, 0, 0, 0.95)",
+                backdropFilter: "blur(4px)",
+                padding: "8px",
+                borderRadius: "6px",
+                border: "1px solid rgba(255, 255, 255, 0.1)",
+                boxShadow: "0 4px 6px rgba(0, 0, 0, 0.3)",
+                zIndex: 100,
+              }}
+            >
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleCancelEditDescription}
+                disabled={isSavingDescription}
+                title="Cancel"
+                className="h-8 w-8 hover:bg-destructive/10 hover:text-destructive"
+              >
+                <XIcon className="w-4 h-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleSaveDescription}
+                disabled={isSavingDescription}
+                title="Save"
+                className="h-8 w-8 hover:bg-green-500/10 hover:text-green-600"
+              >
+                {isSavingDescription ? (
+                  <div className="w-4 h-4 border-2 border-current border-t-transparent animate-spin rounded-full" />
+                ) : (
+                  <Check className="w-4 h-4 text-green-500" />
+                )}
+              </Button>
+            </div>
+          )}
           {/* Hidden description for accessibility to satisfy aria-describedby */}
           <p id="mod-dialog-description" className="sr-only">
             Manage and apply mod files for {mod?.name}.
@@ -886,42 +1048,48 @@ export function ModModal({
                 </p>
 
                 <div className="flex items-center gap-3 mb-3">
-                  <a
-                    className="flex items-center gap-2 cursor-pointer"
-                    onClick={async () => {
-                      const modUrl = `https://next.nexusmods.com/profile/${details?.mod?.author || mod.author || "unknown"}`;
-                      try {
-                        const { openInBrowser } = await import(
-                          "../lib/tauri-utils"
-                        );
-                        await openInBrowser(modUrl);
-                      } catch (error) {
-                        console.error("Failed to open mod page:", error);
-                      }
-                    }}
-                  >
-                    <Avatar className="w-6 h-6">
-                      <AvatarImage
-                        src={mod.authorAvatar || undefined}
-                        alt={mod.author || "Unknown author"}
-                        referrerPolicy="no-referrer"
-                        onError={(event: SyntheticEvent<HTMLImageElement>) => {
-                          const img = event.currentTarget;
-                          if (img.dataset.fallbackApplied === "1") {
-                            return;
-                          }
-                          img.dataset.fallbackApplied = "1";
-                          img.src = "";
-                        }}
-                      />
-                      <AvatarFallback className="text-xs">
-                        {(mod.author?.trim()?.[0] ?? "?").toUpperCase()}
-                      </AvatarFallback>
-                    </Avatar>
-                    <span className="font-medium">
-                      {details?.mod?.author || mod.author || "Unknown author"}
-                    </span>
-                  </a>
+                  {mod.backendModId != null && mod.backendModId > 0 && (
+                    <a
+                      className="flex items-center gap-2 cursor-pointer"
+                      onClick={async () => {
+                        const modUrl = `https://next.nexusmods.com/profile/${
+                          details?.mod?.author || mod.author || "unknown"
+                        }`;
+                        try {
+                          const { openInBrowser } = await import(
+                            "../lib/tauri-utils"
+                          );
+                          await openInBrowser(modUrl);
+                        } catch (error) {
+                          console.error("Failed to open mod page:", error);
+                        }
+                      }}
+                    >
+                      <Avatar className="w-6 h-6">
+                        <AvatarImage
+                          src={mod.authorAvatar || undefined}
+                          alt={mod.author || "Unknown author"}
+                          referrerPolicy="no-referrer"
+                          onError={(
+                            event: SyntheticEvent<HTMLImageElement>
+                          ) => {
+                            const img = event.currentTarget;
+                            if (img.dataset.fallbackApplied === "1") {
+                              return;
+                            }
+                            img.dataset.fallbackApplied = "1";
+                            img.src = "";
+                          }}
+                        />
+                        <AvatarFallback className="text-xs">
+                          {(mod.author?.trim()?.[0] ?? "?").toUpperCase()}
+                        </AvatarFallback>
+                      </Avatar>
+                      <span className="font-medium">
+                        {details?.mod?.author || mod.author || "Unknown author"}
+                      </span>
+                    </a>
+                  )}
                   {mod.categoryTags && mod.categoryTags.length > 0 && (
                     <div className="flex gap-1 flex-wrap">
                       {mod.categoryTags.map((tag) => (
@@ -942,7 +1110,9 @@ export function ModModal({
                         onClick={async () => {
                           const modUrl = `https://www.nexusmods.com/marvelrivals/mods/${serverModId}`;
                           try {
-                            const { openInBrowser } = await import("../lib/tauri-utils");
+                            const { openInBrowser } = await import(
+                              "../lib/tauri-utils"
+                            );
                             await openInBrowser(modUrl);
                           } catch (error) {
                             console.error("Failed to open mod page:", error);
@@ -958,21 +1128,25 @@ export function ModModal({
                 </div>
 
                 <div className="flex items-center gap-6 text-sm text-muted-foreground">
-                  <div className="flex items-center gap-1">
-                    <Download className="w-6 h-4" />
-                    {formatNumber(
-                      (details?.mod?.mod_downloads as number | null) ??
-                        mod.downloads ??
-                        0
-                    )}{" "}
-                    downloads
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Star className="w-6 h-4 fill-yellow-400 text-yellow-400" />
-                    {details?.mod?.endorsement_count != null
-                      ? `${details.mod.endorsement_count} endorsements`
-                      : `${mod.rating.toFixed(1)} rating`}
-                  </div>
+                  {mod.backendModId != null && mod.backendModId > 0 && (
+                    <>
+                      <div className="flex items-center gap-1">
+                        <Download className="w-6 h-4" />
+                        {formatNumber(
+                          (details?.mod?.mod_downloads as number | null) ??
+                            mod.downloads ??
+                            0
+                        )}{" "}
+                        downloads
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Star className="w-6 h-4 fill-yellow-400 text-yellow-400" />
+                        {details?.mod?.endorsement_count != null
+                          ? `${details.mod.endorsement_count} endorsements`
+                          : `${mod.rating.toFixed(1)} rating`}
+                      </div>
+                    </>
+                  )}
                   <div className="flex items-center gap-1">
                     <Calendar className="w-6 h-4" />
                     Updated{" "}
@@ -1066,24 +1240,71 @@ export function ModModal({
 
                         {/* Description */}
                         <div>
-                          <h3 className="font-medium mb-3">Description</h3>
-                          <div className="prose prose-sm max-w-none text-muted-foreground">
-                            {details?.mod?.description ? (
-                              <div
-                                dangerouslySetInnerHTML={{
-                                  __html: sanitizeHtml(
-                                    details?.mod?.description || ""
-                                  ),
-                                }}
-                              />
-                            ) : details?.mod?.summary ? (
-                              <p>{details?.mod?.summary}</p>
-                            ) : (
-                              <p className="italic">
-                                No description available.
-                              </p>
-                            )}
+                          <div className="flex items-center justify-between mb-3">
+                            <h3 className="font-medium">Description</h3>
+                            <div className="flex gap-2">
+                              {effectiveModId && !isEditingDescription && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-6 w-6"
+                                  onClick={handleEditDescription}
+                                  title="Edit Description"
+                                >
+                                  <Pencil className="w-3.5 h-3.5 text-muted-foreground" />
+                                </Button>
+                              )}
+                              {isEditingDescription && (
+                                <Button
+                                  variant={isBBCodeMode ? "default" : "outline"}
+                                  size="sm"
+                                  onClick={() => setIsBBCodeMode(!isBBCodeMode)}
+                                  title="Toggle BBCode Mode"
+                                  className="h-6 text-xs"
+                                >
+                                  BBCode
+                                </Button>
+                              )}
+                            </div>
                           </div>
+
+                          {isEditingDescription ? (
+                            <Textarea
+                              value={editDescriptionValue}
+                              onChange={(e) =>
+                                setEditDescriptionValue(e.target.value)
+                              }
+                              // Use style to force height as requested ("traditional css")
+                              style={{ height: "280px", minHeight: "280px" }}
+                              className="font-sans resize-y"
+                              placeholder={
+                                isBBCodeMode
+                                  ? "Enter description in BBCode format..."
+                                  : "Enter mod description..."
+                              }
+                            />
+                          ) : (
+                            <div className="prose prose-sm max-w-none text-muted-foreground">
+                              {details?.mod?.description &&
+                              !details.mod.description.includes(
+                                "Local mod (auto-generated)"
+                              ) ? (
+                                <div
+                                  dangerouslySetInnerHTML={{
+                                    __html: sanitizeHtml(
+                                      details?.mod?.description || ""
+                                    ),
+                                  }}
+                                />
+                              ) : details?.mod?.summary ? (
+                                <p>{details?.mod?.summary}</p>
+                              ) : (
+                                <p className="italic">
+                                  No description available.
+                                </p>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1106,19 +1327,23 @@ export function ModModal({
                         {modImages.map((image, index) => (
                           <div
                             key={`img-${image.id}-${index}`}
-                            style={{ height: '300px' }}
+                            style={{ height: "350px" }}
                             className="bg-muted rounded-lg overflow-hidden cursor-pointer hover:opacity-80 transition-opacity relative group"
                             onClick={() => openLightbox(index)}
                           >
                             <img
-                              src={image.source === 'nexus' ? image.url : `data:${image.mimeType};base64,${image.data}`}
+                              src={
+                                image.source === "nexus"
+                                  ? image.url
+                                  : `data:${image.mimeType};base64,${image.data}`
+                              }
                               alt={image.filename || `Image ${index + 1}`}
-                              style={{ height: '100%', width: 'auto' }}
+                              style={{ height: "100%", width: "auto" }}
                               className="object-contain"
                             />
-                            
+
                             {/* Delete button for custom images only */}
-                            {image.source === 'custom' && (
+                            {image.source === "custom" && (
                               <button
                                 className="absolute top-2 right-2 bg-destructive text-destructive-foreground rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-destructive/90"
                                 onClick={(e) => handleDeleteImage(image.id, e)}
@@ -1130,20 +1355,23 @@ export function ModModal({
                           </div>
                         ))}
 
-                        {/* Plus button for upload */}
-                        {serverModId && (
-                          <div 
-                            style={{ width: '300px', height: '300px' }}
+                        {/* Plus button for upload - enabled if we have ANY effective ID */}
+                        {effectiveModId && (
+                          <div
+                            style={{ width: "350px", height: "350px" }}
                             className="bg-muted rounded-lg flex items-center justify-center cursor-pointer hover:bg-muted/70 transition-colors border-2 border-dashed border-border"
                           >
-                            <label htmlFor="image-upload" className="cursor-pointer w-full h-full flex items-center justify-center">
+                            <label
+                              htmlFor="image-upload"
+                              className="cursor-pointer w-full h-full flex items-center justify-center"
+                            >
                               <Plus className="w-12 h-12 text-muted-foreground" />
                               <input
                                 id="image-upload"
                                 type="file"
                                 accept="image/*"
                                 multiple
-                                style={{ display: 'none' }}
+                                style={{ display: "none" }}
                                 onChange={handleImageUpload}
                                 disabled={isUploadingImages}
                               />
@@ -1152,7 +1380,7 @@ export function ModModal({
                         )}
 
                         {/* Empty state */}
-                        {modImages.length === 0 && !serverModId && (
+                        {modImages.length === 0 && !effectiveModId && (
                           <p className="text-sm text-muted-foreground italic">
                             No images available for this mod.
                           </p>
@@ -1168,63 +1396,68 @@ export function ModModal({
                     className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center"
                     onClick={closeLightbox}
                   >
-                    {/* Close button */}
-                    <button
-                      className="absolute top-4 right-4 text-white hover:text-gray-300 transition-colors z-10"
-                      onClick={closeLightbox}
-                      aria-label="Close lightbox"
-                    >
-                      <X className="w-8 h-8" />
-                    </button>
-
-                    {/* Image counter */}
+                    {/* Image counter - stays at top center of screen */}
                     <div className="absolute top-4 left-1/2 transform -translate-x-1/2 text-white text-lg font-medium z-10">
                       {lightboxIndex + 1} / {modImages.length}
                     </div>
 
-                    {/* Previous button */}
-                    {modImages.length > 1 && (
-                      <button
-                        className="absolute left-4 text-white hover:text-gray-300 transition-colors z-10"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          prevImage();
-                        }}
-                        aria-label="Previous image"
-                      >
-                        <ChevronLeft className="w-12 h-12" />
-                      </button>
-                    )}
-
-                    {/* Image */}
+                    {/* Image container - matches image dimensions */}
                     <div
-                      className="max-w-[90vw] max-h-[90vh] flex items-center justify-center"
+                      className="relative inline-block"
                       onClick={(e) => e.stopPropagation()}
                     >
+                      {/* Close button - positioned on image */}
+                      <button
+                        className="absolute top-4 right-4 text-white hover:text-gray-300 transition-colors z-10"
+                        onClick={closeLightbox}
+                        aria-label="Close lightbox"
+                      >
+                        <X className="w-8 h-8" />
+                      </button>
+
+                      {/* Previous button - positioned on image */}
+                      {modImages.length > 1 && (
+                        <button
+                          className="absolute left-4 top-1/2 -translate-y-1/2 text-white hover:text-gray-300 transition-colors z-10"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            prevImage();
+                          }}
+                          aria-label="Previous image"
+                        >
+                          <ChevronLeft className="w-12 h-12" />
+                        </button>
+                      )}
+
+                      {/* Image */}
                       <img
                         src={
-                          modImages[lightboxIndex]?.source === 'nexus'
+                          modImages[lightboxIndex]?.source === "nexus"
                             ? modImages[lightboxIndex]?.url
                             : `data:${modImages[lightboxIndex]?.mimeType};base64,${modImages[lightboxIndex]?.data}`
                         }
-                        alt={modImages[lightboxIndex]?.filename || `Image ${lightboxIndex + 1}`}
-                        className="max-w-full max-h-full object-contain"
+                        alt={
+                          modImages[lightboxIndex]?.filename ||
+                          `Image ${lightboxIndex + 1}`
+                        }
+                        style={{ maxHeight: "80vh", width: "auto" }}
+                        className="object-contain"
                       />
-                    </div>
 
-                    {/* Next button */}
-                    {modImages.length > 1 && (
-                      <button
-                        className="absolute right-4 text-white hover:text-gray-300 transition-colors z-10"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          nextImage();
-                        }}
-                        aria-label="Next image"
-                      >
-                        <ChevronRight className="w-12 h-12" />
-                      </button>
-                    )}
+                      {/* Next button - positioned on image */}
+                      {modImages.length > 1 && (
+                        <button
+                          className="absolute right-4 top-1/2 -translate-y-1/2 text-white hover:text-gray-300 transition-colors z-10"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            nextImage();
+                          }}
+                          aria-label="Next image"
+                        >
+                          <ChevronRight className="w-12 h-12" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
 

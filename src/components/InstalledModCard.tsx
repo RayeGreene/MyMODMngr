@@ -84,14 +84,6 @@ export function InstalledModCard({
     )
   );
 
-  if (typeof window !== "undefined") {
-    console.debug("[avatar] InstalledModCard candidates", {
-      modId: mod.id,
-      name: mod.name,
-      candidates: avatarCandidates,
-    });
-  }
-
   const authorAvatarSrc = avatarCandidates[0];
 
   const handleConfirmUninstall = async () => {
@@ -147,32 +139,32 @@ export function InstalledModCard({
               <div className="p-1">
                 <div
                   className="w-8 h-8 bg-muted rounded-lg overflow-hidden flex-shrink-0 relative cursor-pointer"
-                role="button"
-                tabIndex={0}
-                aria-label={`Open ${mod.name} details`}
-                onClick={() => onView(mod)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    onView(mod);
-                  }
-                }}
-              >
-                <img
-                  src={mod.images[0]}
-                  alt={mod.name}
-                  className="w-full h-full object-cover"
-                />
-                {(mod.hasUpdate || mod.isUpdating) && (
-                  <div className="absolute -top-1 -right-1 w-4 h-4 bg-destructive rounded-full flex items-center justify-center">
-                    {mod.isUpdating ? (
-                      <RefreshCw className="w-2 h-2 text-destructive-foreground animate-spin" />
-                    ) : (
-                      <AlertTriangle className="w-2 h-2 text-destructive-foreground" />
-                    )}
-                  </div>
-                )}
-              </div>
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Open ${mod.name} details`}
+                  onClick={() => onView(mod)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onView(mod);
+                    }
+                  }}
+                >
+                  <img
+                    src={mod.images[0]}
+                    alt={mod.name}
+                    className="w-full h-full object-cover"
+                  />
+                  {(mod.hasUpdate || mod.isUpdating) && (
+                    <div className="absolute -top-1 -right-1 w-4 h-4 bg-destructive rounded-full flex items-center justify-center">
+                      {mod.isUpdating ? (
+                        <RefreshCw className="w-2 h-2 text-destructive-foreground animate-spin" />
+                      ) : (
+                        <AlertTriangle className="w-2 h-2 text-destructive-foreground" />
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="flex-1 min-w-0 flex items-center justify-between">
@@ -185,10 +177,7 @@ export function InstalledModCard({
                       {mod.name}
                     </h3>
                     {mod.hasUpdate && (
-                      <Badge
-                        variant="destructive"
-                        className="text-xs shrink-0"
-                      >
+                      <Badge variant="destructive" className="text-xs shrink-0">
                         Update Available
                       </Badge>
                     )}
@@ -347,7 +336,15 @@ export function InstalledModCard({
                   </Button>
                 </div>
 
-                <div className="flex items-center gap-2 mb-3">
+                <div
+                  className="flex items-center gap-2 mb-3"
+                  style={{
+                    visibility:
+                      !mod.backendModId || mod.backendModId <= 0
+                        ? "hidden"
+                        : "visible",
+                  }}
+                >
                   <Avatar className="w-6 h-6">
                     <AvatarImage
                       src={authorAvatarSrc}
@@ -403,7 +400,9 @@ export function InstalledModCard({
                   <a
                     className="flex items-center gap-2 cursor-pointer"
                     onClick={async () => {
-                      const modUrl = `https://next.nexusmods.com/profile/${mod.author || "unknown"}`;
+                      const modUrl = `https://next.nexusmods.com/profile/${
+                        mod.author || "unknown"
+                      }`;
                       try {
                         const { openInBrowser } = await import(
                           "../lib/tauri-utils"

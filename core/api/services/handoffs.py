@@ -232,6 +232,15 @@ def should_skip_handoff(handoff_id: str) -> Tuple[bool, Optional[str]]:
         return False, None
 
 
+def mark_handoff_consumed(handoff_id: str) -> None:
+    """Mark a handoff as consumed to prevent reprocessing on frontend restart."""
+    with _HANDOFF_LOCK:
+        record = _HANDOFFS.get(handoff_id)
+        if record is not None:
+            record["consumed"] = True
+            record["consumed_at"] = time.time()
+
+
 __all__ = [
     "NXM_HANDOFF_TTL_SECONDS",
     "MAX_HANDOFF_RETRIES",
@@ -247,4 +256,5 @@ __all__ = [
     "get_handoff_failure_count",
     "clear_handoff_failure",
     "should_skip_handoff",
+    "mark_handoff_consumed",
 ]

@@ -403,6 +403,18 @@ async function postJson<TReq, TRes>(path: string, body: TReq): Promise<TRes> {
   return res.json();
 }
 
+async function patchJson<TReq, TRes>(path: string, body: TReq): Promise<TRes> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    await handleError(res, "PATCH", path);
+  }
+  return res.json();
+}
+
 async function putJson<TReq, TRes>(path: string, body: TReq): Promise<TRes> {
   const res = await fetch(`${BASE_URL}${path}`, {
     method: "PUT",
@@ -604,6 +616,7 @@ export type ApiModDetails = {
     picture_url?: string | null;
     summary?: string | null;
     description?: string | null;
+    description_bbcode?: string | null;
     mod_downloads?: number | null;
     mod_unique_downloads?: number | null;
     endorsement_count?: number | null;
@@ -626,6 +639,21 @@ export type ApiModDetails = {
 
 export async function getModDetails(modId: number): Promise<ApiModDetails> {
   return getJson<ApiModDetails>(`/api/mods/${modId}`);
+}
+
+export async function updateModDetails(
+  modId: number,
+  data: { description?: string }
+): Promise<{ ok: boolean }> {
+  try {
+    return patchJson<{ description?: string }, { ok: boolean }>(
+      `/api/mods/${modId}`,
+      data
+    );
+  } catch (e) {
+    console.warn("updateModDetails failed", e);
+    throw e;
+  }
 }
 
 export type ApiModFile = {
@@ -715,6 +743,25 @@ export async function deleteModImage(
   return deleteJson<{ ok: boolean; deleted_id: number }>(
     `/api/mods/images/${imageId}`
   );
+}
+
+export async function getModCustomImagePreviews(
+  modIds: number[]
+): Promise<Record<number, string>> {
+  if (!modIds || modIds.length === 0) {
+    return {};
+  }
+  const idsParam = modIds.join(",");
+  const response = await getJson<{
+    ok: boolean;
+    images: Record<string, string>;
+  }>(`/api/mods/custom-images-preview?mod_ids=${encodeURIComponent(idsParam)}`);
+  // Convert string keys to number keys
+  const result: Record<number, string> = {};
+  for (const [key, value] of Object.entries(response.images)) {
+    result[Number(key)] = value;
+  }
+  return result;
 }
 
 // Downloads

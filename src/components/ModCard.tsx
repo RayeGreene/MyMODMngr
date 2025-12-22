@@ -146,9 +146,7 @@ function ModCardInner({
                 </div>
 
                 <div className="flex items-center gap-2 ml-4">
-                  <TagList
-                    tags={mod.tags}
-                  />
+                  <TagList tags={mod.tags} />
 
                   <Button
                     variant="ghost"
@@ -227,60 +225,59 @@ function ModCardInner({
             {mod.description}
           </p>
 
-          <div className="flex items-center gap-2 mb-3">
-            <Avatar className="w-6 h-6">
-              <AvatarImage
-                src={authorAvatarSrc}
-                alt={mod.author || "Unknown author"}
-                referrerPolicy="no-referrer"
-                data-avatar-index="0"
-                data-avatar-candidates={avatarCandidates.join("|")}
-                onError={(event: SyntheticEvent<HTMLImageElement>) => {
-                  const img = event.currentTarget;
-                  const candidates = (img.dataset.avatarCandidates || "")
-                    .split("|")
-                    .filter(Boolean);
-                  const currentIndex = Number(img.dataset.avatarIndex || "0");
-                  const nextIndex = currentIndex + 1;
-                  if (nextIndex < candidates.length) {
-                    const nextSrc = candidates[nextIndex];
-                    img.dataset.avatarIndex = String(nextIndex);
+          {mod.backendModId != null && mod.backendModId > 0 && (
+            <div className="flex items-center gap-2 mb-3">
+              <Avatar className="w-6 h-6">
+                <AvatarImage
+                  src={authorAvatarSrc}
+                  alt={mod.author || "Unknown author"}
+                  referrerPolicy="no-referrer"
+                  data-avatar-index="0"
+                  data-avatar-candidates={avatarCandidates.join("|")}
+                  onError={(event: SyntheticEvent<HTMLImageElement>) => {
+                    const img = event.currentTarget;
+                    const candidates = (img.dataset.avatarCandidates || "")
+                      .split("|")
+                      .filter(Boolean);
+                    const currentIndex = Number(img.dataset.avatarIndex || "0");
+                    const nextIndex = currentIndex + 1;
+                    if (nextIndex < candidates.length) {
+                      const nextSrc = candidates[nextIndex];
+                      img.dataset.avatarIndex = String(nextIndex);
+                      if (typeof window !== "undefined") {
+                        console.warn("[avatar] fallback to next candidate", {
+                          modId: mod.id,
+                          name: mod.name,
+                          attempted: img.src,
+                          nextSrc,
+                          nextIndex,
+                        });
+                      }
+                      img.src = nextSrc;
+                      return;
+                    }
                     if (typeof window !== "undefined") {
-                      console.warn("[avatar] fallback to next candidate", {
+                      console.error("[avatar] all avatar candidates failed", {
                         modId: mod.id,
                         name: mod.name,
-                        attempted: img.src,
-                        nextSrc,
-                        nextIndex,
+                        candidates,
                       });
                     }
-                    img.src = nextSrc;
-                    return;
-                  }
-                  if (typeof window !== "undefined") {
-                    console.error("[avatar] all avatar candidates failed", {
-                      modId: mod.id,
-                      name: mod.name,
-                      candidates,
-                    });
-                  }
-                  img.dataset.avatarIndex = String(candidates.length);
-                  img.src = "";
-                }}
-              />
-              <AvatarFallback className="text-xs">
-                {(mod.author?.trim()?.[0] ?? "?").toUpperCase()}
-              </AvatarFallback>
-            </Avatar>
-            <span className="text-sm text-muted-foreground">
-              {mod.author || "Unknown author"}
-            </span>
-          </div>
+                    img.dataset.avatarIndex = String(candidates.length);
+                    img.src = "";
+                  }}
+                />
+                <AvatarFallback className="text-xs">
+                  {(mod.author?.trim()?.[0] ?? "?").toUpperCase()}
+                </AvatarFallback>
+              </Avatar>
+              <span className="text-sm text-muted-foreground">
+                {mod.author || "Unknown author"}
+              </span>
+            </div>
+          )}
 
-          <TagList
-            tags={mod.tags}
-            className="mb-3"
-          />
+          <TagList tags={mod.tags} className="mb-3" />
 
           <div className="flex items-center justify-between text-xs text-muted-foreground mb-3">
             <div className="flex items-center gap-3">

@@ -1,20 +1,18 @@
-## 🎉 Version 0.3.0 – What’s New
+## 🎉 Version 0.3.2 – What's New
 
 ### ✨ New Features
 
-- **All‑in‑one character & skin extraction** – RivalNxt now pulls every character and skin directly from the game files. No internet required.
-- **New API endpoints** – Access character data programmatically.
-- **Improved UI** – Downloads sidebar now shows skins under their characters with badge counts.
-- **Clearer logging** – Progress and error messages are easier to read.
-- **Mod Modal – Assets section** – Shows a grouped list of all assets belonging to a mod, with file type, size, and quick copy‑path actions.
-- **Mod Modal – Images section** – Displays uploaded custom images for the mod in a responsive grid, allowing drag‑and‑drop uploads, preview, and deletion.
+**📸 Custom Image Uploads**
 
-### 🔧 Bug Fixes
+- Upload your own screenshots for any mod
+- Create custom thumbnails for local mods
+- First upload becomes the primary display
 
-- **Enhanced NXM handoff reliability** – Added smart retry system that prevents infinite loops and provides better error feedback when downloads fail
-- **Improved API key validation** – System now catches configuration issues early to save time and processing resources
-- **Better error message handling** – Reduced repetitive error notifications and provided clearer guidance for users
+**✏️ Edit Mod Descriptions**
 
+- Write and edit descriptions for any mod
+- Toggle between formatted and plain text editing
+- Keep notes about your installed mods
 
 ### 📥 Installation
 

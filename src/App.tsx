@@ -40,6 +40,7 @@ import {
   getSettingsTaskJob,
   getBootstrapStatus,
   getHealth,
+  getModCustomImagePreviews,
   type ApiSettings,
   type ApiSettingsTaskResponse,
   type SettingsTask,
@@ -62,6 +63,7 @@ const SETTINGS_TASK_LABELS: Record<SettingsTask, string> = {
   rebuild_tags: "Rebuild Tags",
   rebuild_conflicts: "Rebuild Conflicts",
   bootstrap_rebuild: "Initial Database Build",
+  rebuild_character_data: "Rebuild Character Data",
 };
 
 const PROGRESS_STAGE_FILTERS = [
@@ -502,7 +504,24 @@ export default function App() {
   // Event handlers
   async function fetchServerMods(limit = 500): Promise<any[]> {
     const downloads = await listDownloads(limit);
-    const mapped = groupDownloadsByMod(downloads).map(toUiMod);
+    const grouped = groupDownloadsByMod(downloads);
+
+    // Extract all mod_ids (real and synthetic) to fetch custom images
+    const modIds: number[] = [];
+    for (const d of grouped) {
+      if (d.mod_id != null) {
+        modIds.push(d.mod_id);
+      } else if (d.id != null) {
+        // For local mods without mod_id, use synthetic ID (negative download ID)
+        modIds.push(-d.id);
+      }
+    }
+
+    // Fetch custom images for all mods in bulk
+    const customImages =
+      modIds.length > 0 ? await getModCustomImagePreviews(modIds) : {};
+
+    const mapped = grouped.map((d) => toUiMod(d, customImages));
     return dedupeById(mapped);
   }
 
@@ -1214,17 +1233,36 @@ export default function App() {
     return undefined;
   }
 
-  function toUiMod(d: ApiDownload) {
+  function toUiMod(d: ApiDownload, customImages: Record<number, string> = {}) {
     // Consolidate tags and remove any stray tokens like 'data' and generic categories for robustness
     const cleanTags = (d.tags || []).filter(
       (t) => t && !["data"].includes(t.toLowerCase())
     );
     const categoryTags = deriveCategoryTags(cleanTags);
-    const images = d.picture_url
-      ? [d.picture_url]
-      : [
+
+    // Priority: Nexus picture_url > Custom image > Fallback
+    let images: string[];
+    if (d.picture_url) {
+      images = [d.picture_url];
+    } else {
+      // Try to get custom image
+      let customImage: string | undefined;
+      if (d.mod_id != null && customImages[d.mod_id]) {
+        customImage = customImages[d.mod_id];
+      } else if (d.mod_id == null && d.id != null) {
+        // For local mods, use synthetic ID (negative download ID)
+        const syntheticId = -d.id;
+        customImage = customImages[syntheticId];
+      }
+
+      if (customImage) {
+        images = [customImage];
+      } else {
+        images = [
           "https://i.pinimg.com/1200x/44/da/5e/44da5e6d9dd75cb753ab5925aff4ce4c.jpg",
         ];
+      }
+    }
     const installedVersion = d.version || undefined;
     const localVersionKey = d.local_version_key ?? null;
     const latestVersionKey = d.latest_version_key ?? null;

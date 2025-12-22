@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Set, Tuple, Union
 
-from fastapi import Body, FastAPI, File, HTTPException, Response, UploadFile
+from fastapi import Body, FastAPI, File, HTTPException, Query, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -50,6 +50,7 @@ from core.api.services.handoffs import (
 	serialize_handoff,
 	snapshot_metadata,
 	update_handoff_progress,
+	mark_handoff_consumed,
 )
 from core.db import (
 	bulk_upsert_pak_assets,
@@ -90,13 +91,15 @@ from field_prefs import filter_aggregate_payload, load_prefs
 # Global cache for Nexus preferences
 _NEXUS_PREFS_CACHE = None
 
-app = FastAPI(title="Mod Manager Backend", version="0.3.0")
+app = FastAPI(title="Mod Manager Backend", version="0.3.2")
 
 # Register character API routes
 from core.api.characters import router as characters_router
 app.include_router(characters_router)
 
 logger = logging.getLogger("modmanager.api")
+
+
 
 
 # Reload settings from disk on startup (in case of external changes)
@@ -124,6 +127,80 @@ verify_required_dns_hosts()
 _SETTINGS_TASK_LOCK = threading.Lock()
 _SETTINGS_TASK_JOBS: Dict[str, Dict[str, Any]] = {}
 _SETTINGS_TASK_MAX_JOBS = 25
+
+
+def _monitor_parent_process(pid: int) -> None:
+	"""Monitor the parent process and exit if it dies."""
+	import psutil
+	import time
+	
+	logger.info(f"[PID Monitor] Starting parent process monitor for PID {pid}")
+	
+	# Check if the PID exists initially
+	if not psutil.pid_exists(pid):
+		logger.warning(f"[PID Monitor] Parent PID {pid} doesn't exist at startup! Exiting.")
+		os._exit(0)
+	
+	try:
+		proc = psutil.Process(pid)
+		logger.info(f"[PID Monitor] Parent process: {proc.name()} (PID {pid})")
+	except psutil.NoSuchProcess:
+		logger.warning(f"[PID Monitor] Parent PID {pid} doesn't exist! Exiting.")
+		os._exit(0)
+	except Exception as e:
+		logger.error(f"[PID Monitor] Error getting parent process info: {e}")
+	
+	check_counter = 0
+	while True:
+		try:
+			check_counter += 1
+			if not psutil.pid_exists(pid):
+				logger.warning(f"[PID Monitor] Parent process {pid} is gone after {check_counter} checks. Shutting down backend.")
+				os._exit(0)
+			
+			# Log every 12 checks (every minute if checking every 5 seconds)
+			if check_counter % 12 == 0:
+				logger.info(f"[PID Monitor] Parent process {pid} still alive (check #{check_counter})")
+			
+			time.sleep(5)
+		except Exception as e:
+			logger.error(f"[PID Monitor] Error in parent monitor: {e}")
+			time.sleep(5)
+
+
+# Start parent monitor if PID is provided
+_RIVALNXT_PID = os.environ.get("RIVALNXT_PID")
+if _RIVALNXT_PID:
+	try:
+		_pid = int(_RIVALNXT_PID)
+		logger.info(f"[PID Monitor] RIVALNXT_PID environment variable found: {_pid}")
+		_monitor_thread = threading.Thread(
+			target=_monitor_parent_process,
+			args=(_pid,),
+			daemon=True,
+			name="ParentProcessMonitor"
+		)
+		_monitor_thread.start()
+		logger.info("[PID Monitor] Monitor thread started successfully")
+	except ValueError:
+		logger.warning(f"[PID Monitor] Invalid RIVALNXT_PID value: {_RIVALNXT_PID}")
+	except Exception as e:
+		logger.error(f"[PID Monitor] Failed to start monitor thread: {e}")
+else:
+	logger.info("[PID Monitor] No RIVALNXT_PID environment variable found - monitor not started")
+
+
+# Debug: Log all environment variables to help troubleshoot
+logger.info("=" * 70)
+logger.info("Environment Variables Debug")
+logger.info("=" * 70)
+logger.info(f"RIVALNXT_PID: {os.environ.get('RIVALNXT_PID', 'NOT SET')}")
+logger.info(f"MM_BACKEND_HOST: {os.environ.get('MM_BACKEND_HOST', 'NOT SET')}")
+logger.info(f"MM_BACKEND_PORT: {os.environ.get('MM_BACKEND_PORT', 'NOT SET')}")
+logger.info(f"MODMANAGER_DATA_DIR: {os.environ.get('MODMANAGER_DATA_DIR', 'NOT SET')}")
+logger.info("=" * 70)
+
+
 
 
 def _safe_rebuild_conflicts(
@@ -2366,6 +2443,12 @@ def check_mod_update(mod_id: int) -> Dict[str, Any]:
 
 @app.post("/api/nxm/handoff/{handoff_id}/ingest")
 def ingest_nxm_handoff(handoff_id: str, payload: Optional[Dict[str, Any]] = Body(default=None)) -> Dict[str, Any]:
+	import sys
+	print(f"\n{'='*80}", file=sys.stderr)
+	print(f"[INGEST START] Handoff ID: {handoff_id}", file=sys.stderr)
+	print(f"[INGEST START] Payload: {payload}", file=sys.stderr)
+	print(f"{'='*80}\n", file=sys.stderr)
+	
 	if not handoff_id:
 		raise HTTPException(status_code=400, detail="handoff_id is required")
 	
@@ -2375,10 +2458,13 @@ def ingest_nxm_handoff(handoff_id: str, payload: Optional[Dict[str, Any]] = Body
 		logger.warning(f"[nxm_handoff] Skipping handoff {handoff_id}: {skip_reason}")
 		raise HTTPException(status_code=429, detail=f"Too many failed attempts. {skip_reason}")
 	
+	print(f"[INGEST] Fetching handoff record...", file=sys.stderr)
 	record = get_handoff_or_404(handoff_id)
 	handoff_identifier = record.get("id") if isinstance(record.get("id"), str) else None
+	print(f"[INGEST] Handoff record fetched: {handoff_identifier}", file=sys.stderr)
 	
 	# Early API key validation to prevent wasted processing
+	print(f"[INGEST] Checking API key...", file=sys.stderr)
 	api_key = get_api_key()
 	if not api_key:
 		error_msg = "NEXUS_API_KEY not configured. Please add your Nexus Mods API key in Settings."
@@ -2476,15 +2562,55 @@ def ingest_nxm_handoff(handoff_id: str, payload: Optional[Dict[str, Any]] = Body
 			created_at_hint=file_created_at_hint,
 		)
 	except DuplicateDownloadError as exc:
+		try:
+			import traceback
+			import sys
+			print(f"[ingest_debug] DuplicateDownloadError caught: {exc}", file=sys.stderr)
+			if handoff_identifier:
+				update_handoff_progress(
+					handoff_identifier,
+					stage="failed",
+					error=str(exc),
+					message="Duplicate download detected",
+				)
+				register_handoff_failure(handoff_identifier, str(exc))
+				# Mark as consumed to prevent infinite retry loops on frontend restart
+				print(f"[ingest_debug] Marking handoff {handoff_identifier} as consumed", file=sys.stderr)
+				mark_handoff_consumed(handoff_identifier)
+			
+			print(f"[ingest_debug] Generating detail from error", file=sys.stderr)
+			detail = _duplicate_detail_from_error(exc)
+			print(f"[ingest_debug] Raising 409", file=sys.stderr)
+			raise HTTPException(status_code=409, detail=detail)
+		except HTTPException:
+			raise
+			# ... (duplicate block maintained)
+			raise HTTPException(status_code=409, detail=detail)
+	except HTTPException:
+		raise
+	except Exception as e:
+		# Graceful error handling for fatal errors
+		import traceback
+		import sys
+		print(f"[ingest_debug] ERROR during ingestion: {e}", file=sys.stderr)
+		traceback.print_exc(file=sys.stderr)
+		
 		if handoff_identifier:
+			register_handoff_failure(handoff_identifier, str(e))
 			update_handoff_progress(
 				handoff_identifier,
 				stage="failed",
-				error=str(exc),
-				message="Duplicate download detected",
+				error=str(e),
+				message="Ingestion Failed"
 			)
-			register_handoff_failure(handoff_identifier, str(exc))
-		raise HTTPException(status_code=409, detail=_duplicate_detail_from_error(exc))
+			# Force consume handoff on fatal error to prevent infinite restart loops
+			# If it failed this badly, retrying the same handoff is likely futile
+			print(f"[ingest_debug] Marking handoff {handoff_identifier} as consumed due to fatal error", file=sys.stderr)
+			mark_handoff_consumed(handoff_identifier)
+			
+		# Return 400 instead of 500 to ensure frontend receives the error detail
+		# and to avoid partial CORS issues with 500s
+		raise HTTPException(status_code=400, detail=f"Ingestion failed: {str(e)}")
 	new_download_id = ingest_result.get("download_id")
 	if not isinstance(new_download_id, int):
 		raise HTTPException(status_code=500, detail="Ingestion completed but download id missing")
@@ -2572,10 +2698,18 @@ def ingest_nxm_handoff(handoff_id: str, payload: Optional[Dict[str, Any]] = Body
 	if handoff_identifier:
 		clear_handoff_failure(handoff_identifier)
 	
-	delete_handoff(handoff_id)
+	# Mark handoff as consumed instead of deleting
+	# This allows frontend to skip reprocessing on reconnect
+	mark_handoff_consumed(handoff_id)
+	
+	# Re-fetch the handoff to get the updated consumed state
+	# This fixes a race condition where the response would contain stale data
+	# with consumed=false, causing the frontend to reprocess on restart
+	updated_record = get_handoff_or_404(handoff_id)
+	
 	response: Dict[str, Any] = {
 		"ok": True,
-		"handoff": serialize_handoff(record),
+		"handoff": serialize_handoff(updated_record),
 		"mod_id": mod_id,
 		"mod_name": mod_name,
 		"file_id": file_id,
@@ -3280,6 +3414,63 @@ def get_pak_version_status_endpoint(
 			pass
 
 
+@app.get("/api/mods/custom-images-preview")
+def get_custom_images_preview(mod_ids: str = Query(..., description="Comma-separated mod IDs")) -> Dict[str, Any]:
+	"""
+	Returns first custom image (base64) for each mod_id provided.
+	Optimized for bulk retrieval when loading mod list.
+	"""
+	import logging
+	logger = logging.getLogger("modmanager.api")
+	conn = get_db()
+	try:
+		# Parse mod_ids
+		try:
+			parsed_ids = [int(x.strip()) for x in mod_ids.split(",") if x.strip()]
+		except ValueError:
+			raise HTTPException(status_code=400, detail="Invalid mod_ids format")
+		
+		if not parsed_ids:
+			return {"ok": True, "images": {}}
+		
+		cur = conn.cursor()
+		
+		# Fetch first custom image for each mod_id
+		# Use a placeholder string repeated for each ID
+		placeholders = ",".join("?" * len(parsed_ids))
+		query = f"""
+			SELECT mod_id, image_data, mime_type
+			FROM mod_custom_images
+			WHERE mod_id IN ({placeholders})
+			  AND image_data IS NOT NULL
+			GROUP BY mod_id
+			HAVING id = MIN(id)
+		"""
+		
+		rows = cur.execute(query, parsed_ids).fetchall()
+		
+		# Build result map
+		result = {}
+		for mod_id, image_data, mime_type in rows:
+			if image_data:
+				# Return as data URL
+				result[str(mod_id)] = f"data:{mime_type or 'image/png'};base64,{image_data}"
+		
+		logger.info(f"[get_custom_images_preview] Fetched {len(result)} custom images for {len(parsed_ids)} mods")
+		return {"ok": True, "images": result}
+		
+	except HTTPException:
+		raise
+	except Exception as e:
+		logger.error(f"[get_custom_images_preview] Error: {e}")
+		raise HTTPException(status_code=500, detail=str(e))
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+
 @app.get("/api/mods/{mod_id}")
 def get_mod_details(mod_id: int, response: Response) -> Dict[str, Any]:
 	# Disable caching for dynamic content
@@ -3290,7 +3481,41 @@ def get_mod_details(mod_id: int, response: Response) -> Dict[str, Any]:
 	import logging
 	logger = logging.getLogger("modmanager.api")
 	conn = get_db()
-	data = mod_with_local_and_latest(conn, mod_id)
+	
+	# Check if mod exists, if not and it's a synthetic ID, create placeholder
+	cur = conn.cursor()
+	mod_exists = cur.execute("SELECT 1 FROM mods WHERE mod_id = ?", (mod_id,)).fetchone()
+	
+	if not mod_exists and mod_id < 0:
+		# Synthetic ID for local mod - create placeholder
+		local_download_id = -mod_id
+		dl_row = cur.execute("SELECT name FROM local_downloads WHERE id = ?", (local_download_id,)).fetchone()
+		
+		if dl_row:
+			mod_name = dl_row[0] or f"Local Mod {local_download_id}"
+			logger.info(f"[get_mod_details] Creating placeholder mod for synthetic mod_id={mod_id}, download_id={local_download_id}")
+			
+			upsert_mod_info(
+				conn,
+				game=DEFAULT_GAME,
+				mod_id=mod_id,
+				mod_info_status=0,
+				mod_info={
+					"name": mod_name,
+					"summary": "Local mod (auto-generated)",
+					"description": "Auto-generated placeholder for local mod.",
+					"author": "Local",
+					"status": "plaintext",
+					"category_id": 1,
+				}
+			)
+			# Fetch the newly created mod
+			data = mod_with_local_and_latest(conn, mod_id)
+		else:
+			raise HTTPException(status_code=404, detail=f"Local download {local_download_id} not found")
+	else:
+		data = mod_with_local_and_latest(conn, mod_id)
+	
 	if not data or not data.get("mod"):
 		raise HTTPException(status_code=404, detail="Mod not found")
 	# Ensure description field is exposed as HTML (merged summary+description from storage if present)
@@ -3304,6 +3529,10 @@ def get_mod_details(mod_id: int, response: Response) -> Dict[str, Any]:
 				# Inject a presentation field 'description'
 				m["description"] = desc_html
 				data["mod"] = m
+			if isinstance(m, dict):
+				desc_bbcode = m.get("description_bbcode")
+				if desc_bbcode:
+					m["description_bbcode"] = desc_bbcode
 			else:
 				logger.warning(f"[get_mod_details] mod_id={mod_id}, no description_html in DB. Keys: {list(m.keys())}")
 	except Exception as e:
@@ -3483,7 +3712,7 @@ def get_mod_images(mod_id: int) -> Dict[str, Any]:
 		
 		# Get custom uploaded images
 		custom_rows = cur.execute(
-			"SELECT id, image_data, filename, mime_type, uploaded_at FROM mod_custom_images WHERE mod_id = ? ORDER BY uploaded_at DESC",
+			"SELECT id, image_data, filename, mime_type, uploaded_at FROM mod_custom_images WHERE mod_id = ? ORDER BY uploaded_at ASC",
 			(mod_id,)
 		).fetchall()
 		
@@ -3514,6 +3743,123 @@ def get_mod_images(mod_id: int) -> Dict[str, Any]:
 			pass
 
 
+
+
+class UpdateModDetailsPayload(BaseModel):
+	description: Optional[str] = None
+
+
+@app.patch("/api/mods/{mod_id}")
+def update_mod_details(mod_id: int, payload: UpdateModDetailsPayload) -> Dict[str, Any]:
+	"""Update mod details (description only for now)."""
+	import logging
+	logger = logging.getLogger("modmanager.api")
+	conn = get_db()
+	try:
+		cur = conn.cursor()
+		
+		# Validated mod ID or synthetic ID for local mod?
+		real_mod_id = mod_id
+		
+		# Check if mod exists
+		mod_exists = cur.execute("SELECT 1 FROM mods WHERE mod_id = ?", (real_mod_id,)).fetchone()
+		
+		if not mod_exists:
+			# If it's a synthetic ID (negative), we attempt to "materialize" a placeholder mod record
+			if real_mod_id < 0:
+				local_download_id = -real_mod_id
+				dl_row = cur.execute("SELECT name FROM local_downloads WHERE id = ?", (local_download_id,)).fetchone()
+				if not dl_row:
+					raise HTTPException(status_code=404, detail=f"Local download {local_download_id} not found")
+				
+				# Create placeholder mod
+				mod_name = dl_row[0] or f"Local Mod {local_download_id}"
+				upsert_mod_info(
+					conn,
+					game=DEFAULT_GAME,
+					mod_id=real_mod_id,
+					mod_info_status=0,
+					mod_info={
+						"name": mod_name,
+						"summary": "Local mod (auto-generated)",
+						"description": "Auto-generated placeholder for local mod.",
+						"author": "Local",
+						"status": "plaintext",
+						"category_id": 1,
+					}
+				)
+			else:
+				raise HTTPException(status_code=404, detail=f"Mod {real_mod_id} not found")
+
+		# Update fields if present
+		if payload.description is not None:
+			# Simple formatting: preserve paragraphs
+			# We store primarily in description_html for now as that's what get_mod_details reads
+			raw_desc = payload.description.strip()
+			
+			logger.debug(f"[update_mod_details] Processing description for mod_id={real_mod_id}. Raw length: {len(raw_desc)}")
+			
+			# Check if input contains BBCode tags
+			import re
+			# Check for all supported BBCode tags including custom ones
+			bbcode_pattern = r'\[(?:b|i|u|s|url|img|quote|code|list|color|size|font|center|left|right|justify|sub|sup|hr|spoiler|youtube|email)'
+			has_bbcode = bool(re.search(bbcode_pattern, raw_desc, re.IGNORECASE))
+			logger.debug(f"[update_mod_details] BBCode detected: {has_bbcode} for mod_id={real_mod_id}")
+			
+			if has_bbcode:
+				# Convert BBCode to HTML
+				try:
+					from core.utils.bbcode_wrapper import bbcode_to_html
+					description_html = bbcode_to_html(raw_desc)
+					
+					# Debug: Log the actual HTML being generated
+					logger.info(f"[update_mod_details] Converted BBCode to HTML for mod_id={real_mod_id}")
+					logger.debug(f"[update_mod_details] Generated HTML (first 500 chars): {description_html[:500]}")
+					logger.debug(f"[update_mod_details] Contains <img tag: {'<img' in description_html}")
+					
+				except Exception as e:
+					logger.error(f"[update_mod_details] BBCode conversion failed: {e}")
+					# Fallback to plain text handling
+					import html
+					safe_desc = html.escape(raw_desc)
+					description_html = safe_desc.replace("\n", "<br>")
+					logger.debug(f"[update_mod_details] Fallback to plain text HTML for mod_id={real_mod_id} due to BBCode conversion error.")
+			else:
+				# Plain text: escape HTML and convert newlines
+				import html
+				safe_desc = html.escape(raw_desc)
+				description_html = safe_desc.replace("\n", "<br>")
+				logger.debug(f"[update_mod_details] Converted plain text to HTML for mod_id={real_mod_id}.")
+
+			
+			logger.info(f"[update_mod_details] Updating mod_id={real_mod_id}, new description length={len(description_html)}")
+			
+			cur.execute(
+				"UPDATE mods SET description_html = ?, description_bbcode = ? WHERE mod_id = ?",
+				(description_html, raw_desc, real_mod_id)
+			)
+			rows_affected = cur.rowcount
+			logger.info(f"[update_mod_details] UPDATE executed, rows affected: {rows_affected}")
+			
+			conn.commit()
+			logger.info(f"[update_mod_details] Transaction committed for mod_id={real_mod_id}")
+			
+		logger.info(f"[update_mod_details] Updated details for mod_id={real_mod_id}")
+		return {"ok": True}
+
+	except HTTPException:
+		raise
+	except Exception as e:
+		logger.error(f"[update_mod_details] Error: {e}")
+		conn.rollback()
+		raise HTTPException(status_code=500, detail=str(e))
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+
 class UploadImagePayload(BaseModel):
 	images: List[Dict[str, str]]  # Each dict: { data: base64, filename: str, mimeType: str }
 
@@ -3525,11 +3871,50 @@ def upload_mod_images(mod_id: int, payload: UploadImagePayload) -> Dict[str, Any
 	logger = logging.getLogger("modmanager.api")
 	conn = get_db()
 	try:
-		# Ensure mod exists
 		cur = conn.cursor()
-		mod_exists = cur.execute("SELECT 1 FROM mods WHERE mod_id = ?", (mod_id,)).fetchone()
+		
+		# Validated mod ID or synthetic ID for local mod?
+		# If mod_id < 0, it represents a local_download_id (negated)
+		real_mod_id = mod_id
+		
+		# Check if mod exists
+		mod_exists = cur.execute("SELECT 1 FROM mods WHERE mod_id = ?", (real_mod_id,)).fetchone()
+		
 		if not mod_exists:
-			raise HTTPException(status_code=404, detail=f"Mod {mod_id} not found")
+			# If it's a synthetic ID (negative), we attempt to "materialize" a placeholder mod record
+			# using info from the local download so that the FK constraint on mod_custom_images is satisfied.
+			if real_mod_id < 0:
+				local_download_id = -real_mod_id
+				dl_row = cur.execute("SELECT name FROM local_downloads WHERE id = ?", (local_download_id,)).fetchone()
+				if not dl_row:
+					raise HTTPException(status_code=404, detail=f"Local download {local_download_id} not found for synthetic mod ID {real_mod_id}")
+				
+				# Create placeholder mod
+				mod_name = dl_row[0] or f"Local Mod {local_download_id}"
+				upsert_mod_info(
+					conn,
+					game=DEFAULT_GAME,
+					mod_id=real_mod_id,
+					mod_info_status=0,
+					mod_info={
+						"name": mod_name,
+						"summary": "Local mod (auto-generated)",
+						"description": "Auto-generated placeholder for local mod images.",
+						"author": "Local",
+						"status": "plaintext",
+						"category_id": 1,
+					}
+				)
+				logger.info(f"[upload_mod_images] Created placeholder mod record for synthetic ID {real_mod_id}")
+			else:
+				# Positive ID but not found in DB -> 404
+				pass 
+				# Actually the original code raised 404 here. But wait, if it's a positive ID that 
+				# simply hasn't been cached yet (unlikely if we are on the page), strictly we should 404.
+				# However, let's stick to the check.
+				mod_exists_after = cur.execute("SELECT 1 FROM mods WHERE mod_id = ?", (real_mod_id,)).fetchone()
+				if not mod_exists_after:
+					raise HTTPException(status_code=404, detail=f"Mod {real_mod_id} not found")
 		
 		uploaded_ids = []
 		for img in payload.images:
@@ -3545,12 +3930,12 @@ def upload_mod_images(mod_id: int, payload: UploadImagePayload) -> Dict[str, Any
 				INSERT INTO mod_custom_images (mod_id, image_data, filename, mime_type)
 				VALUES (?, ?, ?, ?)
 				""",
-				(mod_id, image_data, filename, mime_type)
+				(real_mod_id, image_data, filename, mime_type)
 			)
 			uploaded_ids.append(cur.lastrowid)
 		
 		conn.commit()
-		logger.info(f"[upload_mod_images] mod_id={mod_id}, uploaded {len(uploaded_ids)} images")
+		logger.info(f"[upload_mod_images] mod_id={real_mod_id}, uploaded {len(uploaded_ids)} images")
 		return {
 			"ok": True,
 			"uploaded_count": len(uploaded_ids),
@@ -3958,7 +4343,7 @@ def _search_mod_id_remote(name: str, api_key: str, game: str = DEFAULT_GAME) -> 
 	url = f"https://api.nexusmods.com/v1/games/{game}/mods.json?{params}"
 	headers = {
 		"apikey": api_key,
-		"User-Agent": "Project_ModManager_Rivals/0.3.0",
+		"User-Agent": "Project_ModManager_Rivals/0.3.2",
 		"Application-Name": "Project_ModManager_Rivals",
 	}
 	req = urllib.request.Request(url, headers=headers, method="GET")
@@ -4238,7 +4623,7 @@ def _resolve_nexus_download_candidates(
 	if api_key:
 		headers["apikey"] = api_key
 		headers["Application-Name"] = "MarvelRivalsModManager"
-		headers["Application-Version"] = "0.3.0"
+		headers["Application-Version"] = "0.3.2"
 	req = urllib.request.Request(api_url, headers=headers, method="GET")
 	try:
 		with urllib.request.urlopen(req, timeout=30) as resp:
