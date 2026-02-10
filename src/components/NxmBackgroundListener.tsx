@@ -64,8 +64,8 @@ export function NxmBackgroundListener({
         let hasWork = false;
 
         for (const handoff of handoffs) {
-          // Skip if already successfully processed
-          if (processedHandoffsRef.current.has(handoff.id)) {
+          // Skip if already successfully processed or consumed by backend
+          if (processedHandoffsRef.current.has(handoff.id) || handoff.consumed) {
             continue;
           }
 

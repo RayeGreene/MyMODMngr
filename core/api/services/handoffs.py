@@ -87,10 +87,12 @@ def get_handoff_or_404(handoff_id: str) -> Dict[str, Any]:
         return record
 
 
-def list_handoffs() -> List[Dict[str, Any]]:
+def list_handoffs(*, include_consumed: bool = False) -> List[Dict[str, Any]]:
     with _HANDOFF_LOCK:
         _purge_expired_locked()
-        return list(_HANDOFFS.values())
+        if include_consumed:
+            return list(_HANDOFFS.values())
+        return [r for r in _HANDOFFS.values() if not r.get("consumed")]
 
 
 def delete_handoff(handoff_id: str) -> Dict[str, Any]:
@@ -151,6 +153,7 @@ def serialize_handoff(record: Dict[str, Any], *, include_metadata: bool = False)
         "created_at": record.get("created_at"),
         "expires_at": record.get("expires_at"),
         "request": record.get("request"),
+        "consumed": bool(record.get("consumed")),
     }
     progress = record.get("progress")
     if isinstance(progress, dict) and progress:

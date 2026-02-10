@@ -10,7 +10,6 @@ import {
 
 export type WaitForHandoffOptions = {
   timeoutMs?: number;
-  intervalMs?: number;
 };
 
 export function formatBytes(size?: number | null): string {
@@ -43,41 +42,61 @@ export async function waitForMatchingHandoff(
   fileId: number | null,
   options: WaitForHandoffOptions = {}
 ): Promise<ApiNxmHandoffSummary | null> {
-  const timeoutMs = options.timeoutMs ?? 45_000;
-  const intervalMs = options.intervalMs ?? 1_500;
+  const timeoutMs = options.timeoutMs ?? 90_000;
   const deadline = Date.now() + timeoutMs;
 
-  while (Date.now() < deadline) {
+  const tryFindMatch = async (): Promise<ApiNxmHandoffSummary | null> => {
     let handoffs: ApiNxmHandoffSummary[] = [];
     try {
       handoffs = await listNxmHandoffs();
     } catch (err) {
       console.warn("Failed to list Nexus handoffs", err);
+      return null;
     }
+    if (handoffs.length === 0) return null;
 
-    if (handoffs.length > 0) {
-      const matches = handoffs.filter((handoff) => {
-        const request = handoff.request;
-        const requestModId = parseNumber(request?.mod_id);
-        if (requestModId !== modId) return false;
-        if (fileId == null) return true;
-        const requestFileId = parseNumber(request?.file_id);
-        if (requestFileId == null) return false;
-        return requestFileId === fileId;
-      });
+    const matches = handoffs.filter((handoff) => {
+      if (handoff.consumed) return false;
+      const request = handoff.request;
+      const requestModId = parseNumber(request?.mod_id);
+      if (requestModId !== modId) return false;
+      if (fileId == null) return true;
+      const requestFileId = parseNumber(request?.file_id);
+      if (requestFileId == null) return false;
+      return requestFileId === fileId;
+    });
 
-      if (matches.length > 0) {
-        const sorted = [...matches].sort(
-          (a, b) => (b.created_at ?? 0) - (a.created_at ?? 0)
-        );
-        return sorted[0];
-      }
+    if (matches.length === 0) return null;
+    const sorted = [...matches].sort(
+      (a, b) => (b.created_at ?? 0) - (a.created_at ?? 0)
+    );
+    return sorted[0];
+  };
+
+  // Adaptive polling: slow at start (user is switching to browser),
+  // faster in the middle, rapid near the deadline to avoid near-misses.
+  while (Date.now() < deadline) {
+    const match = await tryFindMatch();
+    if (match) return match;
+
+    const remaining = deadline - Date.now();
+    let intervalMs: number;
+    if (remaining > 60_000) {
+      // First ~30s: user is loading the Nexus page — poll every 2.5s
+      intervalMs = 2_500;
+    } else if (remaining > 15_000) {
+      // Middle phase: user likely clicking soon — poll every 1.5s
+      intervalMs = 1_500;
+    } else {
+      // Final 15s: rapid polling to catch near-miss handoffs
+      intervalMs = 750;
     }
-
     await new Promise<void>((resolve) => setTimeout(resolve, intervalMs));
   }
 
-  return null;
+  // One final grace check after the deadline — catches handoffs that arrived
+  // during the last sleep interval.
+  return tryFindMatch();
 }
 
 export type MonitorNxmProgressOptions = {

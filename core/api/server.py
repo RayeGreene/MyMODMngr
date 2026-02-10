@@ -2079,17 +2079,8 @@ def submit_nxm_handoff(payload: Optional[Dict[str, Any]] = Body(default=None)) -
 	if not isinstance(nxm_value, str) or not nxm_value.strip():
 		raise HTTPException(status_code=400, detail="nxm field is required")
 	
-	# DEBUG: Log the exact URL received
-	logger.info("[NXM DEBUG] ===== RECEIVED NXM URL =====")
-	logger.info("[NXM DEBUG] Full URL: %s", nxm_value)
-	logger.info("[NXM DEBUG] URL length: %d", len(nxm_value))
-	logger.info("[NXM DEBUG] Contains '?': %s", "?" in nxm_value)
-	logger.info("[NXM DEBUG] Contains '&': %s", "&" in nxm_value)
-	if "?" in nxm_value:
-		query_part = nxm_value.split("?", 1)[1] if "?" in nxm_value else ""
-		logger.info("[NXM DEBUG] Query string: %s", query_part)
-	logger.info("[NXM DEBUG] =============================")
-	
+	logger.info("[nxm_handoff] received NXM URL length=%d", len(nxm_value))
+
 	# Store the last received NXM URL for testing/debugging
 	_LAST_NXM_URL = {
 		"url": nxm_value,
@@ -2265,6 +2256,8 @@ def _find_matching_handoff(
 	"""
 	candidates: List[Dict[str, Any]] = []
 	for record in list_handoffs():
+		if record.get("consumed"):
+			continue
 		req = record.get("request") or {}
 		req_mod_id = _coerce_int(req.get("mod_id"))
 		if req_mod_id != mod_id:
@@ -2443,28 +2436,21 @@ def check_mod_update(mod_id: int) -> Dict[str, Any]:
 
 @app.post("/api/nxm/handoff/{handoff_id}/ingest")
 def ingest_nxm_handoff(handoff_id: str, payload: Optional[Dict[str, Any]] = Body(default=None)) -> Dict[str, Any]:
-	import sys
-	print(f"\n{'='*80}", file=sys.stderr)
-	print(f"[INGEST START] Handoff ID: {handoff_id}", file=sys.stderr)
-	print(f"[INGEST START] Payload: {payload}", file=sys.stderr)
-	print(f"{'='*80}\n", file=sys.stderr)
-	
 	if not handoff_id:
 		raise HTTPException(status_code=400, detail="handoff_id is required")
-	
+
+	logger.info("[nxm_handoff] ingest start handoff_id=%s payload_keys=%s", handoff_id, list((payload or {}).keys()))
+
 	# Circuit breaker: Check if this handoff should be skipped due to repeated failures
 	should_skip, skip_reason = should_skip_handoff(handoff_id)
 	if should_skip:
-		logger.warning(f"[nxm_handoff] Skipping handoff {handoff_id}: {skip_reason}")
+		logger.warning("[nxm_handoff] Skipping handoff %s: %s", handoff_id, skip_reason)
 		raise HTTPException(status_code=429, detail=f"Too many failed attempts. {skip_reason}")
-	
-	print(f"[INGEST] Fetching handoff record...", file=sys.stderr)
+
 	record = get_handoff_or_404(handoff_id)
 	handoff_identifier = record.get("id") if isinstance(record.get("id"), str) else None
-	print(f"[INGEST] Handoff record fetched: {handoff_identifier}", file=sys.stderr)
-	
+
 	# Early API key validation to prevent wasted processing
-	print(f"[INGEST] Checking API key...", file=sys.stderr)
 	api_key = get_api_key()
 	if not api_key:
 		error_msg = "NEXUS_API_KEY not configured. Please add your Nexus Mods API key in Settings."
@@ -2562,39 +2548,22 @@ def ingest_nxm_handoff(handoff_id: str, payload: Optional[Dict[str, Any]] = Body
 			created_at_hint=file_created_at_hint,
 		)
 	except DuplicateDownloadError as exc:
-		try:
-			import traceback
-			import sys
-			print(f"[ingest_debug] DuplicateDownloadError caught: {exc}", file=sys.stderr)
-			if handoff_identifier:
-				update_handoff_progress(
-					handoff_identifier,
-					stage="failed",
-					error=str(exc),
-					message="Duplicate download detected",
-				)
-				register_handoff_failure(handoff_identifier, str(exc))
-				# Mark as consumed to prevent infinite retry loops on frontend restart
-				print(f"[ingest_debug] Marking handoff {handoff_identifier} as consumed", file=sys.stderr)
-				mark_handoff_consumed(handoff_identifier)
-			
-			print(f"[ingest_debug] Generating detail from error", file=sys.stderr)
-			detail = _duplicate_detail_from_error(exc)
-			print(f"[ingest_debug] Raising 409", file=sys.stderr)
-			raise HTTPException(status_code=409, detail=detail)
-		except HTTPException:
-			raise
-			# ... (duplicate block maintained)
-			raise HTTPException(status_code=409, detail=detail)
+		logger.info("[nxm_handoff] DuplicateDownloadError handoff=%s: %s", handoff_identifier, exc)
+		if handoff_identifier:
+			update_handoff_progress(
+				handoff_identifier,
+				stage="failed",
+				error=str(exc),
+				message="Duplicate download detected",
+			)
+			register_handoff_failure(handoff_identifier, str(exc))
+			mark_handoff_consumed(handoff_identifier)
+		detail = _duplicate_detail_from_error(exc)
+		raise HTTPException(status_code=409, detail=detail)
 	except HTTPException:
 		raise
 	except Exception as e:
-		# Graceful error handling for fatal errors
-		import traceback
-		import sys
-		print(f"[ingest_debug] ERROR during ingestion: {e}", file=sys.stderr)
-		traceback.print_exc(file=sys.stderr)
-		
+		logger.exception("[nxm_handoff] ingestion failed handoff=%s", handoff_identifier)
 		if handoff_identifier:
 			register_handoff_failure(handoff_identifier, str(e))
 			update_handoff_progress(
@@ -2603,13 +2572,7 @@ def ingest_nxm_handoff(handoff_id: str, payload: Optional[Dict[str, Any]] = Body
 				error=str(e),
 				message="Ingestion Failed"
 			)
-			# Force consume handoff on fatal error to prevent infinite restart loops
-			# If it failed this badly, retrying the same handoff is likely futile
-			print(f"[ingest_debug] Marking handoff {handoff_identifier} as consumed due to fatal error", file=sys.stderr)
 			mark_handoff_consumed(handoff_identifier)
-			
-		# Return 400 instead of 500 to ensure frontend receives the error detail
-		# and to avoid partial CORS issues with 500s
 		raise HTTPException(status_code=400, detail=f"Ingestion failed: {str(e)}")
 	new_download_id = ingest_result.get("download_id")
 	if not isinstance(new_download_id, int):
@@ -4590,12 +4553,6 @@ def _resolve_nexus_download_candidates(
 	expires = str(query.get("expires") or metadata.get("expires") or "").strip()
 	user_id = str(query.get("user_id") or "").strip()
 	
-	# DEBUG: Log what we extracted
-	logger.info("[NXM DEBUG] Extracted from URL - key: %s, expires: %s, user_id: %s", 
-		"(present)" if key else "(MISSING)", 
-		"(present)" if expires else "(MISSING)", 
-		"(present)" if user_id else "(MISSING)")
-	
 	if not key or not expires:
 		error_msg = (
 			"NXM download authorization missing or expired. "
@@ -4603,7 +4560,7 @@ def _resolve_nexus_download_candidates(
 			"then click 'Download with Manager' button again. "
 			f"(key={'present' if key else 'MISSING'}, expires={'present' if expires else 'MISSING'})"
 		)
-		logger.error("[NXM DEBUG] %s", error_msg)
+		logger.warning("[nxm_handoff] authorization missing key=%s expires=%s", bool(key), bool(expires))
 		raise HTTPException(status_code=400, detail=error_msg)
 	domain = (game_domain or DEFAULT_GAME or "marvelrivals").strip().lower() or DEFAULT_GAME
 	params = {"key": key, "expires": expires}
