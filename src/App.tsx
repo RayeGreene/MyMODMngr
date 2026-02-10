@@ -814,7 +814,9 @@ export default function App() {
               // Remove tracking on timeout
               updateManagedPairsRef.current.delete(trackingKey);
               throw new Error(
-                "Timed out waiting for the RivalNxt download handoff."
+                "Timed out waiting for the download handoff. " +
+                "Please make sure you clicked 'Mod Manager Download' on the Nexus Mods page " +
+                "and that RivalNxt is set as your default mod manager in your browser."
               );
             }
 

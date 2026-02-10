@@ -96,6 +96,7 @@ export type ApiNxmHandoffSummary = {
   id: string;
   created_at?: number | null;
   expires_at?: number | null;
+  consumed?: boolean;
   request?: {
     raw?: string;
     game?: string;
