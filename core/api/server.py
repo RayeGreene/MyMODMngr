@@ -4580,7 +4580,7 @@ def _resolve_nexus_download_candidates(
 	if api_key:
 		headers["apikey"] = api_key
 		headers["Application-Name"] = "MarvelRivalsModManager"
-		headers["Application-Version"] = "0.3.2"
+		headers["Application-Version"] = "0.3.3"
 	req = urllib.request.Request(api_url, headers=headers, method="GET")
 	try:
 		with urllib.request.urlopen(req, timeout=30) as resp:
