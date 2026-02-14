@@ -26,7 +26,7 @@ _One desktop app to manage, activate, and validate Marvel Rivals mods with confl
 
 - **Smart Mod Management** - Activate, deactivate, and organize mods with per-mod and bulk actions
 - **Conflict Detection** - Automatic detection and resolution of mod conflicts with tag rebuilding
-- **Auto-Detection** - Automatically detects Marvel Rivals installation path via Steam/Epic Games registry and archive tools (7-Zip/WinRAR)
+- **Auto-Detection** - Automatically detects Marvel Rivals installation path via Steam/Epic Games registry and archive tools (WinRAR)
 - **One-Click Downloads** - Click "Download with Mod Manager" on NexusMods to instantly download and install mods
 - **Background Processing** - Automatic download processing via NXM protocol without manual intervention
 
@@ -61,7 +61,7 @@ _One desktop app to manage, activate, and validate Marvel Rivals mods with confl
 
 - Go to the **Releases** page.
 - Download the latest setup file, for example:
-  **`RivalNxt_0.3.2_x64-setup.exe`** (or any newer version).
+  **`RivalNxt_0.5.0_x64-setup.exe`** (or any newer version).
 
 ### 2. Install & Launch
 
@@ -77,7 +77,7 @@ In **Settings**:
 - **Local downloads directory** → Select the folder where your Marvel Rivals mods are downloaded/saved (create anywhere or use existing folder)
 - **Nexus Personal API Key** → Get your [API key](https://next.nexusmods.com/settings/api-keys) (scroll all the way down) and paste it into RivalNxt
 
-> 💡 **Tip**: The app also auto-detects archive tools (7-Zip/WinRAR) for extracting mod files.
+> 💡 **Tip**: The app also auto-detects archive tools (WinRAR) for extracting mod files.
 
 #### ⚠️ Mod Folder Naming Convention
 
@@ -472,8 +472,8 @@ See [`.github/workflows/release.yml`](file:///c:/Users/rouna/OneDrive/Documents/
 
 ```bash
 # 1. Tag your commit
-git tag v0.3.2
-git push origin v0.3.2
+git tag v0.5.0
+git push origin v0.5.0
 
 # 2. Create GitHub Release from tag
 # The workflow will automatically build and attach the installer

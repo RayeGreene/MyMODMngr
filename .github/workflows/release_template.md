@@ -1,18 +1,19 @@
-## 🎉 Version 0.3.2 – What's New
+## 🎉 Version 0.5.0 – What's New
 
 ### ✨ New Features
 
-**📸 Custom Image Uploads**
+- Mark mods as favourites and sort by them
+- NSFW blur filter — toggle in the header to blur adult content images
+- Check for updates on individual mod cards
+- Drag & drop files to add mods
+- Click on mods in the conflict view to see full details
+- Clear button on the search bar
+- Sort options now in a dropdown menu with Name & Favourites added
 
-- Upload your own screenshots for any mod
-- Create custom thumbnails for local mods
-- First upload becomes the primary display
+### 🐛 Bug Fixes
 
-**✏️ Edit Mod Descriptions**
-
-- Write and edit descriptions for any mod
-- Toggle between formatted and plain text editing
-- Keep notes about your installed mods
+- Mods that are already downloaded are now skipped instead of re-downloaded
+- Duplicate downloads now show an info message instead of an error
 
 ### 📥 Installation
 
@@ -31,7 +32,7 @@
 
 | File                                  | Platform    | Checksum                 |
 | ------------------------------------- | ----------- | ------------------------ |
-| [<INSTALLER_FILENAME>](<INSTALLER_URL>) | x64 Windows | [checksum](<CHECKSUM_URL>) |
+| [<INSTALLER_FILENAME>](INSTALLER_URL) | x64 Windows | [checksum](CHECKSUM_URL) |
 
 > To verify the download on Windows, run `certutil -hashfile <filename> SHA256` and compare it with the `.sha256` file.
 

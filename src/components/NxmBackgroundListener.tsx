@@ -45,7 +45,7 @@ export function NxmBackgroundListener({
   const processingRef = useRef<Set<string>>(new Set());
   const failedHandoffsRef = useRef<Map<string, HandoffFailure>>(new Map());
   const toastDeduplicator = useRef(
-    createToastDeduplicator(TOAST_DEDUPE_WINDOW_MS)
+    createToastDeduplicator(TOAST_DEDUPE_WINDOW_MS),
   );
 
   useEffect(() => {
@@ -83,7 +83,7 @@ export function NxmBackgroundListener({
           const failure = failedHandoffsRef.current.get(handoff.id);
           if (failure?.permanentlyFailed) {
             console.info(
-              `[NxmBackgroundListener] Skipping permanently failed handoff ${handoff.id} (${failure.count} failed attempts)`
+              `[NxmBackgroundListener] Skipping permanently failed handoff ${handoff.id} (${failure.count} failed attempts)`,
             );
             continue;
           }
@@ -98,8 +98,8 @@ export function NxmBackgroundListener({
                 `[NxmBackgroundListener] Handoff ${
                   handoff.id
                 } in backoff period (${Math.round(
-                  (backoffMs - timeSinceLastAttempt) / 1000
-                )}s remaining)`
+                  (backoffMs - timeSinceLastAttempt) / 1000,
+                )}s remaining)`,
               );
               hasWork = true; // Still has pending work
               continue;
@@ -129,7 +129,7 @@ export function NxmBackgroundListener({
         if (!cancelled) {
           timeoutId = window.setTimeout(
             checkAndProcessHandoffs,
-            BASE_POLLING_INTERVAL_MS
+            BASE_POLLING_INTERVAL_MS,
           );
         }
       }
@@ -190,6 +190,55 @@ export function NxmBackgroundListener({
         const errorMessage =
           err instanceof Error ? err.message : String(err ?? "Unknown error");
 
+        // Special handling for duplicate downloads (HTTP 409)
+        // Treat duplicates as a success case, not an error
+        const isDuplicate =
+          (err instanceof Error &&
+            (errorMessage.toLowerCase().includes("already exists") ||
+              errorMessage.toLowerCase().includes("duplicate"))) ||
+          (typeof err === "object" &&
+            err !== null &&
+            "status" in err &&
+            (err as any).status === 409);
+
+        if (isDuplicate) {
+          // Extract mod name and version from error if available
+          let duplicateMessage =
+            "This mod version is already in your downloads";
+          if (
+            typeof err === "object" &&
+            err !== null &&
+            "body" in err &&
+            typeof (err as any).body === "object"
+          ) {
+            const detail = (err as any).body?.detail;
+            if (typeof detail === "object" && detail?.message) {
+              duplicateMessage = detail.message;
+            } else if (typeof detail === "string") {
+              duplicateMessage = detail;
+            }
+          } else if (errorMessage) {
+            duplicateMessage = errorMessage;
+          }
+
+          toast.info(`${modLabel} already downloaded`, {
+            id: controller.toastId,
+            description: duplicateMessage,
+            duration: 4000,
+          });
+
+          // Mark as successfully processed to prevent retries
+          processedHandoffsRef.current.add(handoff.id);
+          processingRef.current.delete(handoff.id);
+          failedHandoffsRef.current.delete(handoff.id);
+
+          // Notify parent component
+          if (onModAdded) {
+            await onModAdded();
+          }
+          return;
+        }
+
         // Track this failure
         const currentFailure = failedHandoffsRef.current.get(handoff.id);
         const failureCount = (currentFailure?.count ?? 0) + 1;
@@ -228,12 +277,12 @@ export function NxmBackgroundListener({
 
         console.error(
           `[NxmBackgroundListener] Failed to process handoff ${handoff.id} (attempt ${failureCount}/${MAX_RETRIES}):`,
-          err
+          err,
         );
 
         if (permanentlyFailed) {
           console.error(
-            `[NxmBackgroundListener] Handoff ${handoff.id} permanently failed after ${MAX_RETRIES} attempts. Last error: ${errorMessage}`
+            `[NxmBackgroundListener] Handoff ${handoff.id} permanently failed after ${MAX_RETRIES} attempts. Last error: ${errorMessage}`,
           );
         }
 

@@ -91,7 +91,7 @@ from field_prefs import filter_aggregate_payload, load_prefs
 # Global cache for Nexus preferences
 _NEXUS_PREFS_CACHE = None
 
-app = FastAPI(title="Mod Manager Backend", version="0.3.2")
+app = FastAPI(title="Mod Manager Backend", version="0.5.0")
 
 # Register character API routes
 from core.api.characters import router as characters_router
@@ -129,10 +129,12 @@ _SETTINGS_TASK_JOBS: Dict[str, Dict[str, Any]] = {}
 _SETTINGS_TASK_MAX_JOBS = 25
 
 
+# =============================================================================
+# Parent Process Monitor - Auto-close backend when frontend exits
+# =============================================================================
 def _monitor_parent_process(pid: int) -> None:
 	"""Monitor the parent process and exit if it dies."""
 	import psutil
-	import time
 	
 	logger.info(f"[PID Monitor] Starting parent process monitor for PID {pid}")
 	
@@ -168,7 +170,7 @@ def _monitor_parent_process(pid: int) -> None:
 			time.sleep(5)
 
 
-# Start parent monitor if PID is provided
+# Start parent monitor if PID is provided via environment variable
 _RIVALNXT_PID = os.environ.get("RIVALNXT_PID")
 if _RIVALNXT_PID:
 	try:
@@ -188,19 +190,7 @@ if _RIVALNXT_PID:
 		logger.error(f"[PID Monitor] Failed to start monitor thread: {e}")
 else:
 	logger.info("[PID Monitor] No RIVALNXT_PID environment variable found - monitor not started")
-
-
-# Debug: Log all environment variables to help troubleshoot
-logger.info("=" * 70)
-logger.info("Environment Variables Debug")
-logger.info("=" * 70)
-logger.info(f"RIVALNXT_PID: {os.environ.get('RIVALNXT_PID', 'NOT SET')}")
-logger.info(f"MM_BACKEND_HOST: {os.environ.get('MM_BACKEND_HOST', 'NOT SET')}")
-logger.info(f"MM_BACKEND_PORT: {os.environ.get('MM_BACKEND_PORT', 'NOT SET')}")
-logger.info(f"MODMANAGER_DATA_DIR: {os.environ.get('MODMANAGER_DATA_DIR', 'NOT SET')}")
-logger.info("=" * 70)
-
-
+# =============================================================================
 
 
 def _safe_rebuild_conflicts(
@@ -1234,29 +1224,29 @@ def _ingest_resolved_download(
 		candidate_version: str,
 		candidate_contents: Iterable[str],
 	) -> Optional[Tuple[int, Optional[str], Optional[str], Optional[str]]]:
-		name_key = _normalize_download_name(candidate_name)
-		version_key = _normalize_download_version(candidate_version)
-		contents_key = _normalize_contents_for_compare(candidate_contents)
+		"""Check if a download with the same name + version already exists.
+		
+		Returns (download_id, name, version, path) if duplicate found, None otherwise.
+		Uses exact string matching for both name and version (case-insensitive).
+		"""
+		# Query for downloads with matching name (case-insensitive)
 		rows = cur.execute(
 			"""
-			SELECT id, name, version, contents, path
+			SELECT id, name, version, path
 			FROM local_downloads
 			WHERE LOWER(name) = LOWER(?)
 			""",
 			(candidate_name,),
 		).fetchall()
-		for existing_id, existing_name, existing_version, existing_contents_json, existing_path in rows:
-			existing_version_key = _normalize_download_version(existing_version)
-			if existing_version_key != version_key:
-				continue
-			existing_contents: Iterable[Any]
-			try:
-				existing_contents = json.loads(existing_contents_json) if existing_contents_json else []
-			except Exception:
-				existing_contents = []
-			existing_contents_key = _normalize_contents_for_compare(existing_contents)
-			if existing_contents_key == contents_key:
+		
+		# Check for exact version match (case-insensitive)
+		candidate_version_normalized = (candidate_version or "").strip().lower()
+		for existing_id, existing_name, existing_version, existing_path in rows:
+			existing_version_normalized = (existing_version or "").strip().lower()
+			# Exact match on normalized name + version
+			if existing_version_normalized == candidate_version_normalized:
 				return existing_id, existing_name, existing_version, existing_path
+		
 		return None
 
 	path = path.resolve()
@@ -1627,6 +1617,53 @@ def health() -> Dict[str, Any]:
 		return {"ok": True, "mods": mods, "paks": paks, "assets": assets}
 	except Exception as e:
 		return {"ok": False, "error": str(e)}
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+
+@app.post("/api/favourites/toggle")
+def toggle_favourite(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+	"""Toggle a mod's favourite status. Body: { "mod_id": int }"""
+	mod_id = payload.get("mod_id")
+	if mod_id is None:
+		raise HTTPException(status_code=400, detail="mod_id is required")
+	try:
+		mod_id = int(mod_id)
+	except (TypeError, ValueError):
+		raise HTTPException(status_code=400, detail="mod_id must be an integer")
+	conn = get_db()
+	try:
+		cur = conn.cursor()
+		existing = cur.execute("SELECT 1 FROM favourites WHERE mod_id = ?", (mod_id,)).fetchone()
+		if existing:
+			cur.execute("DELETE FROM favourites WHERE mod_id = ?", (mod_id,))
+			conn.commit()
+			return {"ok": True, "favourited": False}
+		else:
+			cur.execute("INSERT INTO favourites (mod_id) VALUES (?)", (mod_id,))
+			conn.commit()
+			return {"ok": True, "favourited": True}
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=str(e))
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+
+@app.get("/api/favourites")
+def list_favourites() -> Dict[str, Any]:
+	"""Return all favourited mod IDs."""
+	conn = get_db()
+	try:
+		rows = conn.execute("SELECT mod_id FROM favourites ORDER BY created_at DESC").fetchall()
+		return {"ok": True, "mod_ids": [row[0] for row in rows]}
+	except Exception as e:
+		raise HTTPException(status_code=500, detail=str(e))
 	finally:
 		try:
 			conn.close()
@@ -2168,8 +2205,12 @@ def get_last_nxm_url() -> Dict[str, Any]:
 
 @app.get("/api/nxm/handoffs")
 def list_nxm_handoffs() -> Dict[str, Any]:
+	# Filter out consumed handoffs to prevent reprocessing
+	# Consumed handoffs are those that have been successfully ingested
+	all_handoffs = list_handoffs()
+	unconsumed = [rec for rec in all_handoffs if not rec.get("consumed", False)]
 	ordered = sorted(
-		list_handoffs(),
+		unconsumed,
 		key=lambda rec: rec.get("created_at") or 0,
 		reverse=True,
 	)
@@ -2537,6 +2578,55 @@ def ingest_nxm_handoff(handoff_id: str, payload: Optional[Dict[str, Any]] = Body
 	logger.info(
 		"[nxm_handoff] resolving mod_id=%s file_id=%s handoff=%s via nxm redirect", mod_id, file_id, record.get("id")
 	)
+	
+	# EARLY DUPLICATE CHECK: Check if this mod+version already exists BEFORE downloading
+	# This saves bandwidth and time by not downloading files we already have
+	version = selected_entry.get("version") or selected_entry.get("mod_version") or ""
+	remote_name = selected_entry.get("file_name") or selected_entry.get("name") or ""
+	
+	if remote_name and version:
+		conn = get_db()
+		try:
+			cur = conn.cursor()
+			# Check for existing download with same name + version
+			existing = cur.execute(
+				"""
+				SELECT id, name, version, path
+				FROM local_downloads
+				WHERE LOWER(name) = LOWER(?) AND LOWER(version) = LOWER(?)
+				LIMIT 1
+				""",
+				(remote_name, version),
+			).fetchone()
+			
+			if existing:
+				existing_id, existing_name, existing_version, existing_path = existing
+				logger.info(
+					f"[nxm_handoff] SKIPPING DOWNLOAD - duplicate found: '{remote_name}' v{version} already exists (id={existing_id})"
+				)
+				# Mark handoff as consumed to prevent retries
+				if handoff_identifier:
+					update_handoff_progress(
+						handoff_identifier,
+						stage="complete",
+						message=f"Already downloaded: {remote_name} v{version}",
+					)
+					mark_handoff_consumed(handoff_identifier)
+				
+				raise DuplicateDownloadError(
+					existing_id,
+					existing_name=existing_name,
+					existing_version=existing_version,
+					existing_path=existing_path,
+					candidate_name=remote_name,
+					candidate_version=version,
+				)
+		finally:
+			try:
+				conn.close()
+			except Exception:
+				pass
+	
 	download_path, resolved_url = _download_archive_via_nxm(record, game_domain, file_id)
 	logger.info(
 		"[nxm_handoff] download complete path=%s mod_id=%s file_id=%s", download_path, mod_id, file_id
@@ -3288,6 +3378,66 @@ else:
 		)
 
 
+class CopyToDownloadsRequest(BaseModel):
+	"""Request body for copying a file to the downloads folder."""
+	source_path: str
+
+
+@app.post("/api/mods/copy-to-downloads")
+def copy_to_downloads(request: CopyToDownloadsRequest) -> Dict[str, Any]:
+	"""Copy a file from an external path to the downloads folder.
+	
+	This endpoint is used by Tauri drag-and-drop to copy dropped files
+	to the managed downloads location before ingestion.
+	"""
+	source = Path(request.source_path)
+	if not source.exists():
+		raise HTTPException(status_code=404, detail=f"Source file not found: {request.source_path}")
+	if not source.is_file():
+		raise HTTPException(status_code=400, detail="Source path must be a file, not a directory")
+	
+	downloads_root = _downloads_root_from_env()
+	_ensure_dir(downloads_root)
+	
+	# Sanitize filename
+	safe_name = _safe_filename(source.name)
+	if not safe_name:
+		safe_name = "mod" + source.suffix
+	
+	dest_path = downloads_root / safe_name
+	
+	# Handle existing file - add counter suffix
+	if dest_path.exists():
+		stem = dest_path.stem
+		suffix = dest_path.suffix
+		counter = 1
+		while dest_path.exists():
+			dest_path = downloads_root / f"{stem}-{counter}{suffix}"
+			counter += 1
+	
+	try:
+		shutil.copy2(source, dest_path)
+	except Exception as e:
+		logger.error(f"[copy_to_downloads] Failed to copy file: {e}")
+		raise HTTPException(status_code=500, detail=f"Failed to copy file: {e}")
+	
+	size = dest_path.stat().st_size
+	try:
+		relative = str(dest_path.relative_to(downloads_root))
+	except ValueError:
+		relative = dest_path.name
+	
+	logger.info(f"[copy_to_downloads] Copied {source} to {dest_path} ({size} bytes)")
+	return {
+		"ok": True,
+		"path": str(dest_path.resolve()),
+		"filename": dest_path.name,
+		"size": size,
+		"relative_path": relative,
+		"downloads_root": str(downloads_root),
+	}
+
+
 @app.post("/api/refresh/conflicts")
 def refresh_conflicts() -> Dict[str, Any]:
 	"""Rebuild conflict materialization tables.
@@ -4013,6 +4163,7 @@ def list_downloads(limit: int = 500) -> List[Dict[str, Any]]:
 		   m.created_time AS mod_created_time, m.updated_at AS mod_updated_at,
 		   m.mod_downloads, m.endorsement_count,
 		   m.author_profile_url, m.author_member_id,
+		   m.contains_adult_content,
 		   v.tags_json,
 		   latest.file_version,
 		   latest.latest_uploaded_at,
@@ -4050,6 +4201,7 @@ def list_downloads(limit: int = 500) -> List[Dict[str, Any]]:
 		endorsement_count,
 		mod_author_profile_url,
 		mod_author_member_id,
+		contains_adult_content,
 		view_tags_json,
 		latest_version,
 		latest_uploaded_at,
@@ -4137,10 +4289,14 @@ def list_downloads(limit: int = 500) -> List[Dict[str, Any]]:
 				"latest_file_name": latest_file_name,
 				"local_version_key": local_version_key,
 				"needs_update": needs_update,
+				"contains_adult_content": bool(contains_adult_content) if contains_adult_content else False,
 			}
 		)
 	
 	logger.info(f"[list_downloads] Returning {len(out)} download entries to client")
+	# Debug: Log NSFW content status for troubleshooting
+	nsfw_count = sum(1 for item in out if item.get("contains_adult_content"))
+	logger.info(f"[list_downloads] NSFW mods count: {nsfw_count} out of {len(out)} entries")
 	try:
 		return out
 	finally:
@@ -4343,7 +4499,7 @@ def _search_mod_id_remote(name: str, api_key: str, game: str = DEFAULT_GAME) -> 
 	url = f"https://api.nexusmods.com/v1/games/{game}/mods.json?{params}"
 	headers = {
 		"apikey": api_key,
-		"User-Agent": "Project_ModManager_Rivals/0.3.2",
+		"User-Agent": "Project_ModManager_Rivals/0.5.0",
 		"Application-Name": "Project_ModManager_Rivals",
 	}
 	req = urllib.request.Request(url, headers=headers, method="GET")
@@ -4623,7 +4779,7 @@ def _resolve_nexus_download_candidates(
 	if api_key:
 		headers["apikey"] = api_key
 		headers["Application-Name"] = "MarvelRivalsModManager"
-		headers["Application-Version"] = "0.3.2"
+		headers["Application-Version"] = "0.5.0"
 	req = urllib.request.Request(api_url, headers=headers, method="GET")
 	try:
 		with urllib.request.urlopen(req, timeout=30) as resp:

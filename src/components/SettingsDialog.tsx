@@ -334,8 +334,8 @@ export function SettingsDialog({
     const tone = !info.ok
       ? "text-destructive"
       : info.reason === "not_configured"
-      ? "text-muted-foreground"
-      : "text-emerald-500";
+        ? "text-muted-foreground"
+        : "text-emerald-500";
     return <div className={`mt-1 text-xs ${tone}`}>{trimmedMessage || ""}</div>;
   };
 
@@ -460,7 +460,7 @@ export function SettingsDialog({
                               formValues.marvel_rivals_local_downloads_root
                             }
                             onChange={handleInputChange(
-                              "marvel_rivals_local_downloads_root"
+                              "marvel_rivals_local_downloads_root",
                             )}
                             className="flex-1"
                           />
@@ -470,7 +470,7 @@ export function SettingsDialog({
                             size="sm"
                             onClick={() =>
                               handleFolderSelect(
-                                "marvel_rivals_local_downloads_root"
+                                "marvel_rivals_local_downloads_root",
                               )
                             }
                             style={{ padding: "0.5rem", minWidth: "auto" }}
@@ -480,7 +480,7 @@ export function SettingsDialog({
                           </Button>
                         </div>
                         {renderValidationStatus(
-                          "marvel_rivals_local_downloads_root"
+                          "marvel_rivals_local_downloads_root",
                         )}
                       </div>
 
@@ -505,16 +505,15 @@ export function SettingsDialog({
                             size="sm"
                             onClick={async () => {
                               const apiKeysUrl =
-                                "https://next.nexusmods.com/settings/api-keys#:~:text=Personal%20API%20Key";
+                                "https://next.nexusmods.com/settings/api-keys#:~:text=Rivalnxt";
                               try {
-                                const { openInBrowser } = await import(
-                                  "../lib/tauri-utils"
-                                );
+                                const { openInBrowser } =
+                                  await import("../lib/tauri-utils");
                                 await openInBrowser(apiKeysUrl);
                               } catch (error) {
                                 console.error(
                                   "Failed to open API keys page:",
-                                  error
+                                  error,
                                 );
                               }
                             }}
@@ -593,7 +592,7 @@ export function SettingsDialog({
                               } catch (error) {
                                 console.error(
                                   "Failed to detect Marvel Rivals:",
-                                  error
+                                  error,
                                 );
                                 toast.error("Detection failed", {
                                   description: String(error),
@@ -636,7 +635,7 @@ export function SettingsDialog({
                           }}
                         >
                           <Label htmlFor="seven_zip_bin">
-                            7-Zip executable
+                            WinRAR executable
                           </Label>
                           <div
                             style={{
@@ -647,7 +646,7 @@ export function SettingsDialog({
                           >
                             <Input
                               id="seven_zip_bin"
-                              placeholder="C:\Program Files\7-Zip\7z.exe"
+                              placeholder="C:\Program Files\WinRAR\WinRAR.exe"
                               value={formValues.seven_zip_bin}
                               onChange={handleInputChange("seven_zip_bin")}
                               className="flex-1"
@@ -684,21 +683,21 @@ export function SettingsDialog({
                                         {
                                           description: `Executable: ${result.executable}`,
                                           duration: 4000,
-                                        }
+                                        },
                                       );
                                     }
                                   } else {
                                     toast.error("Archive tool not found", {
                                       description:
                                         result.message ||
-                                        "Neither 7-Zip nor WinRAR installation found",
+                                        "WinRAR installation not found",
                                       duration: 4000,
                                     });
                                   }
                                 } catch (error) {
                                   console.error(
                                     "Failed to detect archive tool:",
-                                    error
+                                    error,
                                   );
                                   toast.error("Detection failed", {
                                     description: String(error),
@@ -707,7 +706,7 @@ export function SettingsDialog({
                                 }
                               }}
                               style={{ padding: "0.5rem", minWidth: "auto" }}
-                              title="Auto-detect 7-Zip or WinRAR"
+                              title="Auto-detect WinRAR"
                             >
                               <RefreshCw className="h-4 w-4" />
                             </Button>
@@ -817,38 +816,38 @@ export function SettingsDialog({
                         status === "succeeded"
                           ? "Success"
                           : status === "failed"
-                          ? "Failed"
-                          : status === "running"
-                          ? "Running"
-                          : status === "pending"
-                          ? "Pending"
-                          : result?.ok
-                          ? "Success"
-                          : "Idle";
+                            ? "Failed"
+                            : status === "running"
+                              ? "Running"
+                              : status === "pending"
+                                ? "Pending"
+                                : result?.ok
+                                  ? "Success"
+                                  : "Idle";
                       const statusTone =
                         status === "failed"
                           ? "font-medium text-red-600"
                           : status === "succeeded"
-                          ? "font-medium text-green-600"
-                          : status === "running"
-                          ? "font-medium text-blue-600"
-                          : "font-medium text-muted-foreground";
+                            ? "font-medium text-green-600"
+                            : status === "running"
+                              ? "font-medium text-blue-600"
+                              : "font-medium text-muted-foreground";
                       const startedAt = formatTimestamp(
-                        result?.started_at ?? null
+                        result?.started_at ?? null,
                       );
                       const updatedAt = formatTimestamp(
-                        result?.updated_at ?? null
+                        result?.updated_at ?? null,
                       );
                       const finishedAt = formatTimestamp(
-                        result?.finished_at ?? null
+                        result?.finished_at ?? null,
                       );
                       const timestampSource =
                         finishedAt || updatedAt || startedAt;
                       const timestampPrefix = finishedAt
                         ? "Finished"
                         : updatedAt && status === "running"
-                        ? "Updated"
-                        : "Started";
+                          ? "Updated"
+                          : "Started";
                       let durationSeconds: string | null = null;
                       if (result?.status === "running" && result.started_at) {
                         const started = new Date(result.started_at).getTime();
@@ -861,7 +860,7 @@ export function SettingsDialog({
                       } else if (typeof result?.duration_ms === "number") {
                         durationSeconds = Math.max(
                           result.duration_ms / 1000,
-                          0
+                          0,
                         ).toFixed(2);
                       }
                       const outputText = result?.output ?? "";

@@ -86,10 +86,6 @@ def _archive_type(archive_path: str) -> str:
     return "unknown"
 
 
-import subprocess
-
-# ... imports ...
-
 def list_entries(archive_path: str) -> List[str]:
     typ = _archive_type(archive_path)
     if typ == "zip":
@@ -99,46 +95,6 @@ def list_entries(archive_path: str) -> List[str]:
         except Exception as e:
             raise RuntimeError(f"zip list failed: {e}")
     elif typ == "7z":
-        # Try 7-Zip binary first
-        seven_zip_bin = os.environ.get("SEVEN_ZIP_BIN")
-        if seven_zip_bin and Path(seven_zip_bin).exists():
-            try:
-                # 7z l -slt archive.7z
-                # We need to parse the output to get filenames
-                # -slt provides technical listing which is easier to parse but -ba (suppress headers) might be enough with just `l`
-                # Let's use `l` and parse the table.
-                # Actually `7z l -ba -slt` gives key=value pairs.
-                cmd = [seven_zip_bin, "l", "-ba", "-slt", archive_path]
-                result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
-                if result.returncode == 0:
-                    files = []
-                    current_path = None
-                    is_folder = False
-                    
-                    for line in result.stdout.splitlines():
-                        line = line.strip()
-                        if not line:
-                            if current_path and not is_folder:
-                                files.append(current_path)
-                            current_path = None
-                            is_folder = False
-                            continue
-                            
-                        if line.startswith("Path = "):
-                            current_path = line[7:]
-                        elif line.startswith("Attributes = "):
-                            attr = line[13:]
-                            if "D" in attr:
-                                is_folder = True
-                    
-                    # Catch the last one
-                    if current_path and not is_folder:
-                        files.append(current_path)
-                        
-                    return files
-            except Exception as e:
-                print(f"Warning: 7-Zip binary list failed, falling back to py7zr: {e}")
-
         try:
             with py7zr.SevenZipFile(archive_path, mode="r") as zf:
                 # Filter out directory entries to match zip/rar behavior
@@ -182,30 +138,6 @@ def extract_archive(archive_path: str, dest_dir: str) -> List[str]:
         except Exception as e:
             raise RuntimeError(f"zip extract failed: {e}")
     elif typ == "7z":
-        # Try 7-Zip binary first
-        seven_zip_bin = os.environ.get("SEVEN_ZIP_BIN")
-        if seven_zip_bin and Path(seven_zip_bin).exists():
-            try:
-                # 7z x archive.7z -o{dest_dir} -y
-                cmd = [seven_zip_bin, "x", archive_path, f"-o{dest_dir}", "-y"]
-                result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
-                
-                if result.returncode != 0:
-                    raise RuntimeError(f"7-Zip exited with code {result.returncode}: {result.stderr}")
-                
-                # Walk the directory to find extracted files
-                extracted = []
-                dest_path = Path(dest_dir)
-                for root, _, files in os.walk(dest_dir):
-                    for file in files:
-                        full_path = Path(root) / file
-                        rel_path = full_path.relative_to(dest_path)
-                        extracted.append(str(rel_path).replace("\\", "/"))
-                
-                return extracted
-            except Exception as e:
-                print(f"Warning: 7-Zip binary extraction failed, falling back to py7zr: {e}")
-
         try:
             with py7zr.SevenZipFile(archive_path, mode="r") as zf:
                 zf.extractall(path=dest_dir)

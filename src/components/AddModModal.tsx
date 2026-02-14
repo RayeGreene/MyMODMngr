@@ -11,6 +11,7 @@ import {
   ApiError,
   addMod,
   uploadModFile,
+  copyToDownloads,
   ingestNxmHandoff,
   submitNxmHandoff,
   type ApiUploadModResponse,
@@ -22,6 +23,7 @@ import {
   createNxmProgressController,
   formatBytes,
 } from "../lib/nxmHelpers";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 interface AddModModalProps {
   open: boolean;
@@ -39,15 +41,16 @@ export function AddModModal({
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadInfo, setUploadInfo] = useState<ApiUploadModResponse | null>(
-    null
+    null,
   );
+  const [isDragging, setIsDragging] = useState(false);
 
   const parseNexusModLink = (raw: string) => {
     try {
       // Extract mod ID using pattern /mods/XXXX
       const modIdMatch = raw.match(/\/mods\/(\d+)/);
       if (!modIdMatch) return null;
-      
+
       const modIdValue = Number.parseInt(modIdMatch[1], 10);
       if (!Number.isFinite(modIdValue)) return null;
 
@@ -71,7 +74,7 @@ export function AddModModal({
             .map((segment) => segment.trim())
             .filter(Boolean);
           const modsIndex = segments.findIndex(
-            (segment) => segment.toLowerCase() === "mods"
+            (segment) => segment.toLowerCase() === "mods",
           );
           if (modsIndex > 0) {
             game = segments[modsIndex - 1];
@@ -83,7 +86,7 @@ export function AddModModal({
 
       // Construct the proper Nexus URL
       const constructedUrl = new URL(
-        `https://www.nexusmods.com/${game}/mods/${modIdValue}`
+        `https://www.nexusmods.com/${game}/mods/${modIdValue}`,
       );
       if (fileId != null) {
         constructedUrl.searchParams.set("tab", "files");
@@ -105,7 +108,7 @@ export function AddModModal({
   const handleNxmError = (
     err: unknown,
     context?: string,
-    toastId?: string | number
+    toastId?: string | number,
   ): string => {
     let message: string;
     if (err instanceof ApiError) {
@@ -191,7 +194,7 @@ export function AddModModal({
         handleNxmError(
           err,
           "Failed to process RivalNxt link",
-          controller.toastId
+          controller.toastId,
         );
       }
     } catch (err) {
@@ -202,19 +205,19 @@ export function AddModModal({
   };
 
   const handleNexusLink = async (
-    details: ReturnType<typeof parseNexusModLink>
+    details: ReturnType<typeof parseNexusModLink>,
   ) => {
     if (!details) return;
     setBusy(true);
     const { url, game, modId, fileId } = details;
-    
+
     try {
       const nexusUrl = new URL(url.toString());
-      
+
       // If no file ID, open the files tab and let user choose which file(s) to download
       if (fileId == null) {
         nexusUrl.searchParams.set("tab", "files");
-        
+
         toast.info("Opening Nexus Mods files tab", {
           description: `Select file(s) to download from Mod #${modId}`,
         });
@@ -241,7 +244,7 @@ export function AddModModal({
         const handoff = await waitForMatchingHandoff(modId, null);
         if (!handoff) {
           toast.error(
-            "Did not receive a RivalNxt handoff. Click 'Mod Manager Download' on a file in the Nexus tab, then try again."
+            "Did not receive a RivalNxt handoff. Click 'Mod Manager Download' on a file in the Nexus tab, then try again.",
           );
           setBusy(false);
           return;
@@ -283,7 +286,7 @@ export function AddModModal({
           handleNxmError(
             err,
             "Failed to ingest Nexus download",
-            controller.toastId
+            controller.toastId,
           );
         } finally {
           setBusy(false);
@@ -325,7 +328,7 @@ export function AddModModal({
       const handoff = await waitForMatchingHandoff(modId, fileId);
       if (!handoff) {
         toast.error(
-          "Did not receive a RivalNxt handoff. Approve the download in the Nexus tab, then try again."
+          "Did not receive a RivalNxt handoff. Approve the download in the Nexus tab, then try again.",
         );
         setBusy(false);
         return;
@@ -367,7 +370,7 @@ export function AddModModal({
         handleNxmError(
           err,
           "Failed to ingest Nexus download",
-          controller.toastId
+          controller.toastId,
         );
       }
     } catch (err) {
@@ -387,6 +390,95 @@ export function AddModModal({
     }
   }, [open]);
 
+  // Tauri file drop event listener
+  useEffect(() => {
+    if (!open) return;
+
+    let unlisten: (() => void) | undefined;
+
+    const setupListener = async () => {
+      try {
+        const webview = getCurrentWebview();
+        unlisten = await webview.onDragDropEvent(async (event) => {
+          if (event.payload.type === "enter") {
+            setIsDragging(true);
+          } else if (event.payload.type === "leave") {
+            setIsDragging(false);
+          } else if (event.payload.type === "drop") {
+            setIsDragging(false);
+            const paths = event.payload.paths;
+            if (paths && paths.length > 0) {
+              const filePath = paths[0];
+
+              // First copy the file to the downloads folder, then add it
+              setUploading(true);
+              try {
+                // Copy the dropped file to the downloads folder
+                toast.loading("Copying file to downloads...", {
+                  id: "drag-drop-copy",
+                });
+                const copyResult = await copyToDownloads(filePath);
+                toast.dismiss("drag-drop-copy");
+
+                // Now add the mod using the copied file path
+                const res = await addMod({ localPath: copyResult.path });
+                if (res.ok) {
+                  toast.success(
+                    `Added: ${res.name} ${
+                      res.ingested_paks
+                        ? `(${res.ingested_paks} pak${
+                            res.ingested_paks !== 1 ? "s" : ""
+                          })`
+                        : ""
+                    }`,
+                  );
+                  if (res.ingest_warning) {
+                    toast.warning(res.ingest_warning);
+                  }
+                  if (res.metadata_warning) {
+                    toast.warning(res.metadata_warning);
+                  } else if (res.synced_mod_id) {
+                    toast.success(
+                      `Synced Nexus metadata for mod #${res.synced_mod_id}`,
+                    );
+                  }
+                  setModLink("");
+                  setLocalPath("");
+                  setUploadInfo(null);
+                  onOpenChange(false);
+                  if (onSuccess) {
+                    await onSuccess();
+                  }
+                } else {
+                  toast.error("Failed to add mod");
+                }
+              } catch (err) {
+                toast.dismiss("drag-drop-copy");
+                console.error("Failed to process dropped file:", err);
+                toast.error(
+                  err instanceof Error
+                    ? err.message
+                    : "Failed to add dropped file",
+                );
+              } finally {
+                setUploading(false);
+              }
+            }
+          }
+        });
+      } catch (err) {
+        console.error("Failed to setup file drop listener:", err);
+      }
+    };
+
+    setupListener();
+
+    return () => {
+      if (unlisten) unlisten();
+      setIsDragging(false);
+    };
+  }, [open, onOpenChange, onSuccess]);
+
   const handleBrowse = async (file?: File) => {
     if (!file) return;
     setUploading(true);
@@ -396,7 +488,7 @@ export function AddModModal({
       setUploadInfo(uploaded);
       setModLink("");
       toast.success(
-        `Uploaded ${file.name} (${formatBytes(uploaded.size)}) to downloads`
+        `Uploaded ${file.name} (${formatBytes(uploaded.size)}) to downloads`,
       );
     } catch (err) {
       const message =
@@ -442,7 +534,7 @@ export function AddModModal({
                   res.ingested_paks !== 1 ? "s" : ""
                 })`
               : ""
-          }`
+          }`,
         );
         if (res.ingest_warning) {
           toast.warning(res.ingest_warning);
@@ -502,8 +594,35 @@ export function AddModModal({
           </div>
           {/* Drag and Drop */}
           <div
-            className="relative border-2 border-dashed border-muted-foreground/25 rounded-lg flex flex-col items-center justify-center py-12 px-6 text-muted-foreground cursor-pointer hover:border-primary hover:bg-primary/5 transition-all duration-200"
+            className={`relative border-2 border-dashed rounded-lg flex flex-col items-center justify-center py-12 px-6 text-muted-foreground cursor-pointer transition-all duration-200 ${
+              isDragging
+                ? "border-primary bg-primary/10"
+                : "border-muted-foreground/25 hover:border-primary hover:bg-primary/5"
+            }`}
             data-uploading={uploading ? "true" : "false"}
+            onDragEnter={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setIsDragging(true);
+            }}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onDragLeave={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setIsDragging(false);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setIsDragging(false);
+              const files = e.dataTransfer.files;
+              if (files && files.length > 0) {
+                handleBrowse(files[0]);
+              }
+            }}
           >
             <div className="text-2xl mb-3">📁</div>
             <span className="text-base font-medium mb-1">
@@ -513,8 +632,8 @@ export function AddModModal({
               {uploading
                 ? "Uploading..."
                 : uploadInfo
-                ? `Saved as ${uploadInfo.relative_path}`
-                : "or click to browse"}
+                  ? `Saved as ${uploadInfo.relative_path}`
+                  : "or click to browse"}
             </span>
             <input
               type="file"

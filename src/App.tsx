@@ -14,6 +14,7 @@ import { NxmBackgroundListener } from "./components/NxmBackgroundListener";
 import { toast } from "sonner";
 import { Toaster } from "./components/ui/sonner";
 import { ThemeProvider } from "./components/ThemeProvider";
+import { NSFWFilterProvider } from "./components/NSFWFilterProvider";
 import { openInBrowser } from "./lib/tauri-utils";
 import { initializeIcons } from "./lib/iconManager";
 import {
@@ -26,6 +27,7 @@ import {
   listDownloads,
   deleteLocalDownloads,
   updateMod,
+  checkModUpdate,
   listNxmHandoffs,
   previewNxmHandoff,
   setActivePaks,
@@ -41,6 +43,8 @@ import {
   getBootstrapStatus,
   getHealth,
   getModCustomImagePreviews,
+  toggleFavourite,
+  fetchFavourites,
   type ApiSettings,
   type ApiSettingsTaskResponse,
   type SettingsTask,
@@ -89,7 +93,7 @@ function shouldSuppressBackendError(value?: string | null): boolean {
     return false;
   }
   return SUPPRESSED_BACKEND_ERROR_PATTERNS.some((pattern) =>
-    normalized.includes(pattern)
+    normalized.includes(pattern),
   );
 }
 
@@ -103,7 +107,7 @@ function sanitizeProgressDescription(value?: string): string | undefined {
     .filter(Boolean)
     .filter(
       (segment) =>
-        !PROGRESS_STAGE_FILTERS.some((pattern) => pattern.test(segment))
+        !PROGRESS_STAGE_FILTERS.some((pattern) => pattern.test(segment)),
     );
   const sanitized = segments.join(" · ").trim();
   return sanitized.length > 0 ? sanitized : undefined;
@@ -124,7 +128,7 @@ export default function App() {
   // State management
   const [mods, setMods] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<"downloads" | "active">(
-    "downloads"
+    "downloads",
   );
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [selectedCharacters, setSelectedCharacters] = useState<string[]>([]);
@@ -138,7 +142,7 @@ export default function App() {
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsData, setSettingsData] = useState<ApiSettings | null>(null);
   const [settingsTaskBusy, setSettingsTaskBusy] = useState<SettingsTask | null>(
-    null
+    null,
   );
   const [settingsTaskJobs, setSettingsTaskJobs] = useState<
     Partial<Record<SettingsTask, ApiSettingsTaskResponse>>
@@ -203,8 +207,8 @@ export default function App() {
           error instanceof Error
             ? error.message
             : typeof error === "string"
-            ? error
-            : "";
+              ? error
+              : "";
         const trimmedMessage = rawMessage.trim();
         const suppress = shouldSuppressBackendError(trimmedMessage);
         setBackendStatus({
@@ -313,7 +317,7 @@ export default function App() {
         setSettingsSaving(false);
       }
     },
-    []
+    [],
   );
 
   const handleSettingsSubmit = useCallback(
@@ -323,7 +327,7 @@ export default function App() {
         setSettingsOpen(false);
       }
     },
-    [saveSettings]
+    [saveSettings],
   );
 
   const handleSettingsRefresh = useCallback(() => {
@@ -356,7 +360,7 @@ export default function App() {
       }
       setSettingsTaskBusy(null);
     },
-    [fetchSettings, settingsData, settingsLoading]
+    [fetchSettings, settingsData, settingsLoading],
   );
 
   const fetchNxmQueue = useCallback(async () => {
@@ -493,7 +497,7 @@ export default function App() {
   const installedCounts = {
     all: installedMods.length,
     characters: installedMods.filter((mod) =>
-      modMatchesCategory(mod, "characters")
+      modMatchesCategory(mod, "characters"),
     ).length,
     ui: installedMods.filter((mod) => modMatchesCategory(mod, "ui")).length,
     maps: installedMods.filter((mod) => modMatchesCategory(mod, "maps")).length,
@@ -504,6 +508,25 @@ export default function App() {
   // Event handlers
   async function fetchServerMods(limit = 500): Promise<any[]> {
     const downloads = await listDownloads(limit);
+
+    // Debug: Check NSFW content in API response
+    const nsfwFromApi = downloads.filter((d) => d.contains_adult_content);
+    console.log(
+      "[fetchServerMods] API response NSFW count:",
+      nsfwFromApi.length,
+      "of",
+      downloads.length,
+    );
+    if (nsfwFromApi.length > 0) {
+      console.log(
+        "[fetchServerMods] NSFW mods from API:",
+        nsfwFromApi.map((d) => ({
+          name: d.mod_name || d.name,
+          contains_adult_content: d.contains_adult_content,
+        })),
+      );
+    }
+
     const grouped = groupDownloadsByMod(downloads);
 
     // Extract all mod_ids (real and synthetic) to fetch custom images
@@ -522,6 +545,38 @@ export default function App() {
       modIds.length > 0 ? await getModCustomImagePreviews(modIds) : {};
 
     const mapped = grouped.map((d) => toUiMod(d, customImages));
+
+    // Restore favourites from backend
+    try {
+      const favouritedIds = await fetchFavourites();
+      const favSet = new Set(favouritedIds);
+      for (const mod of mapped) {
+        if (mod.backendModId != null && favSet.has(mod.backendModId)) {
+          mod.isFavorited = true;
+        }
+      }
+    } catch (err) {
+      console.warn("[fetchServerMods] Failed to fetch favourites:", err);
+    }
+
+    // Debug: Check NSFW content after mapping
+    const nsfwMapped = mapped.filter((m) => m.containsAdultContent);
+    console.log(
+      "[fetchServerMods] Mapped NSFW count:",
+      nsfwMapped.length,
+      "of",
+      mapped.length,
+    );
+    if (nsfwMapped.length > 0) {
+      console.log(
+        "[fetchServerMods] NSFW mods mapped:",
+        nsfwMapped.map((m) => ({
+          name: m.name,
+          containsAdultContent: m.containsAdultContent,
+        })),
+      );
+    }
+
     return dedupeById(mapped);
   }
 
@@ -541,7 +596,7 @@ export default function App() {
       })
       .filter(
         (value: number | undefined): value is number =>
-          typeof value === "number"
+          typeof value === "number",
       );
     const downloadIds = Array.from(new Set<number>(numericIds));
 
@@ -566,7 +621,7 @@ export default function App() {
       if (mod.isActive !== false && downloadIds.length > 0) {
         // Update UI state optimistically
         setMods((prev) =>
-          prev.map((m) => (m.id === modId ? { ...m, isActive: false } : m))
+          prev.map((m) => (m.id === modId ? { ...m, isActive: false } : m)),
         );
 
         // Actually deactivate on backend for each download
@@ -576,7 +631,7 @@ export default function App() {
           } catch (deactivateError) {
             console.warn(
               `[App] Failed to deactivate download_id=${downloadId}`,
-              deactivateError
+              deactivateError,
             );
             // Continue with other downloads and deletion even if one fails
           }
@@ -638,15 +693,15 @@ export default function App() {
               isUpdating: true,
               updateError: null,
             }
-          : mod
-      )
+          : mod,
+      ),
     );
 
     let responseLatestVersion = target.latestVersion || target.version || "";
 
     const applyUpdateSuccess = async (
       result: any,
-      options: { toastId?: string | number; progressDescription?: string } = {}
+      options: { toastId?: string | number; progressDescription?: string } = {},
     ) => {
       responseLatestVersion = result.latest_version || responseLatestVersion;
       await refreshMods({ quiet: true });
@@ -670,7 +725,7 @@ export default function App() {
         ? result.activation_warning?.trim()
         : undefined;
       const progressDescription = sanitizeProgressDescription(
-        options.progressDescription
+        options.progressDescription,
       );
       const description =
         warningText && warningText.length > 0
@@ -689,8 +744,8 @@ export default function App() {
                 isUpdating: false,
                 updateError: null,
               }
-            : mod
-        )
+            : mod,
+        ),
       );
     };
 
@@ -711,8 +766,8 @@ export default function App() {
                   updateError: message,
                   hasUpdate: true,
                 }
-              : mod
-          )
+              : mod,
+          ),
         );
       };
 
@@ -736,19 +791,19 @@ export default function App() {
           const nexusModId =
             typeof detail["mod_id"] === "number"
               ? (detail["mod_id"] as number)
-              : backendModId ?? undefined;
+              : (backendModId ?? undefined);
           const fileIdText =
             typeof detail["file_id"] === "number"
               ? `File #${detail["file_id"] as number}`
               : typeof detail["file_id"] === "string" &&
-                detail["file_id"].trim()
-              ? `File #${detail["file_id"] as string}`
-              : "the desired file";
+                  detail["file_id"].trim()
+                ? `File #${detail["file_id"] as string}`
+                : "the desired file";
           const nexusUrl =
             nexusModId != null
               ? (() => {
                   const base = `https://www.nexusmods.com/${encodeURIComponent(
-                    nexusGame
+                    nexusGame,
                   )}/mods/${encodeURIComponent(String(nexusModId))}`;
                   const params = new URLSearchParams();
                   params.set("tab", "files");
@@ -808,13 +863,13 @@ export default function App() {
 
             const handoff = await waitForMatchingHandoff(
               expectedModId,
-              expectedFileId
+              expectedFileId,
             );
             if (!handoff) {
               // Remove tracking on timeout
               updateManagedPairsRef.current.delete(trackingKey);
               throw new Error(
-                "Timed out waiting for the RivalNxt download handoff."
+                "Timed out waiting for the RivalNxt download handoff.",
               );
             }
 
@@ -848,10 +903,70 @@ export default function App() {
               handoffErr instanceof Error && handoffErr.message
                 ? handoffErr.message
                 : String(handoffErr ?? "Unknown handoff error");
+
+            // Check if this is a duplicate download error
+            const isDuplicate =
+              message.toLowerCase().includes("already exists") ||
+              message.toLowerCase().includes("duplicate") ||
+              (typeof handoffErr === "object" &&
+                handoffErr !== null &&
+                "status" in handoffErr &&
+                (handoffErr as any).status === 409);
+
             const toastId = controller?.toastId;
             const description =
               controller?.getLastDescription() || instructions || undefined;
             controller?.stop();
+
+            if (isDuplicate) {
+              // Extract better message from error detail if available
+              let duplicateMessage = message;
+              if (
+                typeof handoffErr === "object" &&
+                handoffErr !== null &&
+                "body" in handoffErr &&
+                typeof (handoffErr as any).body === "object"
+              ) {
+                const detail = (handoffErr as any).body?.detail;
+                if (typeof detail === "object" && detail?.message) {
+                  duplicateMessage = detail.message;
+                } else if (typeof detail === "string") {
+                  duplicateMessage = detail;
+                }
+              }
+
+              // Clear update state
+              setMods((prev) =>
+                prev.map((mod) =>
+                  mod.id === modId
+                    ? {
+                        ...mod,
+                        isUpdating: false,
+                        updateError: null,
+                      }
+                    : mod,
+                ),
+              );
+
+              // Show info toast instead of error
+              if (toastId != null) {
+                toast.info(`${displayName} already up to date`, {
+                  id: toastId,
+                  description: duplicateMessage,
+                  duration: 4000,
+                });
+              } else {
+                toast.info(`${displayName} already up to date`, {
+                  description: duplicateMessage,
+                  duration: 4000,
+                });
+              }
+
+              void fetchNxmQueue();
+              return;
+            }
+
+            // Not a duplicate - handle as error
             setUpdateError(`${instructions} (${message})`);
             if (toastId != null) {
               toast.error(
@@ -860,11 +975,11 @@ export default function App() {
                   id: toastId,
                   description,
                   duration: 5000,
-                }
+                },
               );
             } else {
               toast.error(
-                `Failed to resume Nexus download for ${displayName}: ${message}`
+                `Failed to resume Nexus download for ${displayName}: ${message}`,
               );
             }
             void fetchNxmQueue();
@@ -891,21 +1006,84 @@ export default function App() {
     }
   };
 
-  const handleFavorite = (modId: string) => {
+  const handleCheckUpdate = async (modId: string) => {
+    const target = mods.find((m) => m.id === modId);
+    if (!target) {
+      return;
+    }
+
+    const displayName = target.name ?? `Mod ${modId}`;
+    let backendModId: number | undefined;
+    if (
+      typeof target.backendModId === "number" &&
+      Number.isFinite(target.backendModId)
+    ) {
+      backendModId = target.backendModId;
+    } else {
+      const parsed = Number(modId);
+      backendModId = Number.isFinite(parsed) ? parsed : undefined;
+    }
+
+    if (backendModId == null) {
+      toast.error(
+        `Can't check updates for ${displayName}: missing Nexus mod reference`,
+      );
+      return;
+    }
+
+    try {
+      const result = await checkModUpdate(backendModId);
+      if (result.needs_update) {
+        toast.info(`Update available for ${displayName}`);
+        await refreshMods({ quiet: true });
+        // Force sidebar summary refresh to update the "needs update" count
+        setConflictsReloadToken((t) => t + 1);
+      } else {
+        toast.success(`${displayName} is up to date`);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : String(error ?? "Failed to check for updates");
+      toast.error(`Failed to check updates for ${displayName}: ${message}`);
+    }
+  };
+
+  const handleFavorite = async (modId: string) => {
+    const mod = mods.find((m) => m.id === modId);
+    if (!mod) return;
+
+    // Optimistic UI update
+    const wasFavorited = mod.isFavorited;
     setMods((prev) =>
-      prev.map((mod) =>
-        mod.id === modId ? { ...mod, isFavorited: !mod.isFavorited } : mod
-      )
+      prev.map((m) =>
+        m.id === modId ? { ...m, isFavorited: !wasFavorited } : m,
+      ),
     );
 
-    const mod = mods.find((m) => m.id === modId);
-    if (mod) {
-      toast.success(
-        mod.isFavorited
-          ? `${mod.name} removed from favorites`
-          : `${mod.name} added to favorites!`
-      );
+    // Persist to backend
+    const backendId = mod.backendModId;
+    if (backendId != null) {
+      try {
+        await toggleFavourite(backendId);
+      } catch (err) {
+        // Revert on failure
+        setMods((prev) =>
+          prev.map((m) =>
+            m.id === modId ? { ...m, isFavorited: wasFavorited } : m,
+          ),
+        );
+        toast.error("Failed to update favourite status");
+        return;
+      }
     }
+
+    toast.success(
+      wasFavorited
+        ? `${mod.name} removed from favorites`
+        : `${mod.name} added to favorites!`,
+    );
   };
 
   const handleToggleMod = (modId: string) => {
@@ -913,8 +1091,8 @@ export default function App() {
       prev.map((mod) =>
         mod.id === modId && mod.isInstalled
           ? { ...mod, isActive: !mod.isActive }
-          : mod
-      )
+          : mod,
+      ),
     );
 
     const mod = mods.find((m) => m.id === modId);
@@ -922,7 +1100,7 @@ export default function App() {
       toast.success(
         mod.isActive
           ? `${mod.name} has been disabled`
-          : `${mod.name} has been enabled!`
+          : `${mod.name} has been enabled!`,
       );
     }
     // Auto-refresh after mod toggle
@@ -935,30 +1113,30 @@ export default function App() {
       prev.map((mod) =>
         mod.isInstalled && mod.isActive !== false
           ? { ...mod, isActive: false }
-          : mod
-      )
+          : mod,
+      ),
     );
     toast.success(`${activeCount} mod${activeCount !== 1 ? "s" : ""} disabled`);
   };
 
   const handleEnableAll = () => {
     const inactiveCount = installedMods.filter(
-      (mod) => mod.isActive === false
+      (mod) => mod.isActive === false,
     ).length;
     setMods((prev) =>
       prev.map((mod) =>
         mod.isInstalled && mod.isActive === false
           ? { ...mod, isActive: true }
-          : mod
-      )
+          : mod,
+      ),
     );
     toast.success(
-      `${inactiveCount} mod${inactiveCount !== 1 ? "s" : ""} enabled`
+      `${inactiveCount} mod${inactiveCount !== 1 ? "s" : ""} enabled`,
     );
   };
 
   const refreshMods = async (
-    options: { quiet?: boolean; includeConflicts?: boolean } = {}
+    options: { quiet?: boolean; includeConflicts?: boolean } = {},
   ) => {
     const { quiet = false, includeConflicts = false } = options;
     try {
@@ -1003,7 +1181,7 @@ export default function App() {
       while (!terminalStatuses.includes(currentJob.status)) {
         pollCount++;
         console.log(
-          `[Bootstrap] Polling ${pollCount}: status=${currentJob.status}, waiting ${delay}ms...`
+          `[Bootstrap] Polling ${pollCount}: status=${currentJob.status}, waiting ${delay}ms...`,
         );
         await sleep(delay);
         delay = Math.min(delay + 250, 2000);
@@ -1012,7 +1190,7 @@ export default function App() {
           `[Bootstrap] Poll ${pollCount} result:`,
           latest.status,
           "ok:",
-          latest.ok
+          latest.ok,
         );
         currentJob = latest;
         setBootstrapJob(latest);
@@ -1120,7 +1298,7 @@ export default function App() {
         setSettingsTaskBusy(null);
       }
     },
-    [refreshMods]
+    [refreshMods],
   );
 
   const handleRefresh = () => {
@@ -1142,7 +1320,7 @@ export default function App() {
       const key = fileId != null ? `${modId}:${fileId}` : `${modId}:*`;
       return updateManagedPairsRef.current.has(key);
     },
-    []
+    [],
   );
 
   // On mount, try to get mods from API (doesn't replace mock cards yet, just signals connectivity)
@@ -1236,7 +1414,7 @@ export default function App() {
   function toUiMod(d: ApiDownload, customImages: Record<number, string> = {}) {
     // Consolidate tags and remove any stray tokens like 'data' and generic categories for robustness
     const cleanTags = (d.tags || []).filter(
-      (t) => t && !["data"].includes(t.toLowerCase())
+      (t) => t && !["data"].includes(t.toLowerCase()),
     );
     const categoryTags = deriveCategoryTags(cleanTags);
 
@@ -1326,10 +1504,83 @@ export default function App() {
       needsUpdate: hasUpdate,
       isUpdating: false,
       updateError: null,
+      containsAdultContent: Boolean(d.contains_adult_content),
     } as any;
   }
 
+  /**
+   * Remove duplicate downloads with the same mod+version.
+   * When duplicates exist, keeps only the latest one (by created_at).
+   */
+  function deduplicateDownloads(downloads: ApiDownload[]): ApiDownload[] {
+    // Group by mod_id (for Nexus mods) or by name (for local mods)
+    const byKey = new Map<string, ApiDownload[]>();
+
+    for (const download of downloads) {
+      const modKey =
+        download.mod_id != null
+          ? `mod:${download.mod_id}`
+          : `name:${(download.mod_name || download.name || "").toLowerCase().trim()}`;
+
+      if (!byKey.has(modKey)) {
+        byKey.set(modKey, []);
+      }
+      byKey.get(modKey)!.push(download);
+    }
+
+    const deduplicated: ApiDownload[] = [];
+
+    // For each group, check for version duplicates
+    for (const group of byKey.values()) {
+      // Group by version AND name within this mod to preserve variants
+      // Different variants (e.g., different skins) may share the same version
+      // but have different file names - treat these as distinct entries
+      const byVersionAndName = new Map<string, ApiDownload[]>();
+
+      for (const download of group) {
+        // Include file name in the key to distinguish variants with same version
+        const versionKey = `${(download.version || "").trim().toLowerCase()}::${(download.name || "").trim().toLowerCase()}`;
+        if (!byVersionAndName.has(versionKey)) {
+          byVersionAndName.set(versionKey, []);
+        }
+        byVersionAndName.get(versionKey)!.push(download);
+      }
+
+      // For each version+name combo, keep only the latest download
+      for (const versionGroup of byVersionAndName.values()) {
+        if (versionGroup.length === 1) {
+          // No duplicates for this version+name combo
+          deduplicated.push(versionGroup[0]);
+        } else {
+          // Multiple downloads with same mod+version+name - keep the latest
+          const sorted = versionGroup.sort((a, b) => {
+            const dateA = new Date(a.created_at || 0).getTime();
+            const dateB = new Date(b.created_at || 0).getTime();
+            return dateB - dateA; // Descending - latest first
+          });
+
+          // Keep the latest
+          deduplicated.push(sorted[0]);
+
+          // Log duplicates being filtered out
+          if (sorted.length > 1) {
+            console.info(
+              `[Dedup] Found ${sorted.length} duplicates of "${sorted[0].mod_name || sorted[0].name}" v${sorted[0].version}. Keeping latest (id=${sorted[0].id}), filtering out:`,
+              sorted.slice(1).map((d) => `id=${d.id}`),
+            );
+          }
+        }
+      }
+    }
+
+    return deduplicated;
+  }
+
   function groupDownloadsByMod(downloads: ApiDownload[]): ApiDownload[] {
+    // STEP 1: Remove duplicate downloads (same mod+version) BEFORE grouping
+    // Keep only the latest download when duplicates exist
+    const deduplicated = deduplicateDownloads(downloads);
+
     const out: ApiDownload[] = [];
     const byMod = new Map<number, ApiDownload>();
     const byName = new Map<string, ApiDownload>();
@@ -1372,7 +1623,7 @@ export default function App() {
       }
 
       target.needs_update = Boolean(
-        target.needs_update || incoming.needs_update
+        target.needs_update || incoming.needs_update,
       );
       const latestKey = target.latest_version_key;
       const localKey = target.local_version_key;
@@ -1383,7 +1634,7 @@ export default function App() {
       }
     };
 
-    for (const d of downloads) {
+    for (const d of deduplicated) {
       if (d.mod_id == null) {
         const key = (d.mod_name || d.name || "").toLowerCase().trim();
         if (!key) {
@@ -1556,7 +1807,7 @@ export default function App() {
   function inferCharacterFromTags(tags: string[]): string | undefined {
     // Heuristic: if tags contain words beyond category set, pick the first as character label
     const candidate = tags.find(
-      (t) => t && !CATEGORY_KEYWORD_SET.has(t.toLowerCase())
+      (t) => t && !CATEGORY_KEYWORD_SET.has(t.toLowerCase()),
     );
     return candidate;
   }
@@ -1570,7 +1821,7 @@ export default function App() {
     setSelectedCharacters((prev) =>
       prev.includes(character)
         ? prev.filter((c) => c !== character)
-        : [...prev, character]
+        : [...prev, character],
     );
   };
 
@@ -1583,135 +1834,140 @@ export default function App() {
   };
 
   return (
-    <ThemeProvider defaultTheme="dark">
-      <div className="relative h-screen bg-background flex flex-col">
-        {/* Header - AppHeader UI migrated into TabHeader (see TabHeader props below) */}
+    <NSFWFilterProvider>
+      <ThemeProvider defaultTheme="dark">
+        <div className="relative h-screen bg-background flex flex-col">
+          {/* Header - AppHeader UI migrated into TabHeader (see TabHeader props below) */}
 
-        {/* Main Content */}
-        <div className="flex-1 overflow-hidden flex">
-          {/* Left Sidebar - Always the same */}
-          <DownloadsSidebar
-            selectedCategory={selectedCategory}
-            onCategoryChange={handleCategoryChange}
-            installedCounts={installedCounts}
-            updatesCount={updatesCount}
-            selectedCharacters={selectedCharacters}
-            onCharacterToggle={handleCharacterToggle}
-            mods={mods}
-            conflictsReloadToken={conflictsReloadToken}
-          />
-
-          {/* Main Content Area */}
-          <div className="flex-1 flex flex-col">
-            {/* Tab Header */}
-            <TabHeader
-              activeTab={activeTab}
-              onTabChange={setActiveTab}
-              downloadsCount={installedMods.length}
-              activeCount={activeMods.length}
+          {/* Main Content */}
+          <div className="flex-1 overflow-hidden flex">
+            {/* Left Sidebar - Always the same */}
+            <DownloadsSidebar
+              selectedCategory={selectedCategory}
+              onCategoryChange={handleCategoryChange}
+              installedCounts={installedCounts}
               updatesCount={updatesCount}
-              activeModsCount={activeMods.length}
-              onRefresh={handleRefresh}
-              onOpenSettings={handleOpenSettings}
-              onOpenBootstrap={handleOpenBootstrap}
+              selectedCharacters={selectedCharacters}
+              onCharacterToggle={handleCharacterToggle}
+              mods={mods}
+              conflictsReloadToken={conflictsReloadToken}
+              onRefreshMods={handleRefresh}
             />
 
-            {/* Tab Content */}
-            <div className="flex-1 overflow-hidden">
-              {activeTab === "downloads" ? (
-                <DownloadsPage
-                  mods={mods}
-                  onUpdate={handleUpdate}
-                  onUninstall={handleUninstall}
-                  onFavorite={handleFavorite}
-                  selectedCategory={selectedCategory}
-                  selectedCharacters={selectedCharacters}
-                  onModAdded={handleModAdded}
-                  onConflictStateChanged={notifyConflictsDirty}
-                  viewMode={viewMode}
-                  onViewModeChange={setViewMode}
-                  onRefresh={handleRefresh}
-                />
-              ) : (
-                <ActiveModsView
-                  mods={mods}
-                  onToggleMod={handleToggleMod}
-                  onDisableAll={handleDisableAll}
-                  onEnableAll={handleEnableAll}
-                  onUpdate={handleUpdate}
-                  onUninstall={handleUninstall}
-                  onFavorite={handleFavorite}
-                  selectedCategory={selectedCategory}
-                  selectedCharacters={selectedCharacters}
-                  onConflictStateChanged={notifyConflictsDirty}
-                  viewMode={viewMode}
-                  onViewModeChange={setViewMode}
-                  onRefresh={handleRefresh}
-                />
-              )}
+            {/* Main Content Area */}
+            <div className="flex-1 flex flex-col">
+              {/* Tab Header */}
+              <TabHeader
+                activeTab={activeTab}
+                onTabChange={setActiveTab}
+                downloadsCount={installedMods.length}
+                activeCount={activeMods.length}
+                updatesCount={updatesCount}
+                activeModsCount={activeMods.length}
+                onRefresh={handleRefresh}
+                onOpenSettings={handleOpenSettings}
+                onOpenBootstrap={handleOpenBootstrap}
+              />
+
+              {/* Tab Content */}
+              <div className="flex-1 overflow-hidden">
+                {activeTab === "downloads" ? (
+                  <DownloadsPage
+                    mods={mods}
+                    onUpdate={handleUpdate}
+                    onCheckUpdate={handleCheckUpdate}
+                    onUninstall={handleUninstall}
+                    onFavorite={handleFavorite}
+                    selectedCategory={selectedCategory}
+                    selectedCharacters={selectedCharacters}
+                    onModAdded={handleModAdded}
+                    onConflictStateChanged={notifyConflictsDirty}
+                    viewMode={viewMode}
+                    onViewModeChange={setViewMode}
+                    onRefresh={handleRefresh}
+                  />
+                ) : (
+                  <ActiveModsView
+                    mods={mods}
+                    onToggleMod={handleToggleMod}
+                    onDisableAll={handleDisableAll}
+                    onEnableAll={handleEnableAll}
+                    onUpdate={handleUpdate}
+                    onCheckUpdate={handleCheckUpdate}
+                    onUninstall={handleUninstall}
+                    onFavorite={handleFavorite}
+                    selectedCategory={selectedCategory}
+                    selectedCharacters={selectedCharacters}
+                    onConflictStateChanged={notifyConflictsDirty}
+                    viewMode={viewMode}
+                    onViewModeChange={setViewMode}
+                    onRefresh={handleRefresh}
+                  />
+                )}
+              </div>
             </div>
           </div>
-        </div>
 
-        <GetStartedDialog
-          open={getStartedOpen}
-          loadingSettings={settingsLoading}
-          savingSettings={settingsSaving}
-          settings={settingsData}
-          bootstrapStatus={bootstrapStatus}
-          job={bootstrapJob}
-          jobRunning={bootstrapRunning}
-          onOpenChange={(isOpen) => {
-            const canDismiss =
-              !bootstrapRunning ||
-              !!(
-                bootstrapJob &&
-                bootstrapJob.status === "succeeded" &&
-                bootstrapJob.ok
-              );
-            if (!isOpen && !canDismiss) {
-              return;
-            }
-            setGetStartedOpen(isOpen);
-            if (isOpen) {
-              if (!settingsLoading && settingsData == null) {
-                void fetchSettings(false);
+          <GetStartedDialog
+            open={getStartedOpen}
+            loadingSettings={settingsLoading}
+            savingSettings={settingsSaving}
+            settings={settingsData}
+            bootstrapStatus={bootstrapStatus}
+            job={bootstrapJob}
+            jobRunning={bootstrapRunning}
+            onOpenChange={(isOpen) => {
+              const canDismiss =
+                !bootstrapRunning ||
+                !!(
+                  bootstrapJob &&
+                  bootstrapJob.status === "succeeded" &&
+                  bootstrapJob.ok
+                );
+              if (!isOpen && !canDismiss) {
+                return;
               }
+              setGetStartedOpen(isOpen);
+              if (isOpen) {
+                if (!settingsLoading && settingsData == null) {
+                  void fetchSettings(false);
+                }
+                void fetchBootstrapStatus();
+              }
+            }}
+            onSubmit={saveSettings}
+            onRunBootstrap={handleBootstrapTask}
+            onRefreshSettings={handleSettingsRefresh}
+            onRefreshStatus={() => {
               void fetchBootstrapStatus();
-            }
-          }}
-          onSubmit={saveSettings}
-          onRunBootstrap={handleBootstrapTask}
-          onRefreshSettings={handleSettingsRefresh}
-          onRefreshStatus={() => {
-            void fetchBootstrapStatus();
-          }}
-        />
+            }}
+          />
 
-        {/* Toast Notifications */}
-        <SettingsDialog
-          open={settingsOpen}
-          loading={settingsLoading}
-          saving={settingsSaving}
-          settings={settingsData}
-          taskBusy={settingsTaskBusy}
-          taskJobs={settingsTaskJobs}
-          onOpenChange={handleSettingsOpenChange}
-          onRefresh={handleSettingsRefresh}
-          onSubmit={handleSettingsSubmit}
-          onRunTask={handleRunSettingsTask}
-        />
-        <ServerStartupOverlay
-          visible={!backendReady}
-          lastError={backendStatus.lastError}
-        />
-        <Toaster />
-        <NxmBackgroundListener
-          enabled={backendReady}
-          onModAdded={handleModAdded}
-          isHandoffExcluded={isHandoffManagedByUpdate}
-        />
-      </div>
-    </ThemeProvider>
+          {/* Toast Notifications */}
+          <SettingsDialog
+            open={settingsOpen}
+            loading={settingsLoading}
+            saving={settingsSaving}
+            settings={settingsData}
+            taskBusy={settingsTaskBusy}
+            taskJobs={settingsTaskJobs}
+            onOpenChange={handleSettingsOpenChange}
+            onRefresh={handleSettingsRefresh}
+            onSubmit={handleSettingsSubmit}
+            onRunTask={handleRunSettingsTask}
+          />
+          <ServerStartupOverlay
+            visible={!backendReady}
+            lastError={backendStatus.lastError}
+          />
+          <Toaster />
+          <NxmBackgroundListener
+            enabled={backendReady}
+            onModAdded={handleModAdded}
+            isHandoffExcluded={isHandoffManagedByUpdate}
+          />
+        </div>
+      </ThemeProvider>
+    </NSFWFilterProvider>
   );
 }
