@@ -24,7 +24,8 @@
 3. Launch RivalNxt from your Start Menu
 4. Configure in Settings:
    - **Local downloads directory** → Select the folder where your Marvel Rivals mods are downloaded/saved (create anywhere or use existing folder)
-   - **Nexus Personal API Key** → Get your [API key](https://next.nexusmods.com/settings/api-keys) (scroll all the way down) and paste it into RivalNxt
+   - **Sign in with Nexus** → Click the sign-in button to connect your Nexus Mods account automatically
+   - _Or_ **Nexus Personal API Key** → Paste your [API key](https://next.nexusmods.com/settings/api-keys) manually if you prefer
 
 > 📖 **Need more help?** See the [full installation guide](https://github.com/Rounak77382/RivalNxt?tab=readme-ov-file#-installation) for detailed setup instructions.
 
@@ -32,7 +33,7 @@
 
 | File                                  | Platform    | Checksum                 |
 | ------------------------------------- | ----------- | ------------------------ |
-| [<INSTALLER_FILENAME>](INSTALLER_URL) | x64 Windows | [checksum](CHECKSUM_URL) |
+| [<INSTALLER_FILENAME>](<INSTALLER_URL>) | x64 Windows | [checksum](<CHECKSUM_URL>) |
 
 > To verify the download on Windows, run `certutil -hashfile <filename> SHA256` and compare it with the `.sha256` file.
 
