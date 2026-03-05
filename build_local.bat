@@ -81,7 +81,7 @@ if exist "repak-rivals" (
 
 REM Build using Maturin
 echo Building wheel with --release --features pyo3...
-maturin build --release --features pyo3
+maturin build --release --features pyo3 --interpreter python
 if %ERRORLEVEL% NEQ 0 (
     echo ❌ Maturin build failed
     cd ..\..\..
