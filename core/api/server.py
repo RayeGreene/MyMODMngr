@@ -1523,6 +1523,98 @@ def _ingest_resolved_download(
 		if resolved_mod_id is None and metadata_mod_id_hint is not None:
 			resolved_mod_id = metadata_mod_id_hint
 
+		# --- Premium / Patreon mod detection ---
+		# Check if this download's PAK files overlap with an existing mod's PAKs.
+		# If the new download is a superset (has all the same PAKs plus extras),
+		# mark it as a "premium" source linked to the existing mod.
+		premium_info: Dict[str, Any] = {}
+		try:
+			if contents and len(contents) > 1:
+				pak_set = set(c.lower() for c in contents)
+				placeholders = ",".join("?" for _ in pak_set)
+				overlap_rows = cur.execute(
+					f"""
+					SELECT mp.local_download_id, mp.mod_id, mp.pak_name, ld.name, ld.contents
+					FROM mod_paks mp
+					JOIN local_downloads ld ON ld.id = mp.local_download_id
+					WHERE LOWER(mp.pak_name) IN ({placeholders})
+					  AND mp.local_download_id != ?
+					""",
+					(*list(pak_set), local_download_id),
+				).fetchall()
+
+				if overlap_rows:
+					from collections import defaultdict
+					by_download: Dict[int, Dict[str, Any]] = defaultdict(lambda: {"mod_id": None, "name": "", "shared_paks": set(), "total_paks": set()})
+					for row in overlap_rows:
+						dl_id_other = row[0]
+						entry = by_download[dl_id_other]
+						entry["mod_id"] = row[1]
+						entry["name"] = row[3]
+						entry["shared_paks"].add(row[2].lower())
+						try:
+							other_contents = json.loads(row[4]) if row[4] else []
+							entry["total_paks"] = set(c.lower() for c in other_contents)
+						except Exception:
+							pass
+
+					best_match = None
+					best_shared = 0
+					for dl_id_other, info in by_download.items():
+						shared_count = len(info["shared_paks"])
+						other_total = info["total_paks"]
+						if other_total and other_total.issubset(pak_set) and len(pak_set) > len(other_total):
+							if shared_count > best_shared:
+								best_shared = shared_count
+								best_match = (dl_id_other, info)
+
+					if best_match:
+						matched_dl_id, matched_info = best_match
+						linked_mod_id = matched_info["mod_id"] or resolved_mod_id
+						shared_count = len(matched_info["shared_paks"])
+						extra_count = len(pak_set) - shared_count
+
+						cur.execute(
+							"""UPDATE local_downloads
+							   SET source = 'premium',
+							       linked_mod_id = ?,
+							       premium_pak_count = ?,
+							       shared_pak_count = ?,
+							       extra_pak_count = ?
+							   WHERE id = ?""",
+							(linked_mod_id, len(pak_set), shared_count, extra_count, local_download_id),
+						)
+						cur.execute(
+							"UPDATE local_downloads SET source = 'nexus' WHERE id = ? AND source IS NULL",
+							(matched_dl_id,),
+						)
+						if resolved_mod_id is None and linked_mod_id is not None:
+							cur.execute(
+								"UPDATE local_downloads SET mod_id = ? WHERE id = ?",
+								(linked_mod_id, local_download_id),
+							)
+							resolved_mod_id = linked_mod_id
+						conn.commit()
+
+						premium_info = {
+							"is_premium": True,
+							"linked_mod_id": linked_mod_id,
+							"linked_download_name": matched_info["name"],
+							"premium_pak_count": len(pak_set),
+							"shared_pak_count": shared_count,
+							"extra_pak_count": extra_count,
+						}
+						logger.info(
+							f"[ingest] Detected PREMIUM mod: {name} is a superset of "
+							f"'{matched_info['name']}' ({shared_count} shared, {extra_count} extra PAKs)"
+						)
+
+			# Extract preview images from archive (non-PAK image files)
+			if is_archive and path.exists() and premium_info.get("is_premium"):
+				_extract_premium_preview_images(conn, path, local_download_id)
+		except Exception as e:
+			logger.warning(f"[ingest] Premium detection failed (non-fatal): {e}", exc_info=True)
+
 		# Refresh conflict tables after finalizing mod IDs so new installs register
 		_safe_rebuild_conflicts(conn, active_only=None, purpose="ingest_mod")
 
@@ -1538,6 +1630,7 @@ def _ingest_resolved_download(
 			"ingested_assets": total_assets,
 			"download_id": local_download_id,
 		}
+		res.update(premium_info)
 		if source_url:
 			res["source_url"] = source_url
 		res.update(metadata_info)
@@ -1547,6 +1640,42 @@ def _ingest_resolved_download(
 			conn.close()
 		except Exception:
 			pass
+
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+
+def _extract_premium_preview_images(conn: sqlite3.Connection, archive_path: Path, local_download_id: int) -> int:
+	"""Extract non-PAK image files from an archive and store them as premium preview images."""
+	import base64
+	extracted = 0
+	try:
+		tmpdir = tempfile.mkdtemp(prefix="premium_img_")
+		extract_archive(str(archive_path), tmpdir)
+		for root, _, files in os.walk(tmpdir):
+			for fname in files:
+				ext = Path(fname).suffix.lower()
+				if ext not in _IMAGE_EXTENSIONS:
+					continue
+				fpath = Path(root) / fname
+				if fpath.stat().st_size > 10 * 1024 * 1024:  # Skip files > 10MB
+					continue
+				mime = f"image/{ext.lstrip('.')}"
+				if ext in (".jpg", ".jpeg"):
+					mime = "image/jpeg"
+				data = fpath.read_bytes()
+				conn.execute(
+					"""INSERT INTO premium_preview_images(local_download_id, filename, mime_type, data)
+					   VALUES(?, ?, ?, ?)""",
+					(local_download_id, fname, mime, data),
+				)
+				extracted += 1
+		conn.commit()
+		shutil.rmtree(tmpdir, ignore_errors=True)
+		if extracted:
+			logger.info(f"[ingest] Extracted {extracted} preview image(s) from premium archive")
+	except Exception as e:
+		logger.warning(f"[ingest] Failed to extract preview images: {e}")
+	return extracted
+
 
 def _load_canonical_names() -> set[str]:
 	"""Load character names from database instead of character_ids.json."""
@@ -3981,19 +4110,24 @@ def list_downloads(limit: int = 500) -> List[Dict[str, Any]]:
 		   latest.latest_uploaded_at,
 		   latest.latest_file_id,
 		   latest.latest_version_key,
-		   latest.file_name
+		   latest.file_name,
+		   l.source,
+		   l.linked_mod_id,
+		   l.premium_pak_count,
+		   l.shared_pak_count,
+		   l.extra_pak_count
 		FROM local_downloads l
-		LEFT JOIN mods m ON m.mod_id = l.mod_id
+		LEFT JOIN mods m ON m.mod_id = COALESCE(l.linked_mod_id, l.mod_id)
 		LEFT JOIN v_local_downloads_with_tags v ON v.download_id = l.id
-		LEFT JOIN v_mods_with_latest_by_version latest ON latest.mod_id = l.mod_id
+		LEFT JOIN v_mods_with_latest_by_version latest ON latest.mod_id = COALESCE(l.linked_mod_id, l.mod_id)
 		ORDER BY l.created_at DESC
 		LIMIT ?
 		""",
 		(limit,),
 	).fetchall()
-	
+
 	logger.info(f"[list_downloads] Query returned {len(rows)} rows (limit={limit})")
-	
+
 	out: List[Dict[str, Any]] = []
 	for (
 		dl_id,
@@ -4019,6 +4153,11 @@ def list_downloads(limit: int = 500) -> List[Dict[str, Any]]:
 		latest_file_id,
 		latest_version_key,
 		latest_file_name,
+		dl_source,
+		dl_linked_mod_id,
+		dl_premium_pak_count,
+		dl_shared_pak_count,
+		dl_extra_pak_count,
 	) in rows:
 		# contents / active paks parsing
 		try:
@@ -4100,6 +4239,11 @@ def list_downloads(limit: int = 500) -> List[Dict[str, Any]]:
 				"latest_file_name": latest_file_name,
 				"local_version_key": local_version_key,
 				"needs_update": needs_update,
+				"source": dl_source,
+				"linked_mod_id": dl_linked_mod_id,
+				"premium_pak_count": dl_premium_pak_count,
+				"shared_pak_count": dl_shared_pak_count,
+				"extra_pak_count": dl_extra_pak_count,
 			}
 		)
 	
@@ -5833,6 +5977,89 @@ def delete_mod_endpoint(mod_id: int) -> Dict[str, Any]:
 			"source_paths": source_paths,
 			"message": f"Successfully deleted mod {mod_id} and its associated downloads"
 		}
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+
+@app.get("/api/downloads/{download_id}/premium-images")
+def get_premium_images(download_id: int) -> List[Dict[str, Any]]:
+	"""Return base64-encoded preview images extracted from a premium mod zip."""
+	import base64
+	conn = get_db()
+	try:
+		cur = conn.cursor()
+		rows = cur.execute(
+			"SELECT id, filename, mime_type, data FROM premium_preview_images WHERE local_download_id = ? ORDER BY filename",
+			(download_id,),
+		).fetchall()
+		out = []
+		for row in rows:
+			out.append({
+				"id": row[0],
+				"filename": row[1],
+				"mime_type": row[2],
+				"data_url": f"data:{row[2]};base64,{base64.b64encode(row[3]).decode('ascii')}",
+			})
+		return out
+	finally:
+		try:
+			conn.close()
+		except Exception:
+			pass
+
+
+@app.post("/api/downloads/{download_id}/mark-premium")
+def mark_download_premium(download_id: int, payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+	"""Manually mark a download as premium and link it to an existing mod."""
+	linked_mod_id = payload.get("linked_mod_id")
+	if linked_mod_id is None:
+		raise HTTPException(status_code=400, detail="linked_mod_id is required")
+	conn = get_db()
+	try:
+		cur = conn.cursor()
+		row = cur.execute("SELECT contents FROM local_downloads WHERE id = ?", (download_id,)).fetchone()
+		if not row:
+			raise HTTPException(status_code=404, detail=f"Download {download_id} not found")
+		try:
+			contents = json.loads(row[0]) if row[0] else []
+		except Exception:
+			contents = []
+		pak_count = len(contents)
+
+		# Count shared PAKs with the linked mod
+		linked_rows = cur.execute(
+			"SELECT contents FROM local_downloads WHERE mod_id = ? AND id != ?",
+			(linked_mod_id, download_id),
+		).fetchall()
+		linked_paks: set = set()
+		for lr in linked_rows:
+			try:
+				lc = json.loads(lr[0]) if lr[0] else []
+				linked_paks.update(c.lower() for c in lc)
+			except Exception:
+				pass
+		my_paks = set(c.lower() for c in contents)
+		shared = len(my_paks & linked_paks)
+		extra = len(my_paks) - shared
+
+		cur.execute(
+			"""UPDATE local_downloads
+			   SET source = 'premium', linked_mod_id = ?,
+			       premium_pak_count = ?, shared_pak_count = ?, extra_pak_count = ?
+			   WHERE id = ?""",
+			(linked_mod_id, pak_count, shared, extra, download_id),
+		)
+		conn.commit()
+		return {"ok": True, "download_id": download_id, "linked_mod_id": linked_mod_id,
+				"premium_pak_count": pak_count, "shared_pak_count": shared, "extra_pak_count": extra}
+	except HTTPException:
+		raise
+	except Exception as e:
+		conn.rollback()
+		raise HTTPException(status_code=500, detail=str(e))
 	finally:
 		try:
 			conn.close()

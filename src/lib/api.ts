@@ -806,7 +806,12 @@ export type ApiDownload = {
   latest_file_name?: string | null;
   local_version_key?: string | null;
   needs_update?: boolean;
-  contains_adult_content?: boolean;
+  // Premium/Patreon mod fields
+  source?: string | null;
+  linked_mod_id?: number | null;
+  premium_pak_count?: number | null;
+  shared_pak_count?: number | null;
+  extra_pak_count?: number | null;
 };
 
 export interface ApiPakVersionStatus {
@@ -835,6 +840,24 @@ export interface ApiPakAsset {
 
 export async function listDownloads(limit = 500): Promise<ApiDownload[]> {
   return getJson<ApiDownload[]>(`/api/downloads?limit=${limit}`);
+}
+
+export type ApiPremiumImage = {
+  id: number;
+  filename: string;
+  mime_type: string;
+  data_url: string;
+};
+
+export async function getPremiumImages(downloadId: number): Promise<ApiPremiumImage[]> {
+  return getJson<ApiPremiumImage[]>(`/api/downloads/${downloadId}/premium-images`);
+}
+
+export async function markDownloadPremium(downloadId: number, linkedModId: number) {
+  return postJson<{ linked_mod_id: number }, { ok: boolean }>(
+    `/api/downloads/${downloadId}/mark-premium`,
+    { linked_mod_id: linkedModId },
+  );
 }
 
 export type ApiDownloadsSummary = {
