@@ -32,7 +32,7 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
         mod.name.toLowerCase().includes(q) ||
         mod.description.toLowerCase().includes(q) ||
         mod.author.toLowerCase().includes(q) ||
-        (mod.tags || []).some((t) => t.toLowerCase().includes(q))
+        (mod.tags || []).some((t) => t.toLowerCase().includes(q)),
     );
   }
 
@@ -70,7 +70,7 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
   };
   const compareSortKey = (
     a: { priority: number; timestamp: number },
-    b: { priority: number; timestamp: number }
+    b: { priority: number; timestamp: number },
   ) => {
     if (b.priority !== a.priority) return b.priority - a.priority;
     if (b.timestamp !== a.timestamp) return b.timestamp - a.timestamp;
@@ -94,7 +94,7 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
     case "Popular":
     case "Downloads":
       filteredMods.sort((a, b) =>
-        applyOrder((b.downloads || 0) - (a.downloads || 0))
+        applyOrder((b.downloads || 0) - (a.downloads || 0)),
       );
       break;
     case "Recent":
@@ -133,18 +133,18 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
       // Updated: sort by mods.updated_at (lastUpdatedRaw/lastUpdated), NULLs last
       filteredMods.sort(
         makeTimestampComparator((m) =>
-          toNullableTimestamp(m.lastUpdatedRaw ?? m.lastUpdated ?? null)
-        )
+          toNullableTimestamp(m.lastUpdatedRaw ?? m.lastUpdated ?? null),
+        ),
       );
       break;
     case "Rating":
       filteredMods.sort((a, b) =>
-        applyOrder((b.rating || 0) - (a.rating || 0))
+        applyOrder((b.rating || 0) - (a.rating || 0)),
       );
       break;
     case "Performance":
       filteredMods.sort((a, b) =>
-        applyOrder((b.performanceImpact || 0) - (a.performanceImpact || 0))
+        applyOrder((b.performanceImpact || 0) - (a.performanceImpact || 0)),
       );
       break;
     case "Name":
@@ -155,6 +155,14 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
         const categoryA = a.categoryTags?.[0] ?? a.category ?? "";
         const categoryB = b.categoryTags?.[0] ?? b.category ?? "";
         return applyOrder(categoryA.localeCompare(categoryB));
+      });
+      break;
+    case "Favourites":
+      filteredMods.sort((a, b) => {
+        const aFav = a.isFavorited ? 1 : 0;
+        const bFav = b.isFavorited ? 1 : 0;
+        if (bFav !== aFav) return applyOrder(bFav - aFav);
+        return a.name.localeCompare(b.name);
       });
       break;
     default:

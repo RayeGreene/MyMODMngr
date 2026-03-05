@@ -65,6 +65,7 @@ interface DownloadsSidebarProps {
   onCharacterToggle?: (character: string) => void;
   mods: Mod[];
   conflictsReloadToken?: number;
+  onRefreshMods?: () => void;
 }
 
 const categories = [
@@ -98,43 +99,6 @@ const calculateTotalSize = (mods: Mod[]): string => {
   return (totalBytes / 1024).toFixed(1) + " KB";
 };
 
-const getLastCheckTime = (mods: Mod[]): string => {
-  // Find the most recent lastUpdatedRaw or lastUpdated timestamp across all mods
-  let mostRecentTime = 0;
-  for (const mod of mods) {
-    const timestamp = mod.lastUpdatedRaw
-      ? new Date(mod.lastUpdatedRaw).getTime()
-      : mod.lastUpdated
-      ? new Date(mod.lastUpdated).getTime()
-      : 0;
-    if (timestamp > mostRecentTime) {
-      mostRecentTime = timestamp;
-    }
-  }
-
-  if (mostRecentTime === 0) {
-    return "Never";
-  }
-
-  const now = Date.now();
-  const diffMs = now - mostRecentTime;
-  const diffMins = Math.floor(diffMs / (1000 * 60));
-  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-  if (diffMins < 1) {
-    return "Just now";
-  } else if (diffMins < 60) {
-    return `${diffMins} min${diffMins !== 1 ? "s" : ""} ago`;
-  } else if (diffHours < 24) {
-    return `${diffHours} hour${diffHours !== 1 ? "s" : ""} ago`;
-  } else if (diffDays < 30) {
-    return `${diffDays} day${diffDays !== 1 ? "s" : ""} ago`;
-  }
-
-  return new Date(mostRecentTime).toLocaleDateString();
-};
-
 export function DownloadsSidebar({
   selectedCategory,
   onCategoryChange,
@@ -144,12 +108,13 @@ export function DownloadsSidebar({
   onCharacterToggle,
   mods,
   conflictsReloadToken = 0,
+  onRefreshMods,
 }: DownloadsSidebarProps) {
   const { theme } = useTheme();
   const isLightMode = theme === "light";
   const installedMods = useMemo(
     () => mods.filter((mod) => mod.isInstalled),
-    [mods]
+    [mods],
   );
 
   // Load character/skin map from database for proper tag identification
@@ -249,7 +214,7 @@ export function DownloadsSidebar({
           // If the current mod also tags any of the valid parents,
           // we assign the skin ONLY to those parents.
           const activeParentsInMod = validParents.filter((p) =>
-            characters.includes(p)
+            characters.includes(p),
           );
 
           // If we found specific parents in this mod, use them.
@@ -303,10 +268,10 @@ export function DownloadsSidebar({
   const sortedCharactersByCategory = useMemo(() => {
     const result: Record<string, string[]> = {};
     for (const [categoryId, characterMap] of Object.entries(
-      categoryCharacterHierarchy
+      categoryCharacterHierarchy,
     )) {
       result[categoryId] = Object.keys(characterMap).sort((a, b) =>
-        a.localeCompare(b)
+        a.localeCompare(b),
       );
     }
     return result;
@@ -325,7 +290,7 @@ export function DownloadsSidebar({
 
   // Track which characters are expanded to show their skins (default: all collapsed)
   const [expandedCharacters, setExpandedCharacters] = useState<Set<string>>(
-    new Set()
+    new Set(),
   );
 
   const toggleCharacterExpand = useCallback((character: string) => {
@@ -400,7 +365,7 @@ export function DownloadsSidebar({
               } else {
                 console.debug(
                   "[downloads-sidebar] mod reported needs_update but no pak rows",
-                  { modId }
+                  { modId },
                 );
               }
             } catch (e) {
@@ -408,7 +373,7 @@ export function DownloadsSidebar({
               flaggedForUpdate += 1;
               console.warn(
                 "[downloads-sidebar] failed to verify pak level status",
-                { modId, error: e }
+                { modId, error: e },
               );
             }
           }
@@ -424,7 +389,7 @@ export function DownloadsSidebar({
             `(${checked}/${uniqueModIds.length}) mods checked ...`,
             {
               id: toastId,
-            }
+            },
           );
         }
       }
@@ -442,7 +407,7 @@ export function DownloadsSidebar({
           : undefined;
       toast.success(
         `Finished checking ${checked} mod${checked === 1 ? "" : "s"}${suffix}.`,
-        { id: toastId, description: warningDescription, duration: 4000 }
+        { id: toastId, description: warningDescription, duration: 4000 },
       );
       // Refresh authoritative downloads summary after checks complete
       try {
@@ -453,52 +418,55 @@ export function DownloadsSidebar({
       } catch (err) {
         console.error(
           "Failed to refresh downloads summary after update check",
-          err
+          err,
         );
       } finally {
         setLoadingSummary(false);
       }
+      // Refresh mods list to reflect updated status for all mods
+      if (onRefreshMods) {
+        onRefreshMods();
+      }
     } finally {
       setIsCheckingUpdates(false);
     }
-  }, [isCheckingUpdates, uniqueModIds]);
+  }, [isCheckingUpdates, uniqueModIds, onRefreshMods]);
 
-  useEffect(() => {
-    if (!conflictModalOpen) return;
+  const fetchConflicts = useCallback(async () => {
     let cancelled = false;
-    async function load() {
+    try {
+      setLoadingConflicts(true);
       try {
-        setLoadingConflicts(true);
-        try {
-          await refreshConflicts();
-        } catch (err) {
-          if (!cancelled) {
-            const message =
-              err instanceof Error
-                ? err.message
-                : "Failed to refresh conflicts";
-            toast.error(message);
-          }
-          if (cancelled) return;
-        }
-        const data = await listConflicts(50, showActiveOnly);
-        if (!cancelled) setConflicts(data);
+        await refreshConflicts();
       } catch (err) {
         if (!cancelled) {
           const message =
-            err instanceof Error ? err.message : "Failed to load conflicts";
-          toast.error(message);
-          setConflicts([]);
+            err instanceof Error ? err.message : "Failed to refresh conflicts";
+          // toast.error(message); // optional: suppress noise
         }
-      } finally {
-        if (!cancelled) setLoadingConflicts(false);
       }
+      const data = await listConflicts(50, showActiveOnly);
+      if (!cancelled) {
+        setConflicts(data);
+        // Also update the sidebar badge count
+        setConflictCount(Array.isArray(data) ? data.length : 0);
+      }
+    } catch (err) {
+      if (!cancelled) {
+        const message =
+          err instanceof Error ? err.message : "Failed to load conflicts";
+        toast.error(message);
+        setConflicts([]);
+      }
+    } finally {
+      if (!cancelled) setLoadingConflicts(false);
     }
-    load();
-    return () => {
-      cancelled = true;
-    };
-  }, [conflictModalOpen, conflictsReloadToken, showActiveOnly]);
+  }, [showActiveOnly]);
+
+  useEffect(() => {
+    if (!conflictModalOpen) return;
+    fetchConflicts();
+  }, [conflictModalOpen, conflictsReloadToken, fetchConflicts]);
 
   // Lightweight effect to keep a conflict count for the sidebar button
   useEffect(() => {
@@ -649,7 +617,7 @@ export function DownloadsSidebar({
                       <CollapsibleContent className="space-y-2 mt-2">
                         {charactersForCategory.map((character) => {
                           const skins = Array.from(
-                            characterHierarchy[character] || new Set()
+                            characterHierarchy[character] || new Set(),
                           ).sort((a, b) => a.localeCompare(b));
 
                           // Count mods that have this character AND belong to the current category
@@ -689,7 +657,7 @@ export function DownloadsSidebar({
                                 <Checkbox
                                   id={`installed-character-${character}`}
                                   checked={selectedCharacters.includes(
-                                    character
+                                    character,
                                   )}
                                   onCheckedChange={() => {
                                     // Toggle character AND all its skins
@@ -742,7 +710,7 @@ export function DownloadsSidebar({
                                       // Check if THIS specific character-skin pair is selected
                                       const isSkinSelected =
                                         selectedCharacters.includes(
-                                          character
+                                          character,
                                         ) && selectedCharacters.includes(skin);
 
                                       return (
@@ -762,7 +730,7 @@ export function DownloadsSidebar({
                                                 // Add character if not already selected
                                                 if (
                                                   !selectedCharacters.includes(
-                                                    character
+                                                    character,
                                                   )
                                                 ) {
                                                   onCharacterToggle(character);
@@ -793,7 +761,7 @@ export function DownloadsSidebar({
                             className="w-full text-xs"
                             onClick={() => {
                               selectedCharacters.forEach((char) =>
-                                onCharacterToggle(char)
+                                onCharacterToggle(char),
                               );
                             }}
                           >
@@ -855,6 +823,9 @@ export function DownloadsSidebar({
             title={
               showActiveOnly ? "Active Mod Conflicts" : "All Mod Conflicts"
             }
+            onConflictStateChanged={fetchConflicts}
+            onRefreshMods={onRefreshMods}
+            mods={mods}
           />
           {conflictModalOpen && (
             <div className="mt-2 text-xs text-muted-foreground">
@@ -916,8 +887,8 @@ export function DownloadsSidebar({
               {loadingSummary
                 ? "Calculating..."
                 : downloadsSummary
-                ? downloadsSummary.total_size_human
-                : calculateTotalSize(installedMods)}
+                  ? downloadsSummary.total_size_human
+                  : calculateTotalSize(installedMods)}
             </span>
           </div>
           <div className="flex justify-between">
@@ -926,35 +897,37 @@ export function DownloadsSidebar({
               {loadingSummary
                 ? "..."
                 : downloadsSummary && downloadsSummary.last_check
-                ? (() => {
-                    try {
-                      const d = new Date(downloadsSummary.last_check as string);
-                      const now = Date.now();
-                      const diffMs = now - d.getTime();
-                      const diffMins = Math.floor(diffMs / (1000 * 60));
-                      if (diffMins < 1) return "Just now";
-                      if (diffMins < 60)
-                        return `${diffMins} min${
-                          diffMins !== 1 ? "s" : ""
-                        } ago`;
-                      const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
-                      if (diffHours < 24)
-                        return `${diffHours} hour${
-                          diffHours !== 1 ? "s" : ""
-                        } ago`;
-                      const diffDays = Math.floor(
-                        diffMs / (1000 * 60 * 60 * 24)
-                      );
-                      if (diffDays < 30)
-                        return `${diffDays} day${
-                          diffDays !== 1 ? "s" : ""
-                        } ago`;
-                      return d.toLocaleDateString();
-                    } catch (e) {
-                      return String(downloadsSummary.last_check);
-                    }
-                  })()
-                : getLastCheckTime(installedMods)}
+                  ? (() => {
+                      try {
+                        const d = new Date(
+                          downloadsSummary.last_check as string,
+                        );
+                        const now = Date.now();
+                        const diffMs = now - d.getTime();
+                        const diffMins = Math.floor(diffMs / (1000 * 60));
+                        if (diffMins < 1) return "Just now";
+                        if (diffMins < 60)
+                          return `${diffMins} min${
+                            diffMins !== 1 ? "s" : ""
+                          } ago`;
+                        const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+                        if (diffHours < 24)
+                          return `${diffHours} hour${
+                            diffHours !== 1 ? "s" : ""
+                          } ago`;
+                        const diffDays = Math.floor(
+                          diffMs / (1000 * 60 * 60 * 24),
+                        );
+                        if (diffDays < 30)
+                          return `${diffDays} day${
+                            diffDays !== 1 ? "s" : ""
+                          } ago`;
+                        return d.toLocaleDateString();
+                      } catch (e) {
+                        return String(downloadsSummary.last_check);
+                      }
+                    })()
+                  : "Never"}
             </span>
           </div>
         </div>

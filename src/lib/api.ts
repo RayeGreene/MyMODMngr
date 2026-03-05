@@ -5,7 +5,7 @@ export class ApiError extends Error {
 
   constructor(
     message: string,
-    options: { status: number; detail?: unknown; body?: unknown }
+    options: { status: number; detail?: unknown; body?: unknown },
   ) {
     super(message);
     this.name = "ApiError";
@@ -290,7 +290,7 @@ const BASE_URL =
 async function handleError(
   res: Response,
   method: string,
-  path: string
+  path: string,
 ): Promise<never> {
   let message = `${method} ${path} failed: ${res.status}`;
   let parsedBody: unknown = undefined;
@@ -380,7 +380,7 @@ async function getJson<T>(path: string): Promise<T> {
             hasDescription: !!(data as any)?.mod?.description,
             descriptionPreview: (data as any)?.mod?.description?.substring(
               0,
-              100
+              100,
             ),
           }),
     };
@@ -444,7 +444,7 @@ export async function listMods(limit = 100): Promise<ApiMod[]> {
 
 export async function listConflicts(
   limit = 20,
-  active = false
+  active = false,
 ): Promise<ApiConflict[]> {
   const path = active ? "/api/conflicts/active" : "/api/conflicts";
   return getJson<ApiConflict[]>(`${path}?limit=${limit}`);
@@ -455,7 +455,7 @@ export async function getHealth(): Promise<ApiHealthResponse> {
 }
 
 export async function addMod(
-  req: ApiAddModRequest
+  req: ApiAddModRequest,
 ): Promise<ApiAddModResponse> {
   return postJson<ApiAddModRequest, ApiAddModResponse>("/api/mods/add", req);
 }
@@ -483,7 +483,7 @@ export async function uploadModFile(file: File): Promise<ApiUploadModResponse> {
       message = undefined;
     }
     throw new Error(
-      message?.trim() || `Upload failed with status ${res.status}`
+      message?.trim() || `Upload failed with status ${res.status}`,
     );
   }
   return res.json();
@@ -493,30 +493,39 @@ export async function refreshConflicts(): Promise<{ ok: boolean }> {
   return postJson<{}, { ok: boolean }>("/api/refresh/conflicts", {});
 }
 
+export async function copyToDownloads(
+  sourcePath: string,
+): Promise<ApiUploadModResponse> {
+  return postJson<{ source_path: string }, ApiUploadModResponse>(
+    "/api/mods/copy-to-downloads",
+    { source_path: sourcePath },
+  );
+}
+
 export async function getSettings(): Promise<ApiSettings> {
   return getJson<ApiSettings>("/api/settings");
 }
 
 export async function updateSettings(
-  payload: ApiUpdateSettingsRequest
+  payload: ApiUpdateSettingsRequest,
 ): Promise<ApiSettings> {
   return putJson<ApiUpdateSettingsRequest, ApiSettings>(
     "/api/settings",
-    payload
+    payload,
   );
 }
 
 export async function runSettingsTask(
-  task: SettingsTask
+  task: SettingsTask,
 ): Promise<ApiSettingsTaskResponse> {
   return postJson<{ task: SettingsTask }, ApiSettingsTaskResponse>(
     "/api/settings/run-task",
-    { task }
+    { task },
   );
 }
 
 export async function getSettingsTaskJob(
-  jobId: string
+  jobId: string,
 ): Promise<ApiSettingsTaskResponse> {
   return getJson<ApiSettingsTaskResponse>(`/api/settings/tasks/${jobId}`);
 }
@@ -533,7 +542,7 @@ export async function getBootstrapStatus(): Promise<ApiBootstrapStatus> {
 
 export async function validatePath(
   field: string,
-  value: string
+  value: string,
 ): Promise<{
   ok: boolean;
   message: string;
@@ -565,7 +574,7 @@ export async function getNxmProtocolStatus(): Promise<NxmProtocolStatus> {
 }
 
 export async function registerNxmProtocol(
-  tauriPath: string
+  tauriPath: string,
 ): Promise<{ ok: boolean; message?: string; error?: string }> {
   return postJson<
     { tauri_path: string },
@@ -644,12 +653,12 @@ export async function getModDetails(modId: number): Promise<ApiModDetails> {
 
 export async function updateModDetails(
   modId: number,
-  data: { description?: string }
+  data: { description?: string },
 ): Promise<{ ok: boolean }> {
   try {
     return patchJson<{ description?: string }, { ok: boolean }>(
       `/api/mods/${modId}`,
-      data
+      data,
     );
   } catch (e) {
     console.warn("updateModDetails failed", e);
@@ -700,14 +709,14 @@ export type ApiModImagesResponse = {
 
 export async function fetchModImages(modId: number): Promise<ModImage[]> {
   const response = await getJson<ApiModImagesResponse>(
-    `/api/mods/${modId}/images`
+    `/api/mods/${modId}/images`,
   );
   return [...response.nexus_images, ...response.custom_images];
 }
 
 export async function uploadModImages(
   modId: number,
-  files: File[]
+  files: File[],
 ): Promise<{ ok: boolean; uploaded_count: number; image_ids: number[] }> {
   // Convert files to base64
   const images = await Promise.all(
@@ -729,7 +738,7 @@ export async function uploadModImages(
         filename: file.name,
         mimeType: file.type,
       };
-    })
+    }),
   );
 
   return postJson<
@@ -739,15 +748,15 @@ export async function uploadModImages(
 }
 
 export async function deleteModImage(
-  imageId: number
+  imageId: number,
 ): Promise<{ ok: boolean; deleted_id: number }> {
   return deleteJson<{ ok: boolean; deleted_id: number }>(
-    `/api/mods/images/${imageId}`
+    `/api/mods/images/${imageId}`,
   );
 }
 
 export async function getModCustomImagePreviews(
-  modIds: number[]
+  modIds: number[],
 ): Promise<Record<number, string>> {
   if (!modIds || modIds.length === 0) {
     return {};
@@ -797,6 +806,7 @@ export type ApiDownload = {
   latest_file_name?: string | null;
   local_version_key?: string | null;
   needs_update?: boolean;
+  contains_adult_content?: boolean;
 };
 
 export interface ApiPakVersionStatus {
@@ -843,7 +853,7 @@ export async function getDownloadsSummary(): Promise<ApiDownloadsSummary> {
 export async function setActivePaks(downloadId: number, active_paks: string[]) {
   return postJson<{ active_paks: string[] }, { ok: boolean }>(
     `/api/local_downloads/${downloadId}/set-active`,
-    { active_paks }
+    { active_paks },
   );
 }
 
@@ -852,7 +862,7 @@ export async function scanActive(): Promise<{ ok: boolean }> {
 }
 
 export async function getLocalDownload(
-  downloadId: number
+  downloadId: number,
 ): Promise<ApiDownload> {
   return getJson<ApiDownload>(`/api/local_downloads/${downloadId}`);
 }
@@ -862,7 +872,7 @@ export async function getPakVersionStatus(
     modId?: number | null;
     downloadIds?: number[];
     onlyNeedsUpdate?: boolean;
-  } = {}
+  } = {},
 ): Promise<ApiPakVersionStatus[]> {
   const search = new URLSearchParams();
   if (params.modId != null) {
@@ -883,25 +893,25 @@ export async function getPakVersionStatus(
 
 // By-name activation/deactivation (server-side convenience endpoints)
 export async function activateByName(
-  name: string
+  name: string,
 ): Promise<{ ok: boolean } & { copied?: string[] }> {
   return postJson<{ name: string }, { ok: boolean; copied?: string[] }>(
     `/api/local_downloads/activate-by-name`,
-    { name }
+    { name },
   );
 }
 
 export async function deactivateByName(
-  name: string
+  name: string,
 ): Promise<{ ok: boolean } & { removed?: string[] }> {
   return postJson<{ name: string }, { ok: boolean; removed?: string[] }>(
     `/api/local_downloads/deactivate-by-name`,
-    { name }
+    { name },
   );
 }
 
 export async function getPakAssets(
-  downloadIds: number[]
+  downloadIds: number[],
 ): Promise<ApiPakAsset[]> {
   if (!downloadIds || downloadIds.length === 0) {
     return [];
@@ -955,7 +965,7 @@ export async function updateMod(
     desiredPaks?: string[];
     force?: boolean;
     handoffId?: string;
-  } = {}
+  } = {},
 ): Promise<ApiUpdateModResponse> {
   const payload: Record<string, unknown> = {};
   if (typeof options.fileId === "number") payload.file_id = options.fileId;
@@ -969,16 +979,16 @@ export async function updateMod(
   }
   return postJson<Record<string, unknown>, ApiUpdateModResponse>(
     `/api/mods/${modId}/update`,
-    payload
+    payload,
   );
 }
 
 export async function checkModUpdate(
-  modId: number
+  modId: number,
 ): Promise<ApiCheckModUpdateResponse> {
   return postJson<Record<string, never>, ApiCheckModUpdateResponse>(
     `/api/mods/${modId}/check-update`,
-    {}
+    {},
   );
 }
 
@@ -993,7 +1003,7 @@ export type DeleteLocalDownloadsResponse = {
 
 export async function deleteLocalDownloads(
   downloadIds: number[],
-  modId?: number | null
+  modId?: number | null,
 ): Promise<DeleteLocalDownloadsResponse> {
   const payload: Record<string, unknown> = {};
   if (Array.isArray(downloadIds) && downloadIds.length > 0) {
@@ -1007,7 +1017,7 @@ export async function deleteLocalDownloads(
   }
   return postJson<Record<string, unknown>, DeleteLocalDownloadsResponse>(
     `/api/local_downloads/delete`,
-    payload
+    payload,
   );
 }
 
@@ -1017,16 +1027,16 @@ export async function listNxmHandoffs(): Promise<ApiNxmHandoffSummary[]> {
 }
 
 export async function getNxmHandoff(
-  handoffId: string
+  handoffId: string,
 ): Promise<{ ok: boolean; handoff: ApiNxmHandoffSummary }> {
   const encoded = encodeURIComponent(handoffId);
   return getJson<{ ok: boolean; handoff: ApiNxmHandoffSummary }>(
-    `/api/nxm/handoff/${encoded}`
+    `/api/nxm/handoff/${encoded}`,
   );
 }
 
 export async function previewNxmHandoff(
-  handoffId: string
+  handoffId: string,
 ): Promise<ApiNxmPreview> {
   const encoded = encodeURIComponent(handoffId);
   return getJson<ApiNxmPreview>(`/api/nxm/handoff/${encoded}/preview`);
@@ -1034,7 +1044,7 @@ export async function previewNxmHandoff(
 
 export async function ingestNxmHandoff(
   handoffId: string,
-  options: ApiNxmIngestOptions = {}
+  options: ApiNxmIngestOptions = {},
 ): Promise<ApiNxmIngestResponse> {
   const payload: Record<string, unknown> = {};
   if (typeof options.fileId === "number") {
@@ -1052,7 +1062,7 @@ export async function ingestNxmHandoff(
   const encoded = encodeURIComponent(handoffId);
   return postJson<Record<string, unknown>, ApiNxmIngestResponse>(
     `/api/nxm/handoff/${encoded}/ingest`,
-    payload
+    payload,
   );
 }
 
@@ -1062,7 +1072,7 @@ export async function getCharacters(): Promise<Character[]> {
 }
 
 export async function getCharacterSkins(
-  characterId: string
+  characterId: string,
 ): Promise<CharacterSkin[]> {
   return getJson<CharacterSkin[]>(`/api/characters/${characterId}/skins`);
 }
@@ -1070,19 +1080,19 @@ export async function getCharacterSkins(
 export async function rebuildCharacterData(): Promise<RebuildCharacterDataResponse> {
   return postJson<{}, RebuildCharacterDataResponse>(
     "/api/rebuild-character-data",
-    {}
+    {},
   );
 }
 
 export async function lookupTags(tags: string[]): Promise<TagLookupResponse> {
   return postJson<TagLookupRequest, TagLookupResponse>(
     "/api/characters/lookup-tags",
-    { tags }
+    { tags },
   );
 }
 
 export async function dismissNxmHandoff(
-  handoffId: string
+  handoffId: string,
 ): Promise<ApiNxmHandoffSummary> {
   const encoded = encodeURIComponent(handoffId);
   const response = await deleteJson<{
@@ -1093,10 +1103,27 @@ export async function dismissNxmHandoff(
 }
 
 export async function submitNxmHandoff(
-  nxmUri: string
+  nxmUri: string,
 ): Promise<ApiSubmitNxmHandoffResponse> {
   return postJson<{ nxm: string }, ApiSubmitNxmHandoffResponse>(
     `/api/nxm/handoff`,
-    { nxm: nxmUri }
+    { nxm: nxmUri },
   );
+}
+
+// Favourites
+export async function toggleFavourite(
+  modId: number,
+): Promise<{ ok: boolean; favourited: boolean }> {
+  return postJson<{ mod_id: number }, { ok: boolean; favourited: boolean }>(
+    "/api/favourites/toggle",
+    { mod_id: modId },
+  );
+}
+
+export async function fetchFavourites(): Promise<number[]> {
+  const response = await getJson<{ ok: boolean; mod_ids: number[] }>(
+    "/api/favourites",
+  );
+  return response.mod_ids;
 }

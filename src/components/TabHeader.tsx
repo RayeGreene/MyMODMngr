@@ -52,26 +52,7 @@ export function TabHeader({
           </Button>
         </div>
 
-        {/* Right-side: AppHeader status indicators + actions (migrated) */}
         <div className="flex items-center gap-6">
-          <div className="flex items-center gap-4 text-sm">
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground">Installed:</span>
-              <Badge variant="secondary">{downloadsCount}</Badge>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground">Active:</span>
-              <Badge variant="secondary">{activeModsCount}</Badge>
-            </div>
-            {updatesCount > 0 && (
-              <div className="flex items-center gap-2">
-                <Bell className="w-4 h-4 text-destructive" />
-                <span className="text-destructive">
-                  {updatesCount} update{updatesCount !== 1 ? "s" : ""}
-                </span>
-              </div>
-            )}
-          </div>
 
           <div className="flex items-center gap-2">
             {onOpenBootstrap && (

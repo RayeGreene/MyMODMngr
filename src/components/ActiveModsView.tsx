@@ -14,6 +14,7 @@ interface ActiveModsViewProps {
   onDisableAll: () => void;
   onEnableAll: () => void;
   onUpdate: (modId: string) => void | Promise<void>;
+  onCheckUpdate: (modId: string) => void | Promise<void>;
   onUninstall: (modId: string) => void | Promise<void>;
   onFavorite: (modId: string) => void;
   selectedCategory: string;
@@ -27,6 +28,7 @@ interface ActiveModsViewProps {
 export function ActiveModsView({
   mods,
   onUpdate,
+  onCheckUpdate,
   onUninstall,
   onFavorite,
   selectedCategory,
@@ -73,7 +75,7 @@ export function ActiveModsView({
       (mod) =>
         (Array.isArray(mod.categoryTags) &&
           mod.categoryTags.includes(selectedCategory)) ||
-        categoriesMatchTag(mod.tags, selectedCategory)
+        categoriesMatchTag(mod.tags, selectedCategory),
     );
   }
 
@@ -91,7 +93,7 @@ export function ActiveModsView({
       // Check which selected tags match this mod's character vs skins
       const matchesCharacter = selectedCharacters.includes(modCharacter);
       const matchingSkins = selectedCharacters.filter((tag) =>
-        modSkins.includes(tag)
+        modSkins.includes(tag),
       );
 
       // Logic: If character is selected, show all its mods (or filter by skins)
@@ -104,7 +106,7 @@ export function ActiveModsView({
         // Check if we have ANY skin tags selected at all
         const hasAnySkinSelection = selectedCharacters.some(
           (tag) =>
-            !nonCategoryTags.includes(tag) || nonCategoryTags.indexOf(tag) > 0
+            !nonCategoryTags.includes(tag) || nonCategoryTags.indexOf(tag) > 0,
         );
         // If no skin-specific filtering, show all character mods
         return !hasAnySkinSelection || matchingSkins.length > 0;
@@ -122,7 +124,7 @@ export function ActiveModsView({
         mod.name.toLowerCase().includes(query) ||
         mod.description.toLowerCase().includes(query) ||
         mod.author.toLowerCase().includes(query) ||
-        mod.tags.some((tag) => tag.toLowerCase().includes(query))
+        mod.tags.some((tag) => tag.toLowerCase().includes(query)),
     );
   }
 
@@ -160,7 +162,7 @@ export function ActiveModsView({
   };
   const compareSortKey = (
     a: { priority: number; timestamp: number },
-    b: { priority: number; timestamp: number }
+    b: { priority: number; timestamp: number },
   ) => {
     if (b.priority !== a.priority) return b.priority - a.priority;
     if (b.timestamp !== a.timestamp) return b.timestamp - a.timestamp;
@@ -183,7 +185,7 @@ export function ActiveModsView({
   switch (sortBy) {
     case "Popular":
       filteredMods.sort((a, b) =>
-        applyOrder((b.downloads || 0) - (a.downloads || 0))
+        applyOrder((b.downloads || 0) - (a.downloads || 0)),
       );
       break;
     case "Recent":
@@ -222,23 +224,23 @@ export function ActiveModsView({
       // Updated: sort by mods.updated_at (lastUpdatedRaw/lastUpdated), NULLs last
       filteredMods.sort(
         makeTimestampComparator((m) =>
-          toNullableTimestamp(m.lastUpdatedRaw ?? m.lastUpdated ?? null)
-        )
+          toNullableTimestamp(m.lastUpdatedRaw ?? m.lastUpdated ?? null),
+        ),
       );
       break;
     case "Rating":
       filteredMods.sort((a, b) =>
-        applyOrder((b.rating || 0) - (a.rating || 0))
+        applyOrder((b.rating || 0) - (a.rating || 0)),
       );
       break;
     case "Downloads":
       filteredMods.sort((a, b) =>
-        applyOrder((b.downloads || 0) - (a.downloads || 0))
+        applyOrder((b.downloads || 0) - (a.downloads || 0)),
       );
       break;
     case "Performance":
       filteredMods.sort((a, b) =>
-        applyOrder((b.performanceImpact || 0) - (a.performanceImpact || 0))
+        applyOrder((b.performanceImpact || 0) - (a.performanceImpact || 0)),
       );
       break;
     case "Name":
@@ -251,16 +253,24 @@ export function ActiveModsView({
         return applyOrder(categoryA.localeCompare(categoryB));
       });
       break;
+    case "Favourites":
+      filteredMods.sort((a, b) => {
+        const aFav = a.isFavorited ? 1 : 0;
+        const bFav = b.isFavorited ? 1 : 0;
+        if (bFav !== aFav) return applyOrder(bFav - aFav);
+        return a.name.localeCompare(b.name);
+      });
+      break;
     default:
       break;
   }
 
   // Separate active and inactive for display
   const filteredActiveMods = filteredMods.filter(
-    (mod) => mod.isActive !== false
+    (mod) => mod.isActive !== false,
   );
   const filteredInactiveMods = filteredMods.filter(
-    (mod) => mod.isActive === false
+    (mod) => mod.isActive === false,
   );
 
   return (
@@ -347,6 +357,7 @@ export function ActiveModsView({
                       viewMode={viewMode}
                       onUninstall={onUninstall}
                       onUpdate={onUpdate}
+                      onCheckUpdate={onCheckUpdate}
                       onView={(m) => {
                         setSelectedMod(m);
                         setIsModalOpen(true);
@@ -378,6 +389,7 @@ export function ActiveModsView({
                       viewMode={viewMode}
                       onUninstall={onUninstall}
                       onUpdate={onUpdate}
+                      onCheckUpdate={onCheckUpdate}
                       onView={(m) => {
                         setSelectedMod(m);
                         setIsModalOpen(true);

@@ -39,7 +39,7 @@ def parse_args(argv=None):
 
 
 def extract_archive(archive_path: str, dest_dir: str) -> None:
-    # Delegate to the shared 7-Zip based extractor for consistency with the rest of the app.
+    # Delegate to the shared archive extractor for consistency with the rest of the app."
     lower = archive_path.lower()
     if not (lower.endswith(".rar") or lower.endswith(".7z")):
         raise ValueError("Unsupported archive type; expected .rar or .7z")

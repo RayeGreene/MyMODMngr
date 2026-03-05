@@ -17,8 +17,6 @@ import {
   Trash2,
   RefreshCw,
   Eye,
-  Calendar,
-  User,
   Heart,
   AlertTriangle,
   CheckCircle,
@@ -26,12 +24,14 @@ import {
 import type { Mod } from "./ModCard";
 import { computeTagDisplay } from "../lib/tagDisplay";
 import TagList from "./TagList";
+import { useNsfwFilter } from "./NSFWFilterProvider";
 
 interface InstalledModCardProps {
   mod: Mod;
   viewMode: "grid" | "list";
   onUninstall: (modId: string) => void | Promise<void>;
   onUpdate: (modId: string) => void | Promise<void>;
+  onCheckUpdate: (modId: string) => void | Promise<void>;
   onView: (mod: Mod) => void;
   onFavorite: (modId: string) => void;
 }
@@ -41,17 +41,24 @@ export function InstalledModCard({
   viewMode,
   onUninstall,
   onUpdate,
+  onCheckUpdate,
   onView,
   onFavorite,
 }: InstalledModCardProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [isUninstalling, setIsUninstalling] = useState(false);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+
+  // NSFW blur filter
+  const { nsfwBlurEnabled } = useNsfwFilter();
+  const shouldBlur = mod.containsAdultContent && nsfwBlurEnabled;
+
   const debugCards =
     typeof window !== "undefined" &&
     window.localStorage.getItem("mm-debug-cards") === "1";
   const { visible: displayTags } = computeTagDisplay(
     mod.tags,
-    mod.categoryTags?.[0] ?? mod.category
+    mod.categoryTags?.[0] ?? mod.category,
   );
 
   // Use lightweight TagList to avoid expensive per-resize measurements.
@@ -79,9 +86,9 @@ export function InstalledModCard({
   const avatarCandidates = Array.from(
     new Set(
       [mod.authorAvatar, fallbackAvatarSrc, pngAvatarSrc].filter(
-        (value): value is string => Boolean(value)
-      )
-    )
+        (value): value is string => Boolean(value),
+      ),
+    ),
   );
 
   const authorAvatarSrc = avatarCandidates[0];
@@ -154,6 +161,7 @@ export function InstalledModCard({
                     src={mod.images[0]}
                     alt={mod.name}
                     className="w-full h-full object-cover"
+                    style={shouldBlur ? { filter: "blur(4px)" } : undefined}
                   />
                   {(mod.hasUpdate || mod.isUpdating) && (
                     <div className="absolute -top-1 -right-1 w-4 h-4 bg-destructive rounded-full flex items-center justify-center">
@@ -200,6 +208,28 @@ export function InstalledModCard({
                     <Heart
                       className={`w-4 h-4 ${
                         mod.isFavorited ? "fill-current" : ""
+                      }`}
+                    />
+                  </Button>
+
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={async () => {
+                      setIsCheckingUpdate(true);
+                      try {
+                        await Promise.resolve(onCheckUpdate(mod.id));
+                      } finally {
+                        setIsCheckingUpdate(false);
+                      }
+                    }}
+                    disabled={isCheckingUpdate || mod.isUpdating}
+                    className="shrink-0"
+                    title="Check for update"
+                  >
+                    <RefreshCw
+                      className={`w-3 h-3${
+                        isCheckingUpdate ? " animate-spin" : ""
                       }`}
                     />
                   </Button>
@@ -262,7 +292,13 @@ export function InstalledModCard({
               src={mod.images[0]}
               alt={mod.name}
               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+              style={shouldBlur ? { filter: "blur(20px)" } : undefined}
             />
+            {shouldBlur && (
+              <div className="absolute top-2 right-2 flex items-center justify-center pointer-events-none z-10">
+                <img src="/icons/18-plus.svg" alt="18+" className="w-8 h-8" />
+              </div>
+            )}
 
             {(mod.hasUpdate || mod.isUpdating) && (
               <div className="absolute top-2 left-2 bg-destructive text-destructive-foreground px-2 py-1 rounded-md text-xs font-medium flex items-center gap-1">
@@ -296,10 +332,10 @@ export function InstalledModCard({
 
           <div
             className="flex flex-col flex-1 h-full"
-            style={{ padding: "10px 6px 16px 16px" }}
+            style={{ padding: "10px 6px 16px 6px" }}
           >
             <div className="flex-1 flex flex-col justify-between h-full">
-              <div>
+              <div style={{ paddingLeft: "10px" }}>
                 <div className="flex items-start justify-between mb-2">
                   <div className="flex-1 min-w-0">
                     <h3
@@ -358,7 +394,7 @@ export function InstalledModCard({
                           .split("|")
                           .filter(Boolean);
                         const currentIndex = Number(
-                          img.dataset.avatarIndex || "0"
+                          img.dataset.avatarIndex || "0",
                         );
                         const nextIndex = currentIndex + 1;
                         if (nextIndex < candidates.length) {
@@ -373,7 +409,7 @@ export function InstalledModCard({
                                 attempted: img.src,
                                 nextSrc,
                                 nextIndex,
-                              }
+                              },
                             );
                           }
                           img.src = nextSrc;
@@ -386,7 +422,7 @@ export function InstalledModCard({
                               modId: mod.id,
                               name: mod.name,
                               candidates,
-                            }
+                            },
                           );
                         }
                         img.dataset.avatarIndex = String(candidates.length);
@@ -404,9 +440,8 @@ export function InstalledModCard({
                         mod.author || "unknown"
                       }`;
                       try {
-                        const { openInBrowser } = await import(
-                          "../lib/tauri-utils"
-                        );
+                        const { openInBrowser } =
+                          await import("../lib/tauri-utils");
                         await openInBrowser(modUrl);
                       } catch (error) {
                         console.error("Failed to open mod page:", error);
@@ -439,6 +474,28 @@ export function InstalledModCard({
                 )}
               </div>
               <div className="flex gap-2 mt-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={async (ev) => {
+                    ev.stopPropagation();
+                    setIsCheckingUpdate(true);
+                    try {
+                      await Promise.resolve(onCheckUpdate(mod.id));
+                    } finally {
+                      setIsCheckingUpdate(false);
+                    }
+                  }}
+                  disabled={isCheckingUpdate || mod.isUpdating}
+                  className="shrink-0"
+                  title="Check for update"
+                >
+                  <RefreshCw
+                    className={`w-4 h-4${
+                      isCheckingUpdate ? " animate-spin" : ""
+                    }`}
+                  />
+                </Button>
                 {mod.hasUpdate || mod.isUpdating ? (
                   <Button
                     variant="default"

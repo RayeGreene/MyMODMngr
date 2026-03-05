@@ -185,7 +185,7 @@ fn persist_add_to_user_path(dir_path: &str) -> Result<(bool, String), String> {
     Ok((false, "Added to user PATH".to_string()))
 }
 
-// Tauri command to detect archive tool (7-Zip or WinRAR) - Pure Rust implementation
+// Tauri command to detect archive tool (WinRAR) - Pure Rust implementation
 #[tauri::command]
 async fn detect_archive_tool() -> Result<serde_json::Value, String> {
     #[cfg(not(target_os = "windows"))]
@@ -244,50 +244,10 @@ async fn detect_archive_tool() -> Result<serde_json::Value, String> {
             }
         }
         
-        // Try 7-Zip as fallback
-        if let Some(sevenzip_dir) = find_install_dir("7-zip") {
-            let sevenzip_exe = Path::new(&sevenzip_dir).join("7z.exe");
-            
-            if sevenzip_exe.exists() {
-                match persist_add_to_user_path(&sevenzip_dir) {
-                    Ok((already_in_path, _message)) => {
-                        let path_status = if already_in_path {
-                            "already in user PATH".to_string()
-                        } else {
-                            "added to user PATH (persistent)".to_string()
-                        };
-                        
-                        return Ok(serde_json::json!({
-                            "success": true,
-                            "name": "7-Zip",
-                            "path": sevenzip_dir,
-                            "executable": sevenzip_exe.to_string_lossy().to_string(),
-                            "already_in_path": already_in_path,
-                            "path_status": path_status,
-                            "message": format!("7-Zip detected at {} and {}", sevenzip_dir, path_status)
-                        }));
-                    }
-                    Err(e) => {
-                        return Ok(serde_json::json!({
-                            "success": false,
-                            "message": format!("7-Zip found but PATH update failed: {}", e),
-                            "already_in_path": false
-                        }));
-                    }
-                }
-            } else {
-                return Ok(serde_json::json!({
-                    "success": false,
-                    "message": "7-Zip installation found but 7z.exe not detected",
-                    "already_in_path": false
-                }));
-            }
-        }
-        
         // Not found
         Ok(serde_json::json!({
             "success": false,
-            "message": "Neither 7-Zip nor WinRAR installation found",
+            "message": "WinRAR installation not found",
             "already_in_path": false
         }))
     }
@@ -426,35 +386,10 @@ fn get_archive_tool_info() -> Result<serde_json::Value, String> {
             }));
         }
         
-        // Try 7-Zip as fallback
-        if let Some(sevenzip_dir) = find_install_dir("7-zip") {
-            let sevenzip_exe = Path::new(&sevenzip_dir).join("7z.exe");
-            
-            if sevenzip_exe.exists() {
-                // Try to add to PATH if not already there (don't fail if it can't)
-                let _ = persist_add_to_user_path(&sevenzip_dir);
-                
-                return Ok(serde_json::json!({
-                    "success": true,
-                    "name": "7-Zip",
-                    "path": sevenzip_dir,
-                    "executable": sevenzip_exe.to_string_lossy().to_string(),
-                    "rar_tool_path": sevenzip_exe.to_string_lossy().to_string(),
-                    "message": format!("7-Zip found at: {}", sevenzip_exe.to_string_lossy())
-                }));
-            } else {
-                return Ok(serde_json::json!({
-                    "success": false,
-                    "message": "7-Zip installation found but 7z.exe not detected",
-                    "rar_tool_path": None::<String>
-                }));
-            }
-        }
-        
         // Not found
         Ok(serde_json::json!({
             "success": false,
-            "message": "Neither 7-Zip nor WinRAR installation found",
+            "message": "WinRAR installation not found",
             "rar_tool_path": None::<String>
         }))
     }

@@ -6,6 +6,7 @@ import { Button } from "./ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Download, Star, Eye, Heart } from "lucide-react";
 import TagList from "./TagList";
+import { useNsfwFilter } from "./NSFWFilterProvider";
 
 export interface Mod {
   id: string;
@@ -49,6 +50,7 @@ export interface Mod {
   needsUpdate?: boolean;
   isUpdating?: boolean;
   updateError?: string | null;
+  containsAdultContent?: boolean;
 }
 
 interface ModCardProps {
@@ -66,6 +68,19 @@ function ModCardInner({
   onFavorite,
   onView,
 }: ModCardProps) {
+  // NSFW blur filter
+  const { nsfwBlurEnabled } = useNsfwFilter();
+  const shouldBlur = mod.containsAdultContent && nsfwBlurEnabled;
+
+  // Debug logging for NSFW blur
+  if (mod.containsAdultContent) {
+    console.log("[ModCard] NSFW mod detected:", mod.name, {
+      containsAdultContent: mod.containsAdultContent,
+      nsfwBlurEnabled,
+      shouldBlur,
+    });
+  }
+
   // Memoize computed tag display to avoid recalculating on every parent render
   // Tag rendering is delegated to `TagList` which will compute and re-render
   // itself when necessary (including on resize). This keeps heavy tag math
@@ -83,9 +98,9 @@ function ModCardInner({
     const candidates = Array.from(
       new Set(
         [mod.authorAvatar, fallbackAvatarSrc, pngAvatarSrc].filter(
-          (v): v is string => Boolean(v)
-        )
-      )
+          (v): v is string => Boolean(v),
+        ),
+      ),
     );
     return { avatarCandidates: candidates, authorAvatarSrc: candidates[0] };
   }, [mod.authorAvatar, mod.authorMemberId]);
@@ -125,12 +140,20 @@ function ModCardInner({
         <div className="p-2">
           <div className="flex gap-3">
             <div className="p-1">
-              <div className="w-8 h-8 bg-muted rounded-lg overflow-hidden flex-shrink-0">
+              <div className="w-8 h-8 bg-muted rounded-lg overflow-hidden flex-shrink-0 relative">
                 <img
                   src={mod.images[0]}
                   alt={mod.name}
                   className="w-full h-full object-cover"
+                  style={shouldBlur ? { filter: "blur(4px)" } : undefined}
                 />
+                {shouldBlur && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/30">
+                    <span className="text-[6px] font-bold text-white/80">
+                      18+
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -187,7 +210,18 @@ function ModCardInner({
             src={mod.images[0]}
             alt={mod.name}
             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+            style={shouldBlur ? { filter: "blur(20px)" } : undefined}
           />
+          {shouldBlur && (
+            <div className="absolute top-2 right-2 pointer-events-none z-10">
+              <span
+                className="text-xs font-bold text-white px-2 py-0.5 rounded"
+                style={{ backgroundColor: "#e84545" }}
+              >
+                NSFW
+              </span>
+            </div>
+          )}
           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
             <Button
               variant="secondary"

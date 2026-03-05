@@ -11,9 +11,18 @@ import {
   ArrowUpDown,
   Moon,
   Sun,
+  X,
+  ChevronDown,
 } from "lucide-react";
-// Removed dropdown imports
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+} from "./ui/dropdown-menu";
 import { useTheme } from "./ThemeProvider";
+import { useNsfwFilter } from "./NSFWFilterProvider";
 
 interface SearchHeaderProps {
   searchQuery: string;
@@ -41,20 +50,23 @@ export function SearchHeader({
   onModAdded,
 }: SearchHeaderProps) {
   const { theme, toggleTheme } = useTheme();
+  const { nsfwBlurEnabled, toggleNsfwBlur } = useNsfwFilter();
   const isDark = theme === "dark";
   const [addModOpen, setAddModOpen] = useState(false);
 
-  // Sort options to cycle through
-  const sortOptions = ["Popular", "Recent", "Updated", "Rating"];
-  const currentSortIndex = sortOptions.indexOf(sortBy);
-  const handleSortClick = () => {
-    const nextIndex = (currentSortIndex + 1) % sortOptions.length;
-    onSortChange(sortOptions[nextIndex]);
-  };
+  // Sort options for the dropdown
+  const sortOptions = [
+    "Name",
+    "Recent",
+    "Updated",
+    "Popular",
+    "Rating",
+    "Favourites",
+  ];
 
   // Manage ascending/descending sort order (controlled if prop provided)
   const [orderState, setOrderState] = useState<"asc" | "desc">(
-    sortOrder ?? "desc"
+    sortOrder ?? "desc",
   );
 
   useEffect(() => {
@@ -78,15 +90,39 @@ export function SearchHeader({
             placeholder="Search mods..."
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
-            className="pl-10"
+            className="pl-10 pr-8"
           />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => onSearchChange("")}
+              className="absolute right-2 top-1/2 transform -translate-y-1/2 p-1 rounded-full hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+              aria-label="Clear search"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
         </div>
 
-        {/* Sort Button (cycles on click) */}
-        <Button variant="outline" className="gap-2" onClick={handleSortClick}>
-          <SlidersHorizontal className="w-4 h-4" />
-          Sort: {sortBy}
-        </Button>
+        {/* Sort Dropdown */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" className="gap-2">
+              <SlidersHorizontal className="w-4 h-4" />
+              Sort: {sortBy}
+              <ChevronDown className="w-4 h-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start">
+            <DropdownMenuRadioGroup value={sortBy} onValueChange={onSortChange}>
+              {sortOptions.map((option) => (
+                <DropdownMenuRadioItem key={option} value={option}>
+                  {option}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         {/* Sort order toggle (asc/desc) placed to the right of Sort button */}
         <Button
@@ -137,6 +173,34 @@ export function SearchHeader({
 
         <Button variant="outline" size="sm" onClick={toggleTheme}>
           {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+        </Button>
+
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={toggleNsfwBlur}
+          title={
+            nsfwBlurEnabled
+              ? "NSFW content is blurred (click to show)"
+              : "NSFW content is visible (click to blur)"
+          }
+          className="relative px-2"
+          style={!nsfwBlurEnabled ? { border: "2px solid #ef4444" } : undefined}
+        >
+          <img
+            src="/icons/18-plus.svg"
+            alt="18+"
+            className="w-4 h-4"
+            style={{ filter: "brightness(0) invert(1)" }}
+          />
+          {nsfwBlurEnabled && (
+            <span className="absolute inset-0 flex items-center justify-center">
+              <span
+                className="w-[70%] h-0.5 rotate-[-20deg] rounded-full"
+                style={{ backgroundColor: "#ef4444" }}
+              />
+            </span>
+          )}
         </Button>
       </div>
       {/* Add Mods Modal */}
