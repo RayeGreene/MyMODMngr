@@ -49,6 +49,12 @@ export interface Mod {
   needsUpdate?: boolean;
   isUpdating?: boolean;
   updateError?: string | null;
+  // Premium / Patreon mod fields
+  source?: string | null;
+  isPremium?: boolean;
+  extraPakCount?: number | null;
+  premiumPakCount?: number | null;
+  sharedPakCount?: number | null;
 }
 
 interface ModCardProps {
@@ -142,6 +148,11 @@ function ModCardInner({
                     onClick={() => onView(mod)}
                   >
                     {mod.name}
+                    {mod.isPremium && (
+                      <span className="ml-2 px-1.5 py-0.5 text-[10px] font-semibold rounded bg-amber-500 text-white align-middle">
+                        PREMIUM{mod.extraPakCount != null && mod.extraPakCount > 0 ? ` +${mod.extraPakCount}` : ""}
+                      </span>
+                    )}
                   </h3>
                 </div>
 
@@ -199,7 +210,15 @@ function ModCardInner({
               View Details
             </Button>
           </div>
-          {/* No main category badge; rely on tag list */}
+          {/* Source badge */}
+          {mod.isPremium && (
+            <span className="absolute top-2 left-2 px-2 py-0.5 text-xs font-semibold rounded bg-amber-500 text-white shadow">
+              PREMIUM
+              {mod.extraPakCount != null && mod.extraPakCount > 0 && (
+                <span className="ml-1 opacity-80">+{mod.extraPakCount} PAK{mod.extraPakCount > 1 ? "s" : ""}</span>
+              )}
+            </span>
+          )}
           <Button
             variant="ghost"
             size="sm"

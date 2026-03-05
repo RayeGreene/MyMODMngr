@@ -1328,6 +1328,12 @@ export default function App() {
       needsUpdate: hasUpdate,
       isUpdating: false,
       updateError: null,
+      // Premium mod info
+      source: d.source ?? null,
+      isPremium: d.source === "premium" || (d.extra_pak_count != null && d.extra_pak_count > 0),
+      extraPakCount: d.extra_pak_count ?? null,
+      premiumPakCount: d.premium_pak_count ?? null,
+      sharedPakCount: d.shared_pak_count ?? null,
     } as any;
   }
 
@@ -1386,7 +1392,9 @@ export default function App() {
     };
 
     for (const d of downloads) {
-      if (d.mod_id == null) {
+      // Premium downloads with a linked_mod_id group under that mod
+      const effectiveModId = d.linked_mod_id ?? d.mod_id;
+      if (effectiveModId == null) {
         const key = (d.mod_name || d.name || "").toLowerCase().trim();
         if (!key) {
           out.push({
@@ -1465,10 +1473,11 @@ export default function App() {
         mergeMetadata(merged, d);
         continue;
       }
-      const prev = byMod.get(d.mod_id);
+      const prev = byMod.get(effectiveModId);
       if (!prev) {
-        byMod.set(d.mod_id, {
+        byMod.set(effectiveModId, {
           ...d,
+          mod_id: effectiveModId,
           contents: [...(d.contents || [])],
           active_paks: [...(d.active_paks || [])],
           tags: [...(d.tags || [])],
@@ -1480,6 +1489,11 @@ export default function App() {
           latest_file_id: d.latest_file_id ?? null,
           latest_file_name: d.latest_file_name ?? null,
           needs_update: Boolean(d.needs_update),
+          // Track premium info from the first entry
+          source: d.source,
+          extra_pak_count: d.extra_pak_count,
+          premium_pak_count: d.premium_pak_count,
+          shared_pak_count: d.shared_pak_count,
         });
         continue;
       }
@@ -1519,6 +1533,13 @@ export default function App() {
         merged.mod_downloads = d.mod_downloads;
       if (merged.endorsement_count == null && d.endorsement_count != null)
         merged.endorsement_count = d.endorsement_count;
+      // Merge premium info: if any download in the group is premium, record it
+      if (d.source === "premium") {
+        merged.source = "premium";
+        merged.extra_pak_count = d.extra_pak_count ?? merged.extra_pak_count;
+        merged.premium_pak_count = d.premium_pak_count ?? merged.premium_pak_count;
+        merged.shared_pak_count = d.shared_pak_count ?? merged.shared_pak_count;
+      }
       mergeMetadata(merged, d);
     }
     byMod.forEach((v) => out.push(v));
