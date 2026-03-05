@@ -81,7 +81,7 @@ if exist "repak-rivals" (
 
 REM Build using Maturin
 echo Building wheel with --release --features pyo3...
-maturin build --release --features pyo3
+maturin build --release --features pyo3 --interpreter python
 if %ERRORLEVEL% NEQ 0 (
     echo ❌ Maturin build failed
     cd ..\..\..
@@ -105,7 +105,7 @@ echo [3/6] Installing and extracting wheel for PyInstaller...
 echo ============================================================================
 
 echo Installing wheel...
-pip install "%WHEEL_PATH%" --force-reinstall
+python -m pip install "%WHEEL_PATH%" --force-reinstall
 if %ERRORLEVEL% NEQ 0 (
     echo ❌ Failed to install wheel
     cd ..\..\..
