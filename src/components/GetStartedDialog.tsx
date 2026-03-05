@@ -23,6 +23,7 @@ import {
   RotateCcw,
   Folder,
   ExternalLink,
+  LogIn,
 } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -34,6 +35,7 @@ import type {
 import { validatePath } from "../lib/api";
 import type { SettingsFormValues } from "./SettingsDialog";
 import { TaskOutputSummary } from "./TaskOutputSummary";
+import { initiateNexusSso, NEXUS_APPLICATION_SLUG } from "../lib/nexusSso";
 
 const EMPTY_VALUES: SettingsFormValues = {
   data_dir: "",
@@ -46,6 +48,7 @@ const EMPTY_VALUES: SettingsFormValues = {
 };
 
 type Stage = "collect" | "ready" | "running" | "complete";
+type WizardStep = 1 | 2 | 3;
 
 interface GetStartedDialogProps {
   open: boolean;
@@ -79,6 +82,7 @@ export function GetStartedDialog({
   const [formValues, setFormValues] =
     useState<SettingsFormValues>(EMPTY_VALUES);
   const [stage, setStage] = useState<Stage>("collect");
+  const [wizardStep, setWizardStep] = useState<WizardStep>(1);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [pathCheckResults, setPathCheckResults] = useState<
     Record<string, { ok: boolean; message: string }>
@@ -87,8 +91,15 @@ export function GetStartedDialog({
 
   // Debounce timer refs for each field
   const debounceTimers = useState<Record<string, NodeJS.Timeout>>(
-    () => ({})
+    () => ({}),
   )[0];
+
+  // Nexus SSO state
+  const [isNexusSsoLoading, setIsNexusSsoLoading] = useState(false);
+  const [nexusSsoStatus, setNexusSsoStatus] = useState<{
+    stage: "connecting" | "waiting" | "authorized" | "error";
+    message: string;
+  } | null>(null);
 
   useEffect(() => {
     if (!open) {
@@ -201,7 +212,7 @@ export function GetStartedDialog({
         "[GetStarted] Job completed, checking status:",
         job?.status,
         "ok:",
-        job?.ok
+        job?.ok,
       );
       const succeeded = job?.status === "succeeded" && job?.ok === true;
       const failed =
@@ -218,7 +229,7 @@ export function GetStartedDialog({
         setStage("ready");
         setErrorMessage(
           job?.error?.trim() ||
-            "Initial database build failed. Review the output below and try again."
+            "Initial database build failed. Review the output below and try again.",
         );
         return;
       }
@@ -311,7 +322,7 @@ export function GetStartedDialog({
       onRefreshStatus();
     } else {
       setErrorMessage(
-        "Unable to save settings. Resolve the highlighted fields and try again."
+        "Unable to save settings. Resolve the highlighted fields and try again.",
       );
     }
   };
@@ -325,12 +336,12 @@ export function GetStartedDialog({
     const settingsSaved = await onSubmit(formValues);
     if (!settingsSaved) {
       setErrorMessage(
-        "Unable to save settings. Please fix any errors and try again."
+        "Unable to save settings. Please fix any errors and try again.",
       );
       return;
     }
     console.log(
-      "[GetStartedDialog] Settings saved successfully, starting bootstrap..."
+      "[GetStartedDialog] Settings saved successfully, starting bootstrap...",
     );
 
     // Small delay to ensure settings.json is fully written to disk before subprocess reads it
@@ -344,7 +355,7 @@ export function GetStartedDialog({
     } else {
       setStage("ready");
       setErrorMessage(
-        "Initial database build failed. Review the output below and try again."
+        "Initial database build failed. Review the output below and try again.",
       );
     }
   };
@@ -352,6 +363,61 @@ export function GetStartedDialog({
   const handleRefreshValidation = () => {
     onRefreshSettings();
     onRefreshStatus();
+  };
+
+  const handleNexusSso = async () => {
+    setIsNexusSsoLoading(true);
+    setNexusSsoStatus(null);
+    setErrorMessage(null);
+
+    try {
+      const result = await initiateNexusSso(
+        NEXUS_APPLICATION_SLUG,
+        (status) => {
+          setNexusSsoStatus(status);
+        },
+      );
+
+      if (result.success && result.apiKey) {
+        // Successfully received API key
+        setFormValues((prev) => ({
+          ...prev,
+          nexus_api_key: result.apiKey!,
+        }));
+        toast.success("Successfully signed in with Nexus!", {
+          description: "Your API key has been retrieved automatically.",
+          duration: 5000,
+        });
+        setNexusSsoStatus({
+          stage: "authorized",
+          message: "API key retrieved successfully!",
+        });
+      } else {
+        // SSO failed
+        setNexusSsoStatus({
+          stage: "error",
+          message: result.error || "SSO authentication failed",
+        });
+        toast.error("Nexus SSO failed", {
+          description:
+            result.error || "Please try again or use manual API key entry.",
+          duration: 5000,
+        });
+      }
+    } catch (error) {
+      console.error("[GetStartedDialog] SSO error:", error);
+      setNexusSsoStatus({
+        stage: "error",
+        message: "An unexpected error occurred",
+      });
+      toast.error("Nexus SSO failed", {
+        description:
+          "An unexpected error occurred. Please try manual API key entry.",
+        duration: 5000,
+      });
+    } finally {
+      setIsNexusSsoLoading(false);
+    }
   };
 
   const handleDialogOpenChange = (nextOpen: boolean) => {
@@ -501,20 +567,41 @@ export function GetStartedDialog({
                 marginTop: "1.5rem",
               }}
             >
+              {/* Progress Indicator */}
               <div
                 style={{
-                  borderRadius: "0.5rem",
-                  background: "rgba(243,244,246,0.05)",
-                  padding: "1rem",
-                  fontSize: "0.875rem",
-                  color: "#6b7280",
-                  marginTop: "1rem",
+                  display: "flex",
+                  justifyContent: "center",
+                  gap: "0.5rem",
+                  marginBottom: "0.5rem",
                 }}
               >
-                Provide absolute paths so the backend can locate your game
-                files, downloads, and optional tooling. You can adjust these
-                later from the Settings panel.
+                {[1, 2, 3].map((step) => (
+                  <div
+                    key={step}
+                    style={{
+                      width: "2.5rem",
+                      height: "0.25rem",
+                      borderRadius: "0.125rem",
+                      background:
+                        step <= wizardStep
+                          ? "linear-gradient(90deg, #8b5cf6, #a855f7)"
+                          : "rgba(107, 114, 128, 0.3)",
+                      transition: "background 0.3s ease",
+                    }}
+                  />
+                ))}
               </div>
+              <div
+                style={{
+                  textAlign: "center",
+                  fontSize: "0.75rem",
+                  color: "#6b7280",
+                }}
+              >
+                Step {wizardStep} of 3
+              </div>
+
               <style>{`.custom-scrollbar::-webkit-scrollbar {
             display: none;
           }
@@ -522,21 +609,46 @@ export function GetStartedDialog({
             msOverflowStyle: none;
             scrollbar-width: none;
           }`}</style>
-              <div
-                className="custom-scrollbar getstarted-form-scroll"
-                style={{
-                  maxHeight: "28rem",
-                  overflowY: "auto",
-                  paddingRight: "1rem",
-                }}
-              >
+
+              {/* Step 1: Local Download Folder */}
+              {wizardStep === 1 && (
                 <div
                   style={{
                     display: "flex",
                     flexDirection: "column",
-                    gap: "1rem",
+                    gap: "1.5rem",
                   }}
                 >
+                  <div
+                    style={{
+                      textAlign: "center",
+                      padding: "1rem",
+                    }}
+                  >
+                    <h3
+                      style={{
+                        fontSize: "1.25rem",
+                        fontWeight: "600",
+                        marginBottom: "0.5rem",
+                      }}
+                    >
+                      Choose Local Download Folder
+                    </h3>
+                    <p
+                      style={{
+                        fontSize: "0.875rem",
+                        color: "#6b7280",
+                        lineHeight: "1.6",
+                      }}
+                    >
+                      Choose the dedicated folder where all your previously
+                      downloaded mod archives/folders are stored. If you don't
+                      have a dedicated mod folder yet, create one and keep all
+                      your mods there. If you have no previous mods, simply
+                      create a new empty folder and select it.
+                    </p>
+                  </div>
+
                   <div className="space-y-2">
                     <Label htmlFor="marvel_rivals_local_downloads_root">
                       Local downloads folder
@@ -550,10 +662,10 @@ export function GetStartedDialog({
                     >
                       <Input
                         id="marvel_rivals_local_downloads_root"
-                        placeholder="...\Marvel_Rivals_Mods\downloads"
+                        placeholder="...\\Marvel_Rivals_Mods\\downloads"
                         value={formValues.marvel_rivals_local_downloads_root}
                         onChange={handleInputChange(
-                          "marvel_rivals_local_downloads_root"
+                          "marvel_rivals_local_downloads_root",
                         )}
                         className="flex-1"
                       />
@@ -563,7 +675,7 @@ export function GetStartedDialog({
                         size="sm"
                         onClick={() =>
                           handleFolderSelect(
-                            "marvel_rivals_local_downloads_root"
+                            "marvel_rivals_local_downloads_root",
                           )
                         }
                         style={{ padding: "0.5rem", minWidth: "auto" }}
@@ -602,46 +714,265 @@ export function GetStartedDialog({
                         }
                       </p>
                     )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <div
+                    <p
                       style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
+                        fontSize: "0.75rem",
+                        color: "#6b7280",
+                        marginTop: "0.5rem",
                       }}
                     >
-                      <Label htmlFor="nexus_api_key">Nexus API key</Label>
+                      💡 Tip: The folder will be created automatically if it
+                      doesn't exist.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => onOpenChange(false)}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      disabled={
+                        !formValues.marvel_rivals_local_downloads_root?.trim()
+                      }
+                      onClick={() => setWizardStep(2)}
+                    >
+                      Continue
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Step 2: API Key */}
+              {wizardStep === 2 && (
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "1.5rem",
+                  }}
+                >
+                  <div
+                    style={{
+                      textAlign: "center",
+                      padding: "1rem",
+                    }}
+                  >
+                    <h3
+                      style={{
+                        fontSize: "1.25rem",
+                        fontWeight: "600",
+                        marginBottom: "0.5rem",
+                      }}
+                    >
+                      Connect to Nexus Mods
+                    </h3>
+                    <p
+                      style={{
+                        fontSize: "0.875rem",
+                        color: "#6b7280",
+                        lineHeight: "1.6",
+                      }}
+                    >
+                      The API key allows RivalNxt to fetch mod details,
+                      descriptions, and images directly from NexusMods. Without
+                      it, only basic local mod management will work.
+                    </p>
+                  </div>
+
+                  {/* Two-column layout */}
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: "1rem",
+                    }}
+                  >
+                    {/* Left Column: Sign in with Nexus SSO */}
+                    <div
+                      style={{
+                        borderRadius: "0.5rem",
+                        background: "rgba(59, 130, 246, 0.1)",
+                        border: "1px solid rgba(59, 130, 246, 0.3)",
+                        padding: "1rem",
+                        display: "flex",
+                        flexDirection: "column",
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <div>
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "0.5rem",
+                            marginBottom: "0.75rem",
+                          }}
+                        >
+                          <LogIn className="h-4 w-4 text-blue-400" />
+                          <p
+                            style={{
+                              fontSize: "0.875rem",
+                              fontWeight: "600",
+                              color: "#60a5fa",
+                            }}
+                          >
+                            Sign in with Nexus
+                          </p>
+                        </div>
+                        <p
+                          style={{
+                            fontSize: "0.8rem",
+                            color: "#9ca3af",
+                            lineHeight: "1.6",
+                            marginBottom: "0.75rem",
+                          }}
+                        >
+                          One-click sign in. Opens your browser for secure
+                          authorization with Nexus Mods.
+                        </p>
+                      </div>
+
+                      <div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={handleNexusSso}
+                          disabled={isNexusSsoLoading}
+                          style={{
+                            width: "100%",
+                            borderColor: "rgba(59, 130, 246, 0.5)",
+                            color: "#60a5fa",
+                          }}
+                        >
+                          {isNexusSsoLoading ? (
+                            <>
+                              <Loader2 className="h-3 w-3 mr-2 animate-spin" />
+                              {nexusSsoStatus?.stage === "connecting"
+                                ? "Connecting..."
+                                : nexusSsoStatus?.stage === "waiting"
+                                  ? "Waiting for authorization..."
+                                  : "Please wait..."}
+                            </>
+                          ) : (
+                            <>
+                              <LogIn className="h-3 w-3 mr-2" />
+                              Sign in with Nexus
+                            </>
+                          )}
+                        </Button>
+
+                        {/* SSO Status */}
+                        {nexusSsoStatus && (
+                          <p
+                            style={{
+                              fontSize: "0.75rem",
+                              marginTop: "0.5rem",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "0.25rem",
+                              color:
+                                nexusSsoStatus.stage === "authorized"
+                                  ? "#10b981"
+                                  : nexusSsoStatus.stage === "error"
+                                    ? "#ef4444"
+                                    : "#60a5fa",
+                            }}
+                          >
+                            {nexusSsoStatus.stage === "authorized" ? (
+                              <CheckCircle
+                                style={{
+                                  width: "0.75rem",
+                                  height: "0.75rem",
+                                }}
+                              />
+                            ) : nexusSsoStatus.stage === "error" ? (
+                              <AlertCircle
+                                style={{
+                                  width: "0.75rem",
+                                  height: "0.75rem",
+                                }}
+                              />
+                            ) : (
+                              <Loader2
+                                className="animate-spin"
+                                style={{
+                                  width: "0.75rem",
+                                  height: "0.75rem",
+                                }}
+                              />
+                            )}
+                            {nexusSsoStatus.message}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Right Column: Manual API Key Entry */}
+                    <div
+                      style={{
+                        borderRadius: "0.5rem",
+                        background: "rgba(139, 92, 246, 0.1)",
+                        border: "1px solid rgba(139, 92, 246, 0.3)",
+                        padding: "1rem",
+                      }}
+                    >
+                      <p
+                        style={{
+                          fontSize: "0.875rem",
+                          fontWeight: "500",
+                          marginBottom: "0.75rem",
+                        }}
+                      >
+                        Or get API key manually:
+                      </p>
+                      <ol
+                        style={{
+                          fontSize: "0.75rem",
+                          color: "#9ca3af",
+                          paddingLeft: "1.25rem",
+                          lineHeight: "1.6",
+                        }}
+                      >
+                        <li>Click "Get API Key" to open NexusMods</li>
+                        <li>Sign in to your account if prompted</li>
+                        <li>Find "RivalNxt" in API keys list</li>
+                        <li>Copy and paste the key below</li>
+                      </ol>
                       <Button
                         type="button"
-                        variant="link"
+                        variant="outline"
                         size="sm"
                         onClick={async () => {
                           const apiKeysUrl =
-                            "https://next.nexusmods.com/settings/api-keys#:~:text=Personal%20API%20Key";
+                            "https://next.nexusmods.com/settings/api-keys#:~:text=Rivalnxt";
                           try {
-                            const { openInBrowser } = await import(
-                              "../lib/tauri-utils"
-                            );
+                            const { openInBrowser } =
+                              await import("../lib/tauri-utils");
                             await openInBrowser(apiKeysUrl);
                           } catch (error) {
                             console.error(
                               "Failed to open API keys page:",
-                              error
+                              error,
                             );
                           }
                         }}
-                        style={{
-                          padding: "0",
-                          height: "auto",
-                          fontSize: "0.875rem",
-                        }}
+                        style={{ marginTop: "0.75rem" }}
                       >
-                        <ExternalLink className="h-3 w-3 mr-1" />
+                        <ExternalLink className="h-3 w-3 mr-2" />
                         Get API Key
                       </Button>
                     </div>
+                  </div>
+
+                  {/* API Key Input (shared by both methods) */}
+                  <div className="space-y-2">
+                    <Label htmlFor="nexus_api_key">Nexus API key</Label>
                     <Input
                       id="nexus_api_key"
                       type="password"
@@ -649,16 +980,34 @@ export function GetStartedDialog({
                       value={formValues.nexus_api_key}
                       onChange={handleInputChange("nexus_api_key")}
                     />
-                    {settings?.validation?.nexus_api_key ? (
+                    {/* Show SSO success message if key was autofilled via SSO */}
+                    {nexusSsoStatus?.stage === "authorized" &&
+                    formValues.nexus_api_key ? (
+                      <p
+                        style={{
+                          fontSize: "0.75rem",
+                          color: "#059669",
+                          marginTop: "0.25rem",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "0.25rem",
+                        }}
+                      >
+                        <CheckCircle
+                          style={{ width: "0.875rem", height: "0.875rem" }}
+                        />
+                        API key retrieved via Sign in with Nexus
+                      </p>
+                    ) : settings?.validation?.nexus_api_key ? (
                       <p
                         style={{
                           fontSize: "0.75rem",
                           color: settings.validation.nexus_api_key.ok
                             ? "#059669"
                             : settings.validation.nexus_api_key.reason ===
-                              "not_configured"
-                            ? "#6b7280"
-                            : "#dc2626",
+                                "not_configured"
+                              ? "#6b7280"
+                              : "#dc2626",
                           marginTop: "0.25rem",
                           display: "flex",
                           alignItems: "center",
@@ -680,261 +1029,393 @@ export function GetStartedDialog({
                     ) : null}
                   </div>
 
-                  <div className="space-y-2">
-                    <Label htmlFor="marvel_rivals_root">
-                      Marvel Rivals root
-                    </Label>
-                    <div
+                  <div className="flex items-center justify-between">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setWizardStep(1)}
+                    >
+                      Back
+                    </Button>
+                    <Button
+                      type="button"
+                      disabled={!formValues.nexus_api_key?.trim()}
+                      onClick={() => setWizardStep(3)}
+                    >
+                      Continue
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Step 3: Remaining Settings */}
+              {wizardStep === 3 && (
+                <div
+                  className="custom-scrollbar"
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "1.5rem",
+                  }}
+                >
+                  <div
+                    style={{
+                      textAlign: "center",
+                      padding: "0.5rem 1rem",
+                    }}
+                  >
+                    <h3
                       style={{
-                        display: "flex",
-                        gap: "0.5rem",
-                        alignItems: "center",
+                        fontSize: "1.25rem",
+                        fontWeight: "600",
+                        marginBottom: "0.5rem",
                       }}
                     >
-                      <Input
-                        id="marvel_rivals_root"
-                        placeholder="...\SteamLibrary\steamapps\common\MarvelRivals"
-                        value={formValues.marvel_rivals_root}
-                        onChange={handleInputChange("marvel_rivals_root")}
-                        className="flex-1"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={async () => {
-                          try {
-                            const result = await invoke<{
-                              success: boolean;
-                              path?: string;
-                              message: string;
-                            }>("detect_marvel_rivals_path");
-
-                            if (result.success && result.path) {
-                              setFormValues((prev) => ({
-                                ...prev,
-                                marvel_rivals_root: result.path!,
-                              }));
-                              toast.success("Marvel Rivals detected", {
-                                description: `Found at: ${result.path}`,
-                                duration: 4000,
-                              });
-                            } else {
-                              toast.error("Marvel Rivals not found", {
-                                description:
-                                  result.message ||
-                                  "Installation not detected. Please install via Steam or Epic Games Store.",
-                                duration: 4000,
-                              });
-                            }
-                          } catch (error) {
-                            console.error(
-                              "Failed to detect Marvel Rivals:",
-                              error
-                            );
-                            toast.error("Detection failed", {
-                              description: String(error),
-                              duration: 4000,
-                            });
-                          }
-                        }}
-                        style={{ padding: "0.5rem", minWidth: "auto" }}
-                        title="Auto-detect Marvel Rivals installation"
-                      >
-                        <RotateCcw className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleFolderSelect("marvel_rivals_root")}
-                        style={{ padding: "0.5rem", minWidth: "auto" }}
-                        title="Select folder"
-                      >
-                        <Folder className="h-4 w-4" />
-                      </Button>
-                    </div>
-                    {pathCheckResults.marvel_rivals_root && (
-                      <p
-                        style={{
-                          fontSize: "0.75rem",
-                          color: pathCheckResults.marvel_rivals_root.ok
-                            ? "#059669"
-                            : "#dc2626",
-                          marginTop: "0.25rem",
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "0.25rem",
-                        }}
-                      >
-                        {pathCheckResults.marvel_rivals_root.ok ? (
-                          <CheckCircle
-                            style={{ width: "0.875rem", height: "0.875rem" }}
-                          />
-                        ) : (
-                          <AlertCircle
-                            style={{ width: "0.875rem", height: "0.875rem" }}
-                          />
-                        )}
-                        {pathCheckResults.marvel_rivals_root.message}
-                      </p>
-                    )}
+                      Configure Remaining Settings
+                    </h3>
+                    <p
+                      style={{
+                        fontSize: "0.875rem",
+                        color: "#6b7280",
+                      }}
+                    >
+                      Review your configuration and set up the remaining paths.
+                    </p>
                   </div>
 
-                  <div className="space-y-2">
-                    <Label htmlFor="seven_zip_bin">7-Zip executable</Label>
+                  <div
+                    style={{
+                      maxHeight: "20rem",
+                      overflowY: "auto",
+                      paddingRight: "0.5rem",
+                    }}
+                    className="custom-scrollbar"
+                  >
                     <div
                       style={{
                         display: "flex",
-                        gap: "0.5rem",
-                        alignItems: "center",
+                        flexDirection: "column",
+                        gap: "1rem",
                       }}
                     >
-                      <Input
-                        id="seven_zip_bin"
-                        placeholder="C:\Program Files\7-Zip\7z.exe"
-                        value={formValues.seven_zip_bin}
-                        onChange={handleInputChange("seven_zip_bin")}
-                        className="flex-1"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={async () => {
-                          try {
-                            const result = await invoke<{
-                              success: boolean;
-                              name?: string;
-                              executable?: string;
-                              message: string;
-                              already_in_path?: boolean;
-                            }>("detect_archive_tool");
+                      {/* Previously entered values - auto-populated */}
+                      <div className="space-y-2">
+                        <Label htmlFor="step3_marvel_rivals_local_downloads_root">
+                          Local downloads folder
+                        </Label>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: "0.5rem",
+                            alignItems: "center",
+                          }}
+                        >
+                          <Input
+                            id="step3_marvel_rivals_local_downloads_root"
+                            placeholder="...\\Marvel_Rivals_Mods\\downloads"
+                            value={
+                              formValues.marvel_rivals_local_downloads_root
+                            }
+                            onChange={handleInputChange(
+                              "marvel_rivals_local_downloads_root",
+                            )}
+                            className="flex-1"
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              handleFolderSelect(
+                                "marvel_rivals_local_downloads_root",
+                              )
+                            }
+                            style={{ padding: "0.5rem", minWidth: "auto" }}
+                            title="Select folder"
+                          >
+                            <Folder className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
 
-                            if (result.success && result.executable) {
-                              setFormValues((prev) => ({
-                                ...prev,
-                                seven_zip_bin: result.executable!,
-                              }));
+                      <div className="space-y-2">
+                        <Label htmlFor="step3_nexus_api_key">
+                          Nexus API key
+                        </Label>
+                        <Input
+                          id="step3_nexus_api_key"
+                          type="password"
+                          placeholder="•••••••••••••••"
+                          value={formValues.nexus_api_key}
+                          onChange={handleInputChange("nexus_api_key")}
+                        />
+                      </div>
 
-                              // Show toast notification
-                              if (result.already_in_path) {
-                                toast.info(`${result.name} detected`, {
-                                  description: `Already in PATH: ${result.executable}`,
+                      <div className="space-y-2">
+                        <Label htmlFor="marvel_rivals_root">
+                          Marvel Rivals root
+                        </Label>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: "0.5rem",
+                            alignItems: "center",
+                          }}
+                        >
+                          <Input
+                            id="marvel_rivals_root"
+                            placeholder="...\\SteamLibrary\\steamapps\\common\\MarvelRivals"
+                            value={formValues.marvel_rivals_root}
+                            onChange={handleInputChange("marvel_rivals_root")}
+                            className="flex-1"
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={async () => {
+                              try {
+                                const result = await invoke<{
+                                  success: boolean;
+                                  path?: string;
+                                  message: string;
+                                }>("detect_marvel_rivals_path");
+
+                                if (result.success && result.path) {
+                                  setFormValues((prev) => ({
+                                    ...prev,
+                                    marvel_rivals_root: result.path!,
+                                  }));
+                                  toast.success("Marvel Rivals detected", {
+                                    description: `Found at: ${result.path}`,
+                                    duration: 4000,
+                                  });
+                                } else {
+                                  toast.error("Marvel Rivals not found", {
+                                    description:
+                                      result.message ||
+                                      "Installation not detected. Please install via Steam or Epic Games Store.",
+                                    duration: 4000,
+                                  });
+                                }
+                              } catch (error) {
+                                console.error(
+                                  "Failed to detect Marvel Rivals:",
+                                  error,
+                                );
+                                toast.error("Detection failed", {
+                                  description: String(error),
                                   duration: 4000,
                                 });
-                              } else {
-                                toast.success(
-                                  `${result.name} detected and added to PATH`,
-                                  {
-                                    description: `Executable: ${result.executable}`,
-                                    duration: 4000,
-                                  }
-                                );
                               }
-                            } else {
-                              toast.error("Archive tool not found", {
-                                description:
-                                  result.message ||
-                                  "Neither 7-Zip nor WinRAR installation found",
-                                duration: 4000,
-                              });
+                            }}
+                            style={{ padding: "0.5rem", minWidth: "auto" }}
+                            title="Auto-detect Marvel Rivals installation"
+                          >
+                            <RotateCcw className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              handleFolderSelect("marvel_rivals_root")
                             }
-                          } catch (error) {
-                            console.error(
-                              "Failed to detect archive tool:",
-                              error
-                            );
-                            toast.error("Detection failed", {
-                              description: String(error),
-                              duration: 4000,
-                            });
-                          }
-                        }}
-                        style={{ padding: "0.5rem", minWidth: "auto" }}
-                        title="Auto-detect 7-Zip or WinRAR"
-                      >
-                        <RotateCcw className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleFileSelect("seven_zip_bin")}
-                        style={{ padding: "0.5rem", minWidth: "auto" }}
-                        title="Select file"
-                      >
-                        <Folder className="h-4 w-4" />
-                      </Button>
+                            style={{ padding: "0.5rem", minWidth: "auto" }}
+                            title="Select folder"
+                          >
+                            <Folder className="h-4 w-4" />
+                          </Button>
+                        </div>
+                        {pathCheckResults.marvel_rivals_root && (
+                          <p
+                            style={{
+                              fontSize: "0.75rem",
+                              color: pathCheckResults.marvel_rivals_root.ok
+                                ? "#059669"
+                                : "#dc2626",
+                              marginTop: "0.25rem",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "0.25rem",
+                            }}
+                          >
+                            {pathCheckResults.marvel_rivals_root.ok ? (
+                              <CheckCircle
+                                style={{
+                                  width: "0.875rem",
+                                  height: "0.875rem",
+                                }}
+                              />
+                            ) : (
+                              <AlertCircle
+                                style={{
+                                  width: "0.875rem",
+                                  height: "0.875rem",
+                                }}
+                              />
+                            )}
+                            {pathCheckResults.marvel_rivals_root.message}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="seven_zip_bin">WinRAR executable</Label>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: "0.5rem",
+                            alignItems: "center",
+                          }}
+                        >
+                          <Input
+                            id="seven_zip_bin"
+                            placeholder="C:\\Program Files\\WinRAR\\WinRAR.exe"
+                            value={formValues.seven_zip_bin}
+                            onChange={handleInputChange("seven_zip_bin")}
+                            className="flex-1"
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={async () => {
+                              try {
+                                const result = await invoke<{
+                                  success: boolean;
+                                  name?: string;
+                                  executable?: string;
+                                  message: string;
+                                  already_in_path?: boolean;
+                                }>("detect_archive_tool");
+
+                                if (result.success && result.executable) {
+                                  setFormValues((prev) => ({
+                                    ...prev,
+                                    seven_zip_bin: result.executable!,
+                                  }));
+
+                                  if (result.already_in_path) {
+                                    toast.info(`${result.name} detected`, {
+                                      description: `Already in PATH: ${result.executable}`,
+                                      duration: 4000,
+                                    });
+                                  } else {
+                                    toast.success(
+                                      `${result.name} detected and added to PATH`,
+                                      {
+                                        description: `Executable: ${result.executable}`,
+                                        duration: 4000,
+                                      },
+                                    );
+                                  }
+                                } else {
+                                  toast.error("Archive tool not found", {
+                                    description:
+                                      result.message ||
+                                      "WinRAR installation not found",
+                                    duration: 4000,
+                                  });
+                                }
+                              } catch (error) {
+                                console.error(
+                                  "Failed to detect archive tool:",
+                                  error,
+                                );
+                                toast.error("Detection failed", {
+                                  description: String(error),
+                                  duration: 4000,
+                                });
+                              }
+                            }}
+                            style={{ padding: "0.5rem", minWidth: "auto" }}
+                            title="Auto-detect WinRAR"
+                          >
+                            <RotateCcw className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleFileSelect("seven_zip_bin")}
+                            style={{ padding: "0.5rem", minWidth: "auto" }}
+                            title="Select file"
+                          >
+                            <Folder className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="aes_key_hex">AES key</Label>
+                        <Input
+                          id="aes_key_hex"
+                          type="password"
+                          placeholder="hex-encoded key"
+                          value={formValues.aes_key_hex}
+                          onChange={handleInputChange("aes_key_hex")}
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="data_dir">
+                          Data directory (Locked)
+                        </Label>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: "0.5rem",
+                            alignItems: "center",
+                          }}
+                        >
+                          <Input
+                            id="data_dir"
+                            placeholder="C:\\Users\\You\\AppData\\Local\\RivalsManager"
+                            value={formValues.data_dir}
+                            readOnly
+                            className="flex-1 bg-muted/50"
+                          />
+                        </div>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="space-y-2">
-                    <Label htmlFor="aes_key_hex">AES key</Label>
-                    <Input
-                      id="aes_key_hex"
-                      type="password"
-                      placeholder="hex-encoded key"
-                      value={formValues.aes_key_hex}
-                      onChange={handleInputChange("aes_key_hex")}
-                    />
-                  </div>
+                  {errorMessage ? (
+                    <div className="flex items-start gap-2 rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-500">
+                      <AlertCircle className="mt-0.5 h-4 w-4" />
+                      <span>{errorMessage}</span>
+                    </div>
+                  ) : null}
 
-                  <div className="space-y-2">
-                    <Label htmlFor="data_dir">Data directory (Locked)</Label>
-                    <div
-                      style={{
-                        display: "flex",
-                        gap: "0.5rem",
-                        alignItems: "center",
-                      }}
+                  <div className="flex items-center justify-between">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setWizardStep(2)}
                     >
-                      <Input
-                        id="data_dir"
-                        placeholder="C:\\Users\\You\\AppData\\Local\\RivalsManager"
-                        value={formValues.data_dir}
-                        readOnly
-                        className="flex-1 bg-muted/50"
-                      />
-                    </div>
+                      Back
+                    </Button>
+                    <Button
+                      type="submit"
+                      disabled={
+                        isSaving ||
+                        !formValues.marvel_rivals_local_downloads_root?.trim() ||
+                        !formValues.nexus_api_key?.trim()
+                      }
+                    >
+                      {isSaving ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Saving
+                        </>
+                      ) : (
+                        "Save & Continue"
+                      )}
+                    </Button>
                   </div>
                 </div>
-                {/* scrollable content ends here */}
-              </div>
-
-              {errorMessage ? (
-                <div className="flex items-start gap-2 rounded-md border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-500">
-                  <AlertCircle className="mt-0.5 h-4 w-4" />
-                  <span>{errorMessage}</span>
-                </div>
-              ) : null}
-
-              <div className="flex items-center justify-between">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => onOpenChange(false)}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  disabled={
-                    isSaving ||
-                    !formValues.marvel_rivals_local_downloads_root?.trim() ||
-                    !formValues.nexus_api_key?.trim()
-                  }
-                >
-                  {isSaving ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Saving
-                    </>
-                  ) : (
-                    "Save & Continue"
-                  )}
-                </Button>
-              </div>
+              )}
             </form>
           ) : null}
 

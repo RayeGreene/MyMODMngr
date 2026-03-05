@@ -11,6 +11,7 @@ import {
 interface DownloadsPageProps {
   mods: Mod[];
   onUpdate: (modId: string) => void | Promise<void>;
+  onCheckUpdate: (modId: string) => void | Promise<void>;
   onUninstall: (modId: string) => void | Promise<void>;
   onFavorite: (modId: string) => void;
   selectedCategory: string;
@@ -25,6 +26,7 @@ interface DownloadsPageProps {
 export function DownloadsPage({
   mods,
   onUpdate,
+  onCheckUpdate,
   onUninstall,
   onFavorite,
   selectedCategory,
@@ -72,7 +74,7 @@ export function DownloadsPage({
       (mod) =>
         (Array.isArray(mod.categoryTags) &&
           mod.categoryTags.includes(selectedCategory)) ||
-        categoriesMatchTag(mod.tags, selectedCategory)
+        categoriesMatchTag(mod.tags, selectedCategory),
     );
   }
 
@@ -90,7 +92,7 @@ export function DownloadsPage({
       // Check which selected tags match this mod's character vs skins
       const matchesCharacter = selectedCharacters.includes(modCharacter);
       const matchingSkins = selectedCharacters.filter((tag) =>
-        modSkins.includes(tag)
+        modSkins.includes(tag),
       );
 
       // Logic: If character is selected, show all its mods (or filter by skins)
@@ -103,7 +105,7 @@ export function DownloadsPage({
         // Check if we have ANY skin tags selected at all
         const hasAnySkinSelection = selectedCharacters.some(
           (tag) =>
-            !characterTags.includes(tag) || characterTags.indexOf(tag) > 0
+            !characterTags.includes(tag) || characterTags.indexOf(tag) > 0,
         );
         // If no skin-specific filtering, show all character mods
         return !hasAnySkinSelection || matchingSkins.length > 0;
@@ -121,7 +123,7 @@ export function DownloadsPage({
         mod.name.toLowerCase().includes(q) ||
         mod.description.toLowerCase().includes(q) ||
         mod.author.toLowerCase().includes(q) ||
-        mod.tags.some((t) => t.toLowerCase().includes(q))
+        mod.tags.some((t) => t.toLowerCase().includes(q)),
     );
   }
 
@@ -159,7 +161,7 @@ export function DownloadsPage({
   };
   const compareSortKey = (
     a: { priority: number; timestamp: number },
-    b: { priority: number; timestamp: number }
+    b: { priority: number; timestamp: number },
   ) => {
     if (b.priority !== a.priority) return b.priority - a.priority;
     if (b.timestamp !== a.timestamp) return b.timestamp - a.timestamp;
@@ -183,7 +185,7 @@ export function DownloadsPage({
   switch (sortBy) {
     case "Popular":
       filteredMods.sort((a, b) =>
-        applyOrder((b.downloads || 0) - (a.downloads || 0))
+        applyOrder((b.downloads || 0) - (a.downloads || 0)),
       );
       break;
     case "Recent":
@@ -222,23 +224,23 @@ export function DownloadsPage({
       // Sort by mods.updated_at (mapped to lastUpdatedRaw / lastUpdated); NULLs always last
       filteredMods.sort(
         makeTimestampComparator((m) =>
-          toNullableTimestamp(m.lastUpdatedRaw ?? m.lastUpdated ?? null)
-        )
+          toNullableTimestamp(m.lastUpdatedRaw ?? m.lastUpdated ?? null),
+        ),
       );
       break;
     case "Rating":
       filteredMods.sort((a, b) =>
-        applyOrder((b.rating || 0) - (a.rating || 0))
+        applyOrder((b.rating || 0) - (a.rating || 0)),
       );
       break;
     case "Downloads":
       filteredMods.sort((a, b) =>
-        applyOrder((b.downloads || 0) - (a.downloads || 0))
+        applyOrder((b.downloads || 0) - (a.downloads || 0)),
       );
       break;
     case "Performance":
       filteredMods.sort((a, b) =>
-        applyOrder((b.performanceImpact || 0) - (a.performanceImpact || 0))
+        applyOrder((b.performanceImpact || 0) - (a.performanceImpact || 0)),
       );
       break;
     case "Name":
@@ -249,6 +251,14 @@ export function DownloadsPage({
         const categoryA = a.categoryTags?.[0] ?? a.category ?? "";
         const categoryB = b.categoryTags?.[0] ?? b.category ?? "";
         return applyOrder(categoryA.localeCompare(categoryB));
+      });
+      break;
+    case "Favourites":
+      filteredMods.sort((a, b) => {
+        const aFav = a.isFavorited ? 1 : 0;
+        const bFav = b.isFavorited ? 1 : 0;
+        if (bFav !== aFav) return applyOrder(bFav - aFav);
+        return a.name.localeCompare(b.name);
       });
       break;
     default:
@@ -334,6 +344,7 @@ export function DownloadsPage({
                     viewMode={viewMode}
                     onUninstall={onUninstall}
                     onUpdate={onUpdate}
+                    onCheckUpdate={onCheckUpdate}
                     onView={(m) => {
                       setSelectedMod(m);
                       setIsModalOpen(true);

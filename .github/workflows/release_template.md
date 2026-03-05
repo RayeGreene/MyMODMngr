@@ -1,18 +1,19 @@
-## 🎉 Version 0.3.2 – What's New
+## 🎉 Version 0.5.0 – What's New
 
 ### ✨ New Features
 
-**📸 Custom Image Uploads**
+- Mark mods as favourites and sort by them
+- NSFW blur filter — toggle in the header to blur adult content images
+- Check for updates on individual mod cards
+- Drag & drop files to add mods
+- Click on mods in the conflict view to see full details
+- Clear button on the search bar
+- Sort options now in a dropdown menu with Name & Favourites added
 
-- Upload your own screenshots for any mod
-- Create custom thumbnails for local mods
-- First upload becomes the primary display
+### 🐛 Bug Fixes
 
-**✏️ Edit Mod Descriptions**
-
-- Write and edit descriptions for any mod
-- Toggle between formatted and plain text editing
-- Keep notes about your installed mods
+- Mods that are already downloaded are now skipped instead of re-downloaded
+- Duplicate downloads now show an info message instead of an error
 
 ### 📥 Installation
 
@@ -23,7 +24,8 @@
 3. Launch RivalNxt from your Start Menu
 4. Configure in Settings:
    - **Local downloads directory** → Select the folder where your Marvel Rivals mods are downloaded/saved (create anywhere or use existing folder)
-   - **Nexus Personal API Key** → Get your [API key](https://next.nexusmods.com/settings/api-keys) (scroll all the way down) and paste it into RivalNxt
+   - **Sign in with Nexus** → Click the sign-in button to connect your Nexus Mods account automatically
+   - _Or_ **Nexus Personal API Key** → Paste your [API key](https://next.nexusmods.com/settings/api-keys) manually if you prefer
 
 > 📖 **Need more help?** See the [full installation guide](https://github.com/Rounak77382/RivalNxt?tab=readme-ov-file#-installation) for detailed setup instructions.
 
