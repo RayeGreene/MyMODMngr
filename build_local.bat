@@ -105,7 +105,7 @@ echo [3/6] Installing and extracting wheel for PyInstaller...
 echo ============================================================================
 
 echo Installing wheel...
-pip install "%WHEEL_PATH%" --force-reinstall
+python -m pip install "%WHEEL_PATH%" --force-reinstall
 if %ERRORLEVEL% NEQ 0 (
     echo ❌ Failed to install wheel
     cd ..\..\..
