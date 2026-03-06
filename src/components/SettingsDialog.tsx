@@ -17,8 +17,13 @@ import {
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
-import { open } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
+import { isTauri } from "../lib/tauri-utils";
+
+async function safeInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  if (!isTauri()) throw new Error("Not running in Tauri");
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<T>(command, args);
+}
 import { Switch } from "./ui/switch";
 import { ScrollArea } from "./ui/scroll-area";
 import { Loader2, RefreshCw, Play, Folder, ExternalLink } from "lucide-react";
@@ -159,7 +164,7 @@ export function SettingsDialog({
           // Auto-detect archive tool if seven_zip_bin is not set
           if (!settings.seven_zip_bin || settings.seven_zip_bin.trim() === "") {
             try {
-              const result = await invoke<{
+              const result = await safeInvoke<{
                 success: boolean;
                 name?: string;
                 executable?: string;
@@ -200,7 +205,7 @@ export function SettingsDialog({
           settings.marvel_rivals_root.trim() === ""
         ) {
           try {
-            const result = await invoke<{
+            const result = await safeInvoke<{
               success: boolean;
               path?: string;
               message: string;
@@ -290,7 +295,7 @@ export function SettingsDialog({
 
   const handleFolderSelect = async (field: string) => {
     try {
-      const result = await invoke<string>("select_folder_dialog", {
+      const result = await safeInvoke<string>("select_folder_dialog", {
         defaultPath: null,
       });
 
@@ -307,7 +312,7 @@ export function SettingsDialog({
 
   const handleFileSelect = async (field: string) => {
     try {
-      const result = await invoke<string>("select_file_dialog", {
+      const result = await safeInvoke<string>("select_file_dialog", {
         defaultPath: null,
         filterExtensions:
           field === "seven_zip_bin" ? ["exe", "bat", "cmd", "msi"] : ["*"],
@@ -566,7 +571,7 @@ export function SettingsDialog({
                             size="sm"
                             onClick={async () => {
                               try {
-                                const result = await invoke<{
+                                const result = await safeInvoke<{
                                   success: boolean;
                                   path?: string;
                                   message: string;
@@ -657,7 +662,7 @@ export function SettingsDialog({
                               size="sm"
                               onClick={async () => {
                                 try {
-                                  const result = await invoke<{
+                                  const result = await safeInvoke<{
                                     success: boolean;
                                     name?: string;
                                     executable?: string;

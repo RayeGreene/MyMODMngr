@@ -25,8 +25,15 @@ import {
   ExternalLink,
   LogIn,
 } from "lucide-react";
-import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
+import { isTauri } from "../lib/tauri-utils";
+
+async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  if (!isTauri()) throw new Error("Not running in Tauri");
+  const mod = await import("@tauri-apps/api/core");
+  return mod.invoke<T>(command, args);
+}
+
 import type {
   ApiBootstrapStatus,
   ApiSettings,
