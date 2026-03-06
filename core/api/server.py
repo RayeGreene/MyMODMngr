@@ -127,6 +127,9 @@ verify_required_dns_hosts()
 _SETTINGS_TASK_LOCK = threading.Lock()
 _SETTINGS_TASK_JOBS: Dict[str, Dict[str, Any]] = {}
 _SETTINGS_TASK_MAX_JOBS = 25
+# Serialise task execution so only one DB-heavy task runs at a time,
+# preventing "database is locked" errors from concurrent writes.
+_SETTINGS_TASK_EXEC_LOCK = threading.Lock()
 
 
 def _monitor_parent_process(pid: int) -> None:
@@ -377,6 +380,12 @@ def _list_job_snapshots() -> List[Dict[str, Any]]:
 
 
 def _execute_settings_task_async(job_id: str, task: SettingsTaskName) -> None:
+	# Wait for any other running task to finish before starting
+	with _SETTINGS_TASK_EXEC_LOCK:
+		_execute_settings_task_inner(job_id, task)
+
+
+def _execute_settings_task_inner(job_id: str, task: SettingsTaskName) -> None:
 	started_at = datetime.utcnow().isoformat() + "Z"
 	_update_job(job_id, status="running", started_at=started_at, ok=None, exit_code=None)
 

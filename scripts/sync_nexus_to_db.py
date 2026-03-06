@@ -1,5 +1,6 @@
 import argparse
 import json
+import sqlite3
 import time
 from typing import Iterable, List, Optional
 
@@ -53,18 +54,25 @@ def sync_mods(mod_ids: List[int], game: Optional[str] = None, rate_delay: float 
         desc_text = extract_description_text(filtered.get("description"))
         if desc_text:
             mod_info_payload["description"] = desc_text
-        upsert_api_cache(conn, mod_id, filtered)
         mod_info_status = int(data.get("mod_info_status", 0))
         files_status = int(data.get("files_status", 0))
         changelogs_status = int(data.get("changelogs_status", 0))
-        upsert_mod_info(conn, game, mod_id, mod_info_status, mod_info_payload)
-        replace_mod_files(conn, mod_id, filtered.get("files"))
-        # If the API didn't provide changelogs, try to synthesize them from the
-        # files payload (many mods embed brief changelog text per file).
         changelogs_payload = filtered.get("changelogs") or {}
         if not changelogs_payload or (isinstance(changelogs_payload, dict) and not changelogs_payload.get("changelogs")):
             changelogs_payload = derive_changelogs_from_files(filtered.get("files"))
-        replace_mod_changelogs(conn, mod_id, changelogs_payload)
+        # Retry DB writes in case another task holds the database lock
+        for attempt in range(5):
+            try:
+                upsert_api_cache(conn, mod_id, filtered)
+                upsert_mod_info(conn, game, mod_id, mod_info_status, mod_info_payload)
+                replace_mod_files(conn, mod_id, filtered.get("files"))
+                replace_mod_changelogs(conn, mod_id, changelogs_payload)
+                break
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e) and attempt < 4:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise
         print(
             f"Synced mod {mod_id}: info={mod_info_status} files={files_status} changelogs={changelogs_status}"
         )
@@ -107,16 +115,24 @@ def main():
         desc_text = extract_description_text(filtered.get("description"))
         if desc_text:
             mod_info_payload["description"] = desc_text
-        upsert_api_cache(conn, mod_id, filtered)
         mod_info_status = int(data.get("mod_info_status", 0))
         files_status = int(data.get("files_status", 0))
         changelogs_status = int(data.get("changelogs_status", 0))
-        upsert_mod_info(conn, args.game, mod_id, mod_info_status, mod_info_payload)
-        replace_mod_files(conn, mod_id, filtered.get("files"))
         changelogs_payload = filtered.get("changelogs") or {}
         if not changelogs_payload or (isinstance(changelogs_payload, dict) and not changelogs_payload.get("changelogs")):
             changelogs_payload = derive_changelogs_from_files(filtered.get("files"))
-        replace_mod_changelogs(conn, mod_id, changelogs_payload)
+        for attempt in range(5):
+            try:
+                upsert_api_cache(conn, mod_id, filtered)
+                upsert_mod_info(conn, args.game, mod_id, mod_info_status, mod_info_payload)
+                replace_mod_files(conn, mod_id, filtered.get("files"))
+                replace_mod_changelogs(conn, mod_id, changelogs_payload)
+                break
+            except sqlite3.OperationalError as e:
+                if "locked" in str(e) and attempt < 4:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise
         print(
             f"Synced mod {mod_id}: info={mod_info_status} files={files_status} changelogs={changelogs_status}"
         )

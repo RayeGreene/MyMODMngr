@@ -51,7 +51,7 @@ def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
     except Exception:
         pass
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA busy_timeout = 5000;")
+    conn.execute("PRAGMA busy_timeout = 30000;")
     # Pragmas tuned for local app usage
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")
