@@ -1280,7 +1280,23 @@ def _ingest_resolved_download(
 			# Extract archive to temporary directory
 			tmpdir = tempfile.mkdtemp(prefix="ingest_mod_")
 			extract_archive(str(path), tmpdir)
-			
+
+			# Handle double-zipped archives (e.g. exclusive packs with an inner .zip)
+			# Collect nested archives first, then extract to avoid modifying dirs during walk
+			nested_archive_exts = {".zip", ".7z", ".rar"}
+			nested_archives = []
+			for root_dir, _, filenames in os.walk(tmpdir):
+				for fname in filenames:
+					if Path(fname).suffix.lower() in nested_archive_exts:
+						nested_archives.append((os.path.join(root_dir, fname), root_dir))
+			for nested_path, dest_dir in nested_archives:
+				try:
+					logger.info(f"[ingest] Extracting nested archive: {os.path.basename(nested_path)}")
+					extract_archive(nested_path, dest_dir)
+					os.remove(nested_path)
+				except Exception as nested_err:
+					logger.warning(f"[ingest] Failed to extract nested archive {os.path.basename(nested_path)}: {nested_err}")
+
 			# Extract PAK asset map from the extracted folder
 			pak_map = extract_pak_asset_map_from_folder(tmpdir, aes_key=aes_key)
 			
@@ -1529,7 +1545,7 @@ def _ingest_resolved_download(
 		# mark it as a "premium" source linked to the existing mod.
 		premium_info: Dict[str, Any] = {}
 		try:
-			if contents and len(contents) > 1:
+			if contents and len(contents) >= 1:
 				pak_set = set(c.lower() for c in contents)
 				placeholders = ",".join("?" for _ in pak_set)
 				overlap_rows = cur.execute(
@@ -1563,7 +1579,14 @@ def _ingest_resolved_download(
 					for dl_id_other, info in by_download.items():
 						shared_count = len(info["shared_paks"])
 						other_total = info["total_paks"]
+						# Case 1: New download is a SUPERSET of existing (original logic)
 						if other_total and other_total.issubset(pak_set) and len(pak_set) > len(other_total):
+							if shared_count > best_shared:
+								best_shared = shared_count
+								best_match = (dl_id_other, info)
+						# Case 2: New download is a SUBSET of existing (exclusive/support packs)
+						# The exclusive pack has fewer paks that all exist in the Nexus mod
+						elif other_total and pak_set.issubset(other_total) and len(other_total) > len(pak_set):
 							if shared_count > best_shared:
 								best_shared = shared_count
 								best_match = (dl_id_other, info)
@@ -1605,7 +1628,7 @@ def _ingest_resolved_download(
 							"extra_pak_count": extra_count,
 						}
 						logger.info(
-							f"[ingest] Detected PREMIUM mod: {name} is a superset of "
+							f"[ingest] Detected PREMIUM mod: {name} overlaps with "
 							f"'{matched_info['name']}' ({shared_count} shared, {extra_count} extra PAKs)"
 						)
 
