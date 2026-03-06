@@ -4460,25 +4460,98 @@ def _lookup_mod_id_by_name(conn, name: Optional[str]) -> Optional[int]:
 	if not name:
 		return None
 	cur = conn.cursor()
+	clean = name.strip()
+
+	# 1) Exact match (case-insensitive)
 	row = cur.execute(
 		"SELECT mod_id FROM mods WHERE name = ? COLLATE NOCASE LIMIT 1",
-		(name.strip(),),
+		(clean,),
 	).fetchone()
 	if row and row[0]:
 		return int(row[0])
+
+	# 2) Normalise underscores → spaces and try exact match again
+	normalised = clean.replace("_", " ").strip()
+	if normalised != clean:
+		row = cur.execute(
+			"SELECT mod_id FROM mods WHERE name = ? COLLATE NOCASE LIMIT 1",
+			(normalised,),
+		).fetchone()
+		if row and row[0]:
+			return int(row[0])
+
+	# 3) Forward LIKE: input name appears inside a mod name
 	row = cur.execute(
 		"SELECT mod_id FROM mods WHERE name LIKE ? COLLATE NOCASE ORDER BY LENGTH(name) ASC LIMIT 1",
-		(f"%{name.strip()}%",),
+		(f"%{clean}%",),
 	).fetchone()
 	if row and row[0]:
 		return int(row[0])
+	if normalised != clean:
+		row = cur.execute(
+			"SELECT mod_id FROM mods WHERE name LIKE ? COLLATE NOCASE ORDER BY LENGTH(name) ASC LIMIT 1",
+			(f"%{normalised}%",),
+		).fetchone()
+		if row and row[0]:
+			return int(row[0])
+
+	# 4) Reverse LIKE: a known mod name appears inside the input name.
+	#    This catches "Sexy_Prism_Parade_support_content" matching mod "Sexy Prism Parade".
+	#    We match the longest mod name first to avoid false positives.
+	for variant in (normalised, clean):
+		rows = cur.execute(
+			"SELECT mod_id, name FROM mods WHERE ? LIKE '%' || name || '%' COLLATE NOCASE "
+			"ORDER BY LENGTH(name) DESC",
+			(variant,),
+		).fetchall()
+		if rows:
+			return int(rows[0][0])
+
+	# 5) Progressive prefix: strip trailing words and try substring match.
+	#    "Sexy Prism Parade support content" → try "Sexy Prism Parade support"
+	#    → "Sexy Prism Parade" etc.
+	words = normalised.split()
+	for end in range(len(words) - 1, 1, -1):
+		prefix = " ".join(words[:end])
+		row = cur.execute(
+			"SELECT mod_id FROM mods WHERE name = ? COLLATE NOCASE LIMIT 1",
+			(prefix,),
+		).fetchone()
+		if row and row[0]:
+			return int(row[0])
+		row = cur.execute(
+			"SELECT mod_id FROM mods WHERE name LIKE ? COLLATE NOCASE ORDER BY LENGTH(name) ASC LIMIT 1",
+			(f"%{prefix}%",),
+		).fetchone()
+		if row and row[0]:
+			return int(row[0])
+
 	return None
+
+
+def _normalise_search_name(raw: str) -> str:
+	"""Normalise a mod filename into a Nexus-friendly search query.
+
+	Replaces underscores with spaces, strips common suffixes like
+	"support content", and removes trailing whitespace.
+	"""
+	import re as _re
+	s = raw.replace("_", " ").strip()
+	# Strip common non-mod-name suffixes (case-insensitive)
+	s = _re.sub(
+		r"\s*\b(support\s*content|support|exclusive|patreon|premium)\b.*$",
+		"",
+		s,
+		flags=_re.IGNORECASE,
+	).strip()
+	return s or raw
 
 
 def _search_mod_id_remote(name: str, api_key: str, game: str = DEFAULT_GAME) -> Optional[int]:
 	if not name:
 		return None
-	params = urllib.parse.urlencode({"terms": name})
+	search_term = _normalise_search_name(name)
+	params = urllib.parse.urlencode({"terms": search_term})
 	url = f"https://api.nexusmods.com/v1/games/{game}/mods.json?{params}"
 	headers = {
 		"apikey": api_key,
@@ -4526,6 +4599,11 @@ def _sync_mod_metadata(
 					resolved_mod_id = parsed_mod_id
 			if resolved_mod_id is None:
 				resolved_mod_id = _lookup_mod_id_by_name(conn, mod_name)
+			# Also try with the normalised (underscore→space, suffix-stripped) form
+			if resolved_mod_id is None and mod_name:
+				normalised_name = _normalise_search_name(mod_name)
+				if normalised_name != mod_name:
+					resolved_mod_id = _lookup_mod_id_by_name(conn, normalised_name)
 			if resolved_mod_id is None and mod_name:
 				resolved_mod_id = _search_mod_id_remote(mod_name, key, DEFAULT_GAME)
 		if resolved_mod_id is None:
