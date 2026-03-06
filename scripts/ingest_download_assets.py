@@ -130,6 +130,111 @@ def _map_declared_name(pak_from_scan: str, declared_contents: List[str]) -> str:
     return pak_from_scan
 
 
+def _run_premium_detection(conn, log: logging.Logger) -> int:
+    """Detect premium/exclusive packs by comparing PAK overlap across downloads.
+
+    For each download, check if its PAK set is a superset or subset of another
+    download's PAKs. If so, mark the smaller set as 'premium' linked to the
+    larger set's mod.
+    """
+    from collections import defaultdict
+
+    cur = conn.cursor()
+    # Load all downloads with their contents and current source
+    dl_rows = cur.execute(
+        "SELECT id, name, mod_id, contents, source, linked_mod_id FROM local_downloads"
+    ).fetchall()
+
+    # Build pak sets per download
+    downloads = {}
+    for dl_id, dl_name, dl_mod_id, contents_json, dl_source, dl_linked in dl_rows:
+        try:
+            contents = json.loads(contents_json) if contents_json else []
+        except Exception:
+            contents = []
+        pak_set = set(c.lower() for c in contents if c.lower().endswith(".pak"))
+        if pak_set:
+            downloads[dl_id] = {
+                "name": dl_name,
+                "mod_id": dl_mod_id,
+                "pak_set": pak_set,
+                "source": dl_source,
+                "linked_mod_id": dl_linked,
+            }
+
+    linked_count = 0
+    for dl_id, info in downloads.items():
+        # Skip if already marked as premium
+        if info["source"] == "premium":
+            continue
+        pak_set = info["pak_set"]
+        if not pak_set:
+            continue
+
+        best_match_id = None
+        best_shared = 0
+        best_info = None
+
+        for other_id, other_info in downloads.items():
+            if other_id == dl_id:
+                continue
+            other_pak_set = other_info["pak_set"]
+            if not other_pak_set:
+                continue
+
+            shared = pak_set & other_pak_set
+            if not shared:
+                continue
+
+            # Case 1: Current is SUPERSET of other (current has extras)
+            if other_pak_set.issubset(pak_set) and len(pak_set) > len(other_pak_set):
+                if len(shared) > best_shared:
+                    best_shared = len(shared)
+                    best_match_id = other_id
+                    best_info = other_info
+            # Case 2: Current is SUBSET of other (exclusive/support pack)
+            elif pak_set.issubset(other_pak_set) and len(other_pak_set) > len(pak_set):
+                if len(shared) > best_shared:
+                    best_shared = len(shared)
+                    best_match_id = other_id
+                    best_info = other_info
+
+        if best_match_id and best_info:
+            linked_mod_id = best_info["mod_id"] or info["mod_id"]
+            extra_count = len(pak_set) - best_shared
+
+            cur.execute(
+                """UPDATE local_downloads
+                   SET source = 'premium',
+                       linked_mod_id = ?,
+                       premium_pak_count = ?,
+                       shared_pak_count = ?,
+                       extra_pak_count = ?
+                   WHERE id = ?""",
+                (linked_mod_id, len(pak_set), best_shared, extra_count, dl_id),
+            )
+            # Mark the other as 'nexus' if not already set
+            cur.execute(
+                "UPDATE local_downloads SET source = 'nexus' WHERE id = ? AND source IS NULL",
+                (best_match_id,),
+            )
+            # Link the mod_id if not set
+            if info["mod_id"] is None and linked_mod_id is not None:
+                cur.execute(
+                    "UPDATE local_downloads SET mod_id = ? WHERE id = ?",
+                    (linked_mod_id, dl_id),
+                )
+            conn.commit()
+            linked_count += 1
+            log.info(
+                "[premium] %s -> linked to '%s' (mod_id=%s, shared=%d, extra=%d)",
+                info["name"], best_info["name"], linked_mod_id, best_shared, extra_count,
+            )
+
+    log.info("Premium detection complete: %d download(s) linked.", linked_count)
+    return linked_count
+
+
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Ingest UE assets from local download archives into per-pak tables")
     p.add_argument("--db", dest="db_path", default=None, help="Path to mods.db (optional)")
@@ -231,6 +336,20 @@ def main(argv=None) -> int:
                 log.info("[%s] Extracting archive -> %s", name, full)
                 try:
                     extract_with_7z(str(full), tmpdir)
+                    # Handle nested archives (double-zipped exclusive/support packs)
+                    nested_archive_exts = {".zip", ".7z", ".rar"}
+                    nested_archives = []
+                    for root_dir, _, filenames in os.walk(tmpdir):
+                        for fname in filenames:
+                            if Path(fname).suffix.lower() in nested_archive_exts:
+                                nested_archives.append((os.path.join(root_dir, fname), root_dir))
+                    for nested_path, dest_dir in nested_archives:
+                        try:
+                            log.info("[%s] Extracting nested archive: %s", name, os.path.basename(nested_path))
+                            extract_with_7z(nested_path, dest_dir)
+                            os.remove(nested_path)
+                        except Exception as nested_err:
+                            log.warning("[%s] Failed to extract nested archive %s: %s", name, os.path.basename(nested_path), nested_err)
                     pak_source_dir = tmpdir
                 except Exception as e:
                     log.error("[%s] Failed to extract archive: %s", name, e)
@@ -299,6 +418,20 @@ def main(argv=None) -> int:
                     paks_written += 1
                     assets_written += bulk_upsert_pak_assets(conn, pak_name, assets, replace=True)
                     upsert_pak_assets_json(conn, pak_name, assets, mod_id=resolved_mod_id)
+
+                # Update local_downloads.contents with actual pak names found
+                # (the scan path may have stored empty/wrong contents for nested zips)
+                actual_paks = collapse_pak_bundle(list(merged_pak_map.keys()))
+                if actual_paks and actual_paks != contents:
+                    try:
+                        cur.execute(
+                            "UPDATE local_downloads SET contents = ? WHERE id = ?",
+                            (json.dumps(actual_paks, ensure_ascii=False), download_id),
+                        )
+                        conn.commit()
+                        log.info("[%s] Updated contents with %d actual pak(s): %s", name, len(actual_paks), actual_paks)
+                    except Exception:
+                        log.debug("[%s] Failed to update contents with actual paks", name, exc_info=True)
             finally:
                 # Only clean up temp directory if we created one (for archives)
                 if tmpdir:
@@ -308,6 +441,12 @@ def main(argv=None) -> int:
                         pass
 
         log.info("Processed %d archive(s); wrote %d pak(s) and %d pak_assets.", processed, paks_written, assets_written)
+
+        # --- Premium / exclusive pack detection (post-ingest) ---
+        # After all downloads are ingested, detect overlap between downloads'
+        # PAK sets to identify premium/exclusive packs.
+        log.info("Running premium/exclusive pack detection...")
+        _run_premium_detection(conn, log)
     else:
         log.info("Extraction disabled (--extract not set). Skipping archive processing and going straight to tag rebuild (if requested).")
 

@@ -101,27 +101,60 @@ def list_files_level_one_including_root(root_dir: str) -> List[tuple[str, str]]:
 def _enumerate_archive_contents(full_path: Path) -> List[str]:
     """
     Enumerate .pak files from archives (.zip, .rar, .7z) or folders.
-    
+
     Supports:
-    - Archives: Lists .pak files inside the archive
+    - Archives: Lists .pak files inside the archive (including nested archives)
     - Folders: Lists .pak files directly in the folder
     - Single .pak files: Returns the filename itself
     """
     contents: List[str] = []
     lower_name = full_path.name.lower()
-    
+
     # Handle archives
     if lower_name.endswith((".zip", ".rar", ".7z")):
         try:
             seen: set[str] = set()
+            nested_archive_exts = {".zip", ".7z", ".rar"}
+            has_nested = False
             for entry in list_entries(str(full_path)):
                 base = os.path.basename(entry)
                 if base.lower().endswith(".pak") and base not in seen:
                     seen.add(base)
                     contents.append(base)
+                elif Path(base).suffix.lower() in nested_archive_exts:
+                    has_nested = True
+
+            # If no .pak files found but nested archives exist, extract and scan
+            if not contents and has_nested:
+                import tempfile
+                import shutil
+                from core.utils.archive import extract_archive
+                tmpdir = tempfile.mkdtemp(prefix="scan_nested_")
+                try:
+                    extract_archive(str(full_path), tmpdir)
+                    # Extract nested archives
+                    nested_archives = []
+                    for root_dir, _, filenames in os.walk(tmpdir):
+                        for fname in filenames:
+                            if Path(fname).suffix.lower() in nested_archive_exts:
+                                nested_archives.append((os.path.join(root_dir, fname), root_dir))
+                    for nested_path, dest_dir in nested_archives:
+                        try:
+                            extract_archive(nested_path, dest_dir)
+                            os.remove(nested_path)
+                        except Exception:
+                            pass
+                    # Now scan for .pak files
+                    for root_dir, _, filenames in os.walk(tmpdir):
+                        for fname in filenames:
+                            if fname.lower().endswith(".pak") and fname not in seen:
+                                seen.add(fname)
+                                contents.append(fname)
+                finally:
+                    shutil.rmtree(tmpdir, ignore_errors=True)
         except Exception:
             contents = []
-    
+
     # Handle folders with .pak files
     elif full_path.is_dir():
         try:
@@ -133,11 +166,11 @@ def _enumerate_archive_contents(full_path: Path) -> List[str]:
                     contents.append(pak_file.name)
         except Exception:
             contents = []
-    
+
     # Handle single .pak files
     elif lower_name.endswith(".pak"):
         contents = [full_path.name]
-    
+
     if contents:
         contents.sort()
     return contents
