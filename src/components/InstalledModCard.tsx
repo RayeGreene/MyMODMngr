@@ -49,7 +49,6 @@ export function InstalledModCard({
   const [isUninstalling, setIsUninstalling] = useState(false);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
 
-  // NSFW blur filter
   const { nsfwBlurEnabled } = useNsfwFilter();
   const shouldBlur = mod.containsAdultContent && nsfwBlurEnabled;
 
@@ -61,8 +60,6 @@ export function InstalledModCard({
     mod.categoryTags?.[0] ?? mod.category,
   );
 
-  // Use lightweight TagList to avoid expensive per-resize measurements.
-  // TagList shows up to `maxVisible` tags (default 3) and a simple +N badge.
   const formatDate = (dateString?: string | null) => {
     if (!dateString) return "Unknown";
     const date = new Date(dateString);
@@ -164,11 +161,11 @@ export function InstalledModCard({
                     style={shouldBlur ? { filter: "blur(4px)" } : undefined}
                   />
                   {(mod.hasUpdate || mod.isUpdating) && (
-                    <div className="absolute -top-1 -right-1 w-4 h-4 bg-destructive rounded-full flex items-center justify-center">
+                    <div className="absolute -top-1 -right-1 w-4 h-4 bg-warning rounded-full flex items-center justify-center">
                       {mod.isUpdating ? (
-                        <RefreshCw className="w-2 h-2 text-destructive-foreground animate-spin" />
+                        <RefreshCw className="w-2 h-2 text-warning-foreground animate-spin" />
                       ) : (
-                        <AlertTriangle className="w-2 h-2 text-destructive-foreground" />
+                        <AlertTriangle className="w-2 h-2 text-warning-foreground" />
                       )}
                     </div>
                   )}
@@ -179,11 +176,14 @@ export function InstalledModCard({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 mb-1 flex-wrap">
                     <h3
-                      className="font-normal truncate cursor-pointer hover:text-primary"
+                      className="font-normal truncate cursor-pointer hover:text-primary transition-colors"
                       onClick={() => onView(mod)}
                     >
                       {mod.name}
                     </h3>
+                    {mod.isActive && (
+                      <CheckCircle className="w-3.5 h-3.5 text-success flex-shrink-0" />
+                    )}
                     {mod.hasUpdate && (
                       <Badge variant="destructive" className="text-xs shrink-0">
                         Update Available
@@ -203,7 +203,7 @@ export function InstalledModCard({
                     variant="ghost"
                     size="sm"
                     onClick={() => onFavorite(mod.id)}
-                    className={mod.isFavorited ? "text-red-500" : ""}
+                    className={`transition-colors ${mod.isFavorited ? "text-red-500" : ""}`}
                   >
                     <Heart
                       className={`w-4 h-4 ${
@@ -273,7 +273,13 @@ export function InstalledModCard({
 
   return (
     <>
-      <Card className="hover:shadow-lg dark:hover:shadow-white transition-all duration-200 group relative">
+      <Card
+        className={`card-hover transition-all duration-200 group relative border ${
+          mod.isActive
+            ? "border-success/30 hover:border-success/50"
+            : "border-border/50 hover:border-primary/30"
+        }`}
+      >
         <CardContent className="p-0 min-h-[370px] flex flex-col flex-1">
           <div
             className="aspect-video bg-muted relative overflow-hidden rounded-t-lg cursor-pointer"
@@ -291,7 +297,7 @@ export function InstalledModCard({
             <img
               src={mod.images[0]}
               alt={mod.name}
-              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
               style={shouldBlur ? { filter: "blur(20px)" } : undefined}
             />
             {shouldBlur && (
@@ -301,7 +307,7 @@ export function InstalledModCard({
             )}
 
             {(mod.hasUpdate || mod.isUpdating) && (
-              <div className="absolute top-2 left-2 bg-destructive text-destructive-foreground px-2 py-1 rounded-md text-xs font-medium flex items-center gap-1">
+              <div className="absolute top-2 left-2 bg-warning text-warning-foreground px-2 py-1 rounded-md text-xs font-medium flex items-center gap-1 shadow-md">
                 {mod.isUpdating ? (
                   <RefreshCw className="w-3 h-3 animate-spin" />
                 ) : (
@@ -311,17 +317,16 @@ export function InstalledModCard({
               </div>
             )}
 
-            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+            <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-center">
               <div className="flex gap-2">
                 <Button
                   variant="secondary"
                   size="sm"
                   onClick={(ev) => {
-                    // prevent parent handler from double-firing
                     ev.stopPropagation();
                     onView(mod);
                   }}
-                  className="gap-2"
+                  className="gap-2 shadow-lg"
                 >
                   <Eye className="w-4 h-4" />
                   View
@@ -339,7 +344,7 @@ export function InstalledModCard({
                 <div className="flex items-start justify-between mb-2">
                   <div className="flex-1 min-w-0">
                     <h3
-                      className="font-medium mb-1 cursor-pointer hover:text-primary line-clamp-1"
+                      className="font-medium mb-1 cursor-pointer hover:text-primary transition-colors line-clamp-1"
                       onClick={() => onView(mod)}
                     >
                       {mod.name}
@@ -347,8 +352,8 @@ export function InstalledModCard({
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       {mod.isActive && (
                         <>
-                          <CheckCircle className="w-3 h-3 text-green-500" />
-                          <span>Active</span>
+                          <CheckCircle className="w-3 h-3 text-success" />
+                          <span className="text-success font-medium">Active</span>
                           <span>•</span>
                         </>
                       )}
@@ -362,7 +367,7 @@ export function InstalledModCard({
                     variant="ghost"
                     size="sm"
                     onClick={() => onFavorite(mod.id)}
-                    className={mod.isFavorited ? "text-red-500" : ""}
+                    className={`transition-colors ${mod.isFavorited ? "text-red-500" : ""}`}
                   >
                     <Heart
                       className={`w-4 h-4 ${
@@ -400,30 +405,8 @@ export function InstalledModCard({
                         if (nextIndex < candidates.length) {
                           const nextSrc = candidates[nextIndex];
                           img.dataset.avatarIndex = String(nextIndex);
-                          if (typeof window !== "undefined") {
-                            console.warn(
-                              "[avatar] fallback to next candidate",
-                              {
-                                modId: mod.id,
-                                name: mod.name,
-                                attempted: img.src,
-                                nextSrc,
-                                nextIndex,
-                              },
-                            );
-                          }
                           img.src = nextSrc;
                           return;
-                        }
-                        if (typeof window !== "undefined") {
-                          console.error(
-                            "[avatar] all avatar candidates failed",
-                            {
-                              modId: mod.id,
-                              name: mod.name,
-                              candidates,
-                            },
-                          );
                         }
                         img.dataset.avatarIndex = String(candidates.length);
                         img.src = "";
@@ -448,7 +431,7 @@ export function InstalledModCard({
                       }
                     }}
                   >
-                    <span className="text-sm text-muted-foreground">
+                    <span className="text-sm text-muted-foreground hover:text-primary transition-colors">
                       {mod.author || "Unknown author"}
                     </span>
                   </a>
@@ -520,7 +503,7 @@ export function InstalledModCard({
                     asChild
                   >
                     <div>
-                      <CheckCircle className="w-3 h-3" />
+                      <CheckCircle className="w-3 h-3 text-success" />
                       Up to date
                     </div>
                   </Button>

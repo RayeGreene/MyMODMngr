@@ -1,0 +1,287 @@
+/* ============================================
+   RivalNxt Animation System
+   ============================================ */
+
+/* --- Keyframes --- */
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-down {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes slide-in-left {
+  from { opacity: 0; transform: translateX(-12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes scale-out {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.95); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 var(--primary); }
+  50% { box-shadow: 0 0 12px 2px var(--primary); }
+}
+
+@keyframes active-glow {
+  0%, 100% { box-shadow: 0 0 0 0 var(--success); }
+  50% { box-shadow: 0 0 8px 2px var(--success); }
+}
+
+@keyframes count-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes tab-indicator {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes skeleton-wave {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+@keyframes notification-bounce {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+}
+
+@keyframes stagger-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* --- Animation Utility Classes --- */
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out forwards;
+}
+
+.animate-fade-out {
+  animation: fade-out 0.15s ease-in forwards;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.25s ease-out forwards;
+}
+
+.animate-slide-down {
+  animation: slide-down 0.25s ease-out forwards;
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 0.25s ease-out forwards;
+}
+
+.animate-slide-in-left {
+  animation: slide-in-left 0.25s ease-out forwards;
+}
+
+.animate-scale-in {
+  animation: scale-in 0.2s ease-out forwards;
+}
+
+.animate-scale-out {
+  animation: scale-out 0.15s ease-in forwards;
+}
+
+.animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--muted) 25%,
+    var(--accent) 50%,
+    var(--muted) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.animate-active-glow {
+  animation: active-glow 2s ease-in-out infinite;
+}
+
+.animate-count-up {
+  animation: count-up 0.3s ease-out forwards;
+}
+
+.animate-tab-indicator {
+  animation: tab-indicator 0.2s ease-out forwards;
+  transform-origin: left;
+}
+
+.animate-notification-bounce {
+  animation: notification-bounce 0.3s ease-out;
+}
+
+.animate-stagger-in {
+  animation: stagger-in 0.3s ease-out forwards;
+  opacity: 0;
+}
+
+/* --- Stagger delays for grid items --- */
+.stagger-1 { animation-delay: 0.02s; }
+.stagger-2 { animation-delay: 0.04s; }
+.stagger-3 { animation-delay: 0.06s; }
+.stagger-4 { animation-delay: 0.08s; }
+.stagger-5 { animation-delay: 0.10s; }
+.stagger-6 { animation-delay: 0.12s; }
+.stagger-7 { animation-delay: 0.14s; }
+.stagger-8 { animation-delay: 0.16s; }
+.stagger-9 { animation-delay: 0.18s; }
+.stagger-10 { animation-delay: 0.20s; }
+
+/* --- Transition Utilities --- */
+
+.transition-theme {
+  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+}
+
+.transition-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.transition-opacity-fast {
+  transition: opacity 0.15s ease;
+}
+
+/* --- Card Hover Effects --- */
+
+.card-hover {
+  transition: transform 0.2s ease, box-shadow 0.25s ease;
+}
+
+.card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 8px 25px -5px rgba(0, 0, 0, 0.15),
+    0 4px 10px -5px rgba(0, 0, 0, 0.08);
+}
+
+.dark .card-hover:hover {
+  box-shadow:
+    0 8px 25px -5px rgba(0, 0, 0, 0.4),
+    0 0 15px -3px rgba(144, 184, 248, 0.08);
+}
+
+/* --- Active Mod Indicator --- */
+
+.active-indicator {
+  position: relative;
+}
+
+.active-indicator::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--success);
+  border-radius: 1px;
+  opacity: 0.8;
+}
+
+/* --- Custom Scrollbar --- */
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--muted);
+  border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--muted-foreground);
+}
+
+.custom-scrollbar {
+  scrollbar-color: var(--muted) transparent;
+  scrollbar-width: thin;
+}
+
+/* --- Page Transition --- */
+
+.page-enter {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
+.page-enter-active {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.2s ease-out, transform 0.2s ease-out;
+}
+
+.page-exit {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.page-exit-active {
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 0.15s ease-in, transform 0.15s ease-in;
+}
+
+/* --- Skeleton Enhancements --- */
+
+.skeleton-card {
+  background: linear-gradient(
+    90deg,
+    var(--muted) 0%,
+    var(--surface-elevated) 50%,
+    var(--muted) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-wave 1.8s ease-in-out infinite;
+}
+
+/* --- Focus Ring Override --- */
+
+.focus-ring:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}

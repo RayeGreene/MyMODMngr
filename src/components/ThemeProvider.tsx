@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
 
 type Theme = "light" | "dark";
 
@@ -6,6 +6,9 @@ interface ThemeContextType {
   theme: Theme;
   toggleTheme: () => void;
   setTheme: (theme: Theme) => void;
+  /** Custom accent color override (CSS color string). null = use palette default. */
+  accentColor: string | null;
+  setAccentColor: (color: string | null) => void;
 }
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
@@ -23,40 +26,63 @@ interface ThemeProviderProps {
   defaultTheme?: Theme;
 }
 
+const THEME_KEY = "theme";
+const ACCENT_KEY = "rivalnxt:accent-color";
+
 export const ThemeProvider: React.FC<ThemeProviderProps> = ({
   children,
-  defaultTheme = "dark", // Default to dark mode
+  defaultTheme = "dark",
 }) => {
   const [theme, setTheme] = useState<Theme>(() => {
-    // Check localStorage first, then default to dark mode
     if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("theme") as Theme;
+      const saved = localStorage.getItem(THEME_KEY) as Theme;
       return saved || defaultTheme;
     }
     return defaultTheme;
   });
 
+  const [accentColor, setAccentColorState] = useState<string | null>(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem(ACCENT_KEY) || null;
+    }
+    return null;
+  });
+
   useEffect(() => {
     const root = window.document.documentElement;
-
-    // Remove existing theme classes
     root.classList.remove("light", "dark");
-
-    // Add the current theme class
     root.classList.add(theme);
-
-    // Save to localStorage
-    localStorage.setItem("theme", theme);
+    localStorage.setItem(THEME_KEY, theme);
   }, [theme]);
 
-  const toggleTheme = () => {
-    setTheme((prevTheme) => (prevTheme === "light" ? "dark" : "light"));
-  };
+  // Apply custom accent color as CSS variable override
+  useEffect(() => {
+    const root = window.document.documentElement;
+    if (accentColor) {
+      root.style.setProperty("--primary", accentColor);
+      root.style.setProperty("--info", accentColor);
+      localStorage.setItem(ACCENT_KEY, accentColor);
+    } else {
+      root.style.removeProperty("--primary");
+      root.style.removeProperty("--info");
+      localStorage.removeItem(ACCENT_KEY);
+    }
+  }, [accentColor]);
 
-  const value = {
+  const toggleTheme = useCallback(() => {
+    setTheme((prev) => (prev === "light" ? "dark" : "light"));
+  }, []);
+
+  const setAccentColor = useCallback((color: string | null) => {
+    setAccentColorState(color);
+  }, []);
+
+  const value: ThemeContextType = {
     theme,
     toggleTheme,
     setTheme,
+    accentColor,
+    setAccentColor,
   };
 
   return (

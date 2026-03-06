@@ -17,6 +17,19 @@ import { ThemeProvider } from "./components/ThemeProvider";
 import { NSFWFilterProvider } from "./components/NSFWFilterProvider";
 import { openInBrowser } from "./lib/tauri-utils";
 import { initializeIcons } from "./lib/iconManager";
+// New feature imports
+import { NotificationCenter } from "./components/NotificationCenter";
+import { CommandPalette, buildDefaultActions } from "./components/CommandPalette";
+import { LoadoutManager } from "./components/LoadoutManager";
+import { CharacterBrowser } from "./components/CharacterBrowser";
+import { UpdateCenter } from "./components/UpdateCenter";
+import { StorageDashboard } from "./components/StorageDashboard";
+// ActivityFeed is available but rendered within StorageDashboard or other views as needed
+import { ShortcutsHelpDialog } from "./components/ShortcutsHelpDialog";
+import { PageTransition } from "./components/PageTransition";
+import { unreadCount as getUnreadCount, subscribe as subscribeNotifications } from "./lib/notifications";
+import { handleGlobalKeyDown, registerShortcut } from "./lib/shortcuts";
+import { logActivity } from "./lib/activityLog";
 import {
   waitForMatchingHandoff,
   createNxmProgressController,
@@ -124,9 +137,14 @@ type BackendStatusState = {
 export default function App() {
   // State management
   const [mods, setMods] = useState<any[]>([]);
-  const [activeTab, setActiveTab] = useState<"downloads" | "active">(
+  const [activeTab, setActiveTab] = useState<"downloads" | "active" | "characters" | "loadouts" | "updates" | "storage">(
     "downloads"
   );
+  // New feature state
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [notificationCount, setNotificationCount] = useState(0);
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [selectedCharacters, setSelectedCharacters] = useState<string[]>([]);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
@@ -1178,6 +1196,104 @@ export default function App() {
     })();
   }, [backendReady]);
 
+  // Subscribe to notification count changes
+  useEffect(() => {
+    setNotificationCount(getUnreadCount());
+    return subscribeNotifications(() => {
+      setNotificationCount(getUnreadCount());
+    });
+  }, []);
+
+  // Register global keyboard shortcuts
+  useEffect(() => {
+    const unregisters = [
+      registerShortcut({
+        keys: "Ctrl+K",
+        label: "Open command palette",
+        category: "search",
+        handler: () => setCommandPaletteOpen(true),
+      }),
+      registerShortcut({
+        keys: "Ctrl+R",
+        label: "Refresh mods",
+        category: "actions",
+        handler: () => handleRefresh(),
+      }),
+      registerShortcut({
+        keys: "Ctrl+1",
+        label: "Go to Downloads",
+        category: "navigation",
+        handler: () => setActiveTab("downloads"),
+      }),
+      registerShortcut({
+        keys: "Ctrl+2",
+        label: "Go to Active Mods",
+        category: "navigation",
+        handler: () => setActiveTab("active"),
+      }),
+      registerShortcut({
+        keys: "Ctrl+3",
+        label: "Go to Characters",
+        category: "navigation",
+        handler: () => setActiveTab("characters"),
+      }),
+      registerShortcut({
+        keys: "Ctrl+4",
+        label: "Go to Loadouts",
+        category: "navigation",
+        handler: () => setActiveTab("loadouts"),
+      }),
+      registerShortcut({
+        keys: "Ctrl+5",
+        label: "Go to Update Center",
+        category: "navigation",
+        handler: () => setActiveTab("updates"),
+      }),
+    ];
+
+    const keyHandler = (e: KeyboardEvent) => handleGlobalKeyDown(e);
+    window.addEventListener("keydown", keyHandler);
+    return () => {
+      unregisters.forEach((fn) => fn());
+      window.removeEventListener("keydown", keyHandler);
+    };
+  }, []);
+
+  // Update all handler for UpdateCenter
+  const handleUpdateAll = useCallback(async () => {
+    const modsToUpdate = mods.filter((m) => m.isInstalled && m.hasUpdate);
+    for (const mod of modsToUpdate) {
+      await handleUpdate(mod.id);
+    }
+  }, [mods]);
+
+  // Loadout activation handler
+  const handleActivateLoadout = useCallback(
+    (modIds: string[]) => {
+      const modIdSet = new Set(modIds);
+      setMods((prev) =>
+        prev.map((mod) =>
+          mod.isInstalled
+            ? { ...mod, isActive: modIdSet.has(mod.id) }
+            : mod,
+        ),
+      );
+      logActivity({ action: "loadout_activate", detail: `${modIds.length} mods activated` });
+      toast.success(`Loadout activated with ${modIds.length} mods`);
+      void refreshMods({ includeConflicts: true });
+    },
+    [refreshMods],
+  );
+
+  // Mod view handler for new views
+  const handleViewModFromBrowser = useCallback(
+    (mod: any) => {
+      // Navigate to downloads tab and open the mod
+      setActiveTab("downloads");
+    },
+    [],
+  );
+
   function extractMemberId(value: unknown): number | undefined {
     if (value == null) return undefined;
     if (typeof value === "number" && Number.isFinite(value)) {
@@ -1630,8 +1746,8 @@ export default function App() {
           <div className="flex-1 flex flex-col">
             {/* Tab Header */}
             <TabHeader
-              activeTab={activeTab}
-              onTabChange={setActiveTab}
+              activeTab={activeTab === "downloads" || activeTab === "active" ? activeTab : "downloads"}
+              onTabChange={(tab) => setActiveTab(tab)}
               downloadsCount={installedMods.length}
               activeCount={activeMods.length}
               updatesCount={updatesCount}
@@ -1639,41 +1755,117 @@ export default function App() {
               onRefresh={handleRefresh}
               onOpenSettings={handleOpenSettings}
               onOpenBootstrap={handleOpenBootstrap}
+              notificationCount={notificationCount}
+              onOpenNotifications={() => setNotificationsOpen(true)}
             />
+
+            {/* Sub-navigation for new views */}
+            <div className="flex items-center gap-1 px-4 py-2 bg-card/50 border-b border-border/50 overflow-x-auto">
+              {[
+                { id: "downloads" as const, label: "Browse" },
+                { id: "active" as const, label: "Active" },
+                { id: "characters" as const, label: "Characters" },
+                { id: "loadouts" as const, label: "Loadouts" },
+                { id: "updates" as const, label: "Updates" },
+                { id: "storage" as const, label: "Storage" },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`px-3 py-1 text-xs font-medium rounded-full transition-colors whitespace-nowrap ${
+                    activeTab === tab.id
+                      ? "bg-primary/15 text-primary"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                  }`}
+                >
+                  {tab.label}
+                  {tab.id === "updates" && updatesCount > 0 && (
+                    <span className="ml-1.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-warning text-warning-foreground text-[10px] font-bold">
+                      {updatesCount}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
 
             {/* Tab Content */}
             <div className="flex-1 overflow-hidden">
-              {activeTab === "downloads" ? (
-                <DownloadsPage
-                  mods={mods}
-                  onUpdate={handleUpdate}
-                  onUninstall={handleUninstall}
-                  onFavorite={handleFavorite}
-                  selectedCategory={selectedCategory}
-                  selectedCharacters={selectedCharacters}
-                  onModAdded={handleModAdded}
-                  onConflictStateChanged={notifyConflictsDirty}
-                  viewMode={viewMode}
-                  onViewModeChange={setViewMode}
-                  onRefresh={handleRefresh}
-                />
-              ) : (
-                <ActiveModsView
-                  mods={mods}
-                  onToggleMod={handleToggleMod}
-                  onDisableAll={handleDisableAll}
-                  onEnableAll={handleEnableAll}
-                  onUpdate={handleUpdate}
-                  onUninstall={handleUninstall}
-                  onFavorite={handleFavorite}
-                  selectedCategory={selectedCategory}
-                  selectedCharacters={selectedCharacters}
-                  onConflictStateChanged={notifyConflictsDirty}
-                  viewMode={viewMode}
-                  onViewModeChange={setViewMode}
-                  onRefresh={handleRefresh}
-                />
-              )}
+              <PageTransition transitionKey={activeTab} className="h-full">
+                {activeTab === "downloads" && (
+                  <DownloadsPage
+                    mods={mods}
+                    onUpdate={handleUpdate}
+                    onCheckUpdate={handleUpdate}
+                    onUninstall={handleUninstall}
+                    onFavorite={handleFavorite}
+                    selectedCategory={selectedCategory}
+                    selectedCharacters={selectedCharacters}
+                    onModAdded={handleModAdded}
+                    onConflictStateChanged={notifyConflictsDirty}
+                    viewMode={viewMode}
+                    onViewModeChange={setViewMode}
+                    onRefresh={handleRefresh}
+                  />
+                )}
+                {activeTab === "active" && (
+                  <ActiveModsView
+                    mods={mods}
+                    onToggleMod={handleToggleMod}
+                    onDisableAll={handleDisableAll}
+                    onEnableAll={handleEnableAll}
+                    onUpdate={handleUpdate}
+                    onCheckUpdate={handleUpdate}
+                    onUninstall={handleUninstall}
+                    onFavorite={handleFavorite}
+                    selectedCategory={selectedCategory}
+                    selectedCharacters={selectedCharacters}
+                    onConflictStateChanged={notifyConflictsDirty}
+                    viewMode={viewMode}
+                    onViewModeChange={setViewMode}
+                    onRefresh={handleRefresh}
+                  />
+                )}
+                {activeTab === "characters" && (
+                  <div className="h-full overflow-auto custom-scrollbar">
+                    <CharacterBrowser
+                      mods={mods}
+                      onUpdate={handleUpdate}
+                      onCheckUpdate={handleUpdate}
+                      onUninstall={handleUninstall}
+                      onFavorite={handleFavorite}
+                      onView={handleViewModFromBrowser}
+                    />
+                  </div>
+                )}
+                {activeTab === "loadouts" && (
+                  <div className="h-full overflow-auto custom-scrollbar">
+                    <LoadoutManager
+                      mods={mods}
+                      onActivateLoadout={handleActivateLoadout}
+                    />
+                  </div>
+                )}
+                {activeTab === "updates" && (
+                  <div className="h-full overflow-auto custom-scrollbar">
+                    <UpdateCenter
+                      mods={mods}
+                      onUpdate={handleUpdate}
+                      onUpdateAll={handleUpdateAll}
+                      onCheckUpdate={handleUpdate}
+                      onView={handleViewModFromBrowser}
+                    />
+                  </div>
+                )}
+                {activeTab === "storage" && (
+                  <div className="h-full overflow-auto custom-scrollbar">
+                    <StorageDashboard
+                      mods={mods}
+                      onView={handleViewModFromBrowser}
+                    />
+                  </div>
+                )}
+              </PageTransition>
             </div>
           </div>
         </div>
@@ -1735,6 +1927,35 @@ export default function App() {
           enabled={backendReady}
           onModAdded={handleModAdded}
           isHandoffExcluded={isHandoffManagedByUpdate}
+        />
+
+        {/* Global Overlays */}
+        <NotificationCenter
+          open={notificationsOpen}
+          onOpenChange={setNotificationsOpen}
+        />
+        <CommandPalette
+          open={commandPaletteOpen}
+          onOpenChange={setCommandPaletteOpen}
+          mods={mods}
+          onViewMod={(mod) => {
+            setActiveTab("downloads");
+          }}
+          actions={buildDefaultActions({
+            onNavigateDownloads: () => setActiveTab("downloads"),
+            onNavigateActive: () => setActiveTab("active"),
+            onNavigateCharacters: () => setActiveTab("characters"),
+            onNavigateLoadouts: () => setActiveTab("loadouts"),
+            onNavigateUpdates: () => setActiveTab("updates"),
+            onNavigateStorage: () => setActiveTab("storage"),
+            onOpenSettings: handleOpenSettings,
+            onRefresh: handleRefresh,
+            onShowShortcuts: () => setShortcutsOpen(true),
+          })}
+        />
+        <ShortcutsHelpDialog
+          open={shortcutsOpen}
+          onOpenChange={setShortcutsOpen}
         />
       </div>
       </NSFWFilterProvider>

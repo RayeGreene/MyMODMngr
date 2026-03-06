@@ -2,18 +2,15 @@ import React, { useMemo } from "react";
 import type { SyntheticEvent } from "react";
 import { Card, CardContent } from "./ui/card";
 import { Button } from "./ui/button";
-// Badge is used by TagList; not needed directly here
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
-import { Download, Star, Eye, Heart } from "lucide-react";
+import { Download, Star, Eye, Heart, CheckCircle } from "lucide-react";
 import TagList from "./TagList";
 import { useNsfwFilter } from "./NSFWFilterProvider";
 
 export interface Mod {
   id: string;
-  backendModId?: number | null; // server-side mods.mod_id if available
-  // Aggregated local download ids that belong to this mod card (used for activation toggles)
+  backendModId?: number | null;
   sourceDownloadIds?: number[];
-  // Aggregated active paks across the grouped downloads (used to seed UI)
   defaultActivePaks?: string[];
   name: string;
   description: string;
@@ -23,7 +20,7 @@ export interface Mod {
   authorProfileUrl?: string;
   category: string;
   categoryTags?: string[];
-  character?: string; // New field for character filtering
+  character?: string;
   tags: string[];
   downloads: number;
   rating: number;
@@ -45,17 +42,19 @@ export interface Mod {
   latestFileId?: number | null;
   latestFileName?: string | null;
   installDate?: string | null;
-  isActive?: boolean; // New field for active/inactive status
-  performanceImpact?: number; // 1-5 scale for performance impact
+  isActive?: boolean;
+  performanceImpact?: number;
   needsUpdate?: boolean;
   isUpdating?: boolean;
   updateError?: string | null;
-  // Premium / Patreon mod fields
   source?: string | null;
   isPremium?: boolean;
   extraPakCount?: number | null;
   premiumPakCount?: number | null;
   sharedPakCount?: number | null;
+  containsAdultContent?: boolean;
+  /** Whether this card is selected for bulk operations */
+  isSelected?: boolean;
 }
 
 interface ModCardProps {
@@ -64,6 +63,10 @@ interface ModCardProps {
   onInstall: (modId: string) => void;
   onFavorite: (modId: string) => void;
   onView: (mod: Mod) => void;
+  /** Bulk selection callback */
+  onSelect?: (modId: string) => void;
+  /** Whether bulk selection mode is active */
+  selectionMode?: boolean;
 }
 
 function ModCardInner({
@@ -72,24 +75,11 @@ function ModCardInner({
   onInstall,
   onFavorite,
   onView,
+  onSelect,
+  selectionMode,
 }: ModCardProps) {
-  // NSFW blur filter
   const { nsfwBlurEnabled } = useNsfwFilter();
   const shouldBlur = mod.containsAdultContent && nsfwBlurEnabled;
-
-  // Debug logging for NSFW blur
-  if (mod.containsAdultContent) {
-    console.log("[ModCard] NSFW mod detected:", mod.name, {
-      containsAdultContent: mod.containsAdultContent,
-      nsfwBlurEnabled,
-      shouldBlur,
-    });
-  }
-
-  // Memoize computed tag display to avoid recalculating on every parent render
-  // Tag rendering is delegated to `TagList` which will compute and re-render
-  // itself when necessary (including on resize). This keeps heavy tag math
-  // localized and avoids re-rendering the whole `ModCard`.
 
   const { avatarCandidates, authorAvatarSrc } = useMemo(() => {
     const fallbackAvatarSrc =
@@ -109,15 +99,6 @@ function ModCardInner({
     );
     return { avatarCandidates: candidates, authorAvatarSrc: candidates[0] };
   }, [mod.authorAvatar, mod.authorMemberId]);
-
-  if (typeof window !== "undefined") {
-    // Keep a lightweight debug log; don't stringify large objects
-    console.debug("[avatar] ModCard candidates", {
-      modId: mod.id,
-      name: mod.name,
-      candidates: avatarCandidates?.slice(0, 3),
-    });
-  }
 
   const formatNumber = useMemo(() => {
     return (num: number) => {
@@ -141,9 +122,33 @@ function ModCardInner({
 
   if (viewMode === "list") {
     return (
-      <div className="hover:bg-muted/50 transition-colors border-b border-border/20 last:border-b-0 py-1">
+      <div
+        className={`hover:bg-muted/50 transition-colors border-b border-border/20 last:border-b-0 py-1 ${
+          mod.isSelected ? "bg-primary/10 border-primary/30" : ""
+        }`}
+      >
         <div className="p-2">
           <div className="flex gap-3">
+            {/* Bulk select checkbox */}
+            {selectionMode && (
+              <div className="flex items-center px-1">
+                <button
+                  type="button"
+                  onClick={() => onSelect?.(mod.id)}
+                  className={`w-4 h-4 rounded border-2 transition-colors flex items-center justify-center ${
+                    mod.isSelected
+                      ? "bg-primary border-primary"
+                      : "border-muted-foreground/40 hover:border-primary"
+                  }`}
+                  aria-label={mod.isSelected ? "Deselect" : "Select"}
+                >
+                  {mod.isSelected && (
+                    <CheckCircle className="w-3 h-3 text-primary-foreground" />
+                  )}
+                </button>
+              </div>
+            )}
+
             <div className="p-1">
               <div className="w-8 h-8 bg-muted rounded-lg overflow-hidden flex-shrink-0 relative">
                 <img
@@ -166,7 +171,7 @@ function ModCardInner({
               <div className="flex items-start justify-between">
                 <div className="min-w-0 flex-1">
                   <h3
-                    className="font-normal truncate cursor-pointer hover:text-primary"
+                    className="font-normal truncate cursor-pointer hover:text-primary transition-colors"
                     onClick={() => onView(mod)}
                   >
                     {mod.name}
@@ -185,7 +190,7 @@ function ModCardInner({
                     variant="ghost"
                     size="sm"
                     onClick={() => onFavorite(mod.id)}
-                    className={mod.isFavorited ? "text-red-500" : ""}
+                    className={`transition-colors ${mod.isFavorited ? "text-red-500" : ""}`}
                   >
                     <Heart
                       className={`w-4 h-4 ${
@@ -213,13 +218,40 @@ function ModCardInner({
   }
 
   return (
-    <Card className="hover:shadow-lg transition-all duration-200 group">
+    <Card
+      className={`card-hover transition-all duration-200 group relative border ${
+        mod.isSelected
+          ? "ring-2 ring-primary border-primary/50"
+          : "border-border/50 hover:border-primary/30"
+      }`}
+    >
       <CardContent className="p-0">
+        {/* Selection checkbox overlay */}
+        {selectionMode && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelect?.(mod.id);
+            }}
+            className={`absolute top-2 left-2 z-20 w-5 h-5 rounded border-2 transition-all flex items-center justify-center ${
+              mod.isSelected
+                ? "bg-primary border-primary shadow-md"
+                : "border-white/70 bg-black/20 hover:border-primary hover:bg-primary/20"
+            }`}
+            aria-label={mod.isSelected ? "Deselect" : "Select"}
+          >
+            {mod.isSelected && (
+              <CheckCircle className="w-3.5 h-3.5 text-primary-foreground" />
+            )}
+          </button>
+        )}
+
         <div className="aspect-video bg-muted relative overflow-hidden rounded-t-lg">
           <img
             src={mod.images[0]}
             alt={mod.name}
-            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
             style={shouldBlur ? { filter: "blur(20px)" } : undefined}
           />
           {shouldBlur && (
@@ -232,20 +264,19 @@ function ModCardInner({
               </span>
             </div>
           )}
-          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+          <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-center">
             <Button
               variant="secondary"
               size="sm"
               onClick={() => onView(mod)}
-              className="gap-2"
+              className="gap-2 shadow-lg"
             >
               <Eye className="w-4 h-4" />
               View Details
             </Button>
           </div>
-          {/* Source badge */}
           {mod.isPremium && (
-            <span className="absolute top-2 left-2 px-2 py-0.5 text-xs font-semibold rounded bg-amber-500 text-white shadow">
+            <span className="absolute top-2 left-2 px-2 py-0.5 text-xs font-semibold rounded bg-amber-500 text-white shadow-md">
               PREMIUM
               {mod.extraPakCount != null && mod.extraPakCount > 0 && (
                 <span className="ml-1 opacity-80">+{mod.extraPakCount} PAK{mod.extraPakCount > 1 ? "s" : ""}</span>
@@ -256,8 +287,8 @@ function ModCardInner({
             variant="ghost"
             size="sm"
             onClick={() => onFavorite(mod.id)}
-            className={`absolute top-2 right-2 ${
-              mod.isFavorited ? "text-red-500" : "text-white"
+            className={`absolute top-2 right-2 transition-all ${
+              mod.isFavorited ? "text-red-500" : "text-white hover:text-red-400"
             }`}
           >
             <Heart
@@ -268,7 +299,7 @@ function ModCardInner({
 
         <div className="p-4">
           <h3
-            className="font-medium mb-1 cursor-pointer hover:text-primary"
+            className="font-medium mb-1 cursor-pointer hover:text-primary transition-colors line-clamp-1"
             onClick={() => onView(mod)}
           >
             {mod.name}
@@ -296,24 +327,8 @@ function ModCardInner({
                     if (nextIndex < candidates.length) {
                       const nextSrc = candidates[nextIndex];
                       img.dataset.avatarIndex = String(nextIndex);
-                      if (typeof window !== "undefined") {
-                        console.warn("[avatar] fallback to next candidate", {
-                          modId: mod.id,
-                          name: mod.name,
-                          attempted: img.src,
-                          nextSrc,
-                          nextIndex,
-                        });
-                      }
                       img.src = nextSrc;
                       return;
-                    }
-                    if (typeof window !== "undefined") {
-                      console.error("[avatar] all avatar candidates failed", {
-                        modId: mod.id,
-                        name: mod.name,
-                        candidates,
-                      });
                     }
                     img.dataset.avatarIndex = String(candidates.length);
                     img.src = "";
@@ -360,20 +375,17 @@ function ModCardInner({
   );
 }
 
-// Use React.memo with a focused comparator so ModCards only re-render when
-// meaningful fields change. This avoids large re-render storms (e.g. during
-// window resizes) when parent re-renders but mod data hasn't changed.
 function modPropsAreEqual(prev: ModCardProps, next: ModCardProps) {
   const a = prev.mod;
   const b = next.mod;
   if (a.id !== b.id) return false;
-  // Compare a small set of frequently-changing fields that affect render
   const keys: (keyof Mod)[] = [
     "isInstalled",
     "isFavorited",
     "hasUpdate",
     "isUpdating",
     "isActive",
+    "isSelected",
     "downloads",
     "rating",
     "name",
@@ -384,8 +396,8 @@ function modPropsAreEqual(prev: ModCardProps, next: ModCardProps) {
     // @ts-ignore - index by dynamic key
     if (a[k] !== b[k]) return false;
   }
-  // viewMode affects layout
   if (prev.viewMode !== next.viewMode) return false;
+  if (prev.selectionMode !== next.selectionMode) return false;
   return true;
 }
 
