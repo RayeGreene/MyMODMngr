@@ -23,7 +23,7 @@ import {
   createNxmProgressController,
   formatBytes,
 } from "../lib/nxmHelpers";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { isTauri } from "../lib/tauri-utils";
 
 interface AddModModalProps {
   open: boolean;
@@ -398,6 +398,8 @@ export function AddModModal({
 
     const setupListener = async () => {
       try {
+        if (!isTauri()) return;
+        const { getCurrentWebview } = await import("@tauri-apps/api/webview");
         const webview = getCurrentWebview();
         unlisten = await webview.onDragDropEvent(async (event) => {
           if (event.payload.type === "enter") {

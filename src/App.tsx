@@ -14,6 +14,7 @@ import { NxmBackgroundListener } from "./components/NxmBackgroundListener";
 import { toast } from "sonner";
 import { Toaster } from "./components/ui/sonner";
 import { ThemeProvider } from "./components/ThemeProvider";
+import { NSFWFilterProvider } from "./components/NSFWFilterProvider";
 import { openInBrowser } from "./lib/tauri-utils";
 import { initializeIcons } from "./lib/iconManager";
 import {
@@ -1607,6 +1608,7 @@ export default function App() {
 
   return (
     <ThemeProvider defaultTheme="dark">
+      <NSFWFilterProvider>
       <div className="relative h-screen bg-background flex flex-col">
         {/* Header - AppHeader UI migrated into TabHeader (see TabHeader props below) */}
 
@@ -1735,6 +1737,7 @@ export default function App() {
           isHandoffExcluded={isHandoffManagedByUpdate}
         />
       </div>
+      </NSFWFilterProvider>
     </ThemeProvider>
   );
 }

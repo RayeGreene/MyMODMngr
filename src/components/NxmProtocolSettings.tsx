@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { open as openUrl } from "@tauri-apps/plugin-shell";
+import { isTauri } from "../lib/tauri-utils";
 import {
   getNxmProtocolStatus,
   registerNxmProtocol,
@@ -38,9 +37,13 @@ export function NxmProtocolSettings() {
   const loadStatus = async () => {
     try {
       setLoading(true);
-      const [protocolStatus, exePath] = await Promise.all([
+      let exePath: string | null = null;
+      if (isTauri()) {
+        const { invoke } = await import("@tauri-apps/api/core");
+        exePath = await invoke<string>("get_executable_path").catch(() => null);
+      }
+      const [protocolStatus] = await Promise.all([
         getNxmProtocolStatus(),
-        invoke<string>("get_executable_path").catch(() => null),
       ]);
       setStatus(protocolStatus);
       setExecutablePath(exePath);
@@ -112,7 +115,12 @@ export function NxmProtocolSettings() {
       });
 
       // Open the test URL using the system's protocol handler
-      await openUrl(testUrl);
+      if (isTauri()) {
+        const { open: openUrl } = await import("@tauri-apps/plugin-shell");
+        await openUrl(testUrl);
+      } else {
+        window.open(testUrl, "_blank");
+      }
 
       // Wait a moment for the backend to receive the URL
       setTimeout(async () => {
