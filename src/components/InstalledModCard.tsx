@@ -137,7 +137,9 @@ export function InstalledModCard({
   if (viewMode === "list") {
     return (
       <>
-        <div className="hover:bg-muted/50 transition-colors border-b border-border/20 last:border-b-0 py-1">
+        <div className={`hover:bg-muted/50 transition-colors border-b border-border/20 last:border-b-0 py-1 ${
+          mod.isSelected ? "bg-primary/10 border-primary/30" : ""
+        }`}>
           <div className="p-2">
             <div className="flex gap-3 flex-wrap sm:flex-nowrap">
               <div className="p-1">
@@ -275,9 +277,11 @@ export function InstalledModCard({
     <>
       <Card
         className={`card-hover transition-all duration-200 group relative border ${
-          mod.isActive
-            ? "border-success/30 hover:border-success/50"
-            : "border-border/50 hover:border-primary/30"
+          mod.isSelected
+            ? "ring-2 ring-primary border-primary/50"
+            : mod.isActive
+              ? "border-success/30 hover:border-success/50"
+              : "border-border/50 hover:border-primary/30"
         }`}
       >
         <CardContent className="p-0 min-h-[370px] flex flex-col flex-1">

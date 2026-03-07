@@ -72,6 +72,7 @@ import {
 } from "../lib/api";
 import { toast } from "sonner";
 import React from "react";
+import { ImageCarousel } from "./ImageCarousel";
 
 type DownloadEntry = {
   id: number;
@@ -1217,6 +1218,17 @@ export function ModModal({
                   >
                     <div className="px-6 py-4">
                       <div className="space-y-6">
+                        {/* Hero Image Carousel */}
+                        {modImages.length > 0 && (
+                          <ImageCarousel
+                            images={modImages.map((img) =>
+                              img.source === "nexus"
+                                ? img.url!
+                                : `data:${img.mimeType};base64,${img.data}`
+                            )}
+                          />
+                        )}
+
                         <div>
                           <h3 className="font-medium mb-3">Tags</h3>
                           {overviewTags.length > 0 ? (

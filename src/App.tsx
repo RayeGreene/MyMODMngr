@@ -41,6 +41,7 @@ import {
 } from "./lib/nxmHelpers";
 import {
   refreshConflicts,
+  listConflicts,
   listDownloads,
   deleteLocalDownloads,
   updateMod,
@@ -70,6 +71,16 @@ import {
   categoriesMatchTag,
   getCategoryTokenSet,
 } from "./lib/categoryUtils";
+import {
+  Download,
+  CheckCircle,
+  Users,
+  Layers,
+  RefreshCw,
+  AlertTriangle,
+  HeartPulse,
+  HardDrive,
+} from "lucide-react";
 
 const CATEGORY_KEYWORD_SET = getCategoryTokenSet();
 const GET_STARTED_STORAGE_KEY = "modmanager:get-started-complete";
@@ -168,6 +179,7 @@ export default function App() {
     Partial<Record<SettingsTask, ApiSettingsTaskResponse>>
   >({});
   const [conflictsReloadToken, setConflictsReloadToken] = useState(0);
+  const [conflictsCount, setConflictsCount] = useState(0);
   const [getStartedOpen, setGetStartedOpen] = useState(false);
   const [bootstrapStatus, setBootstrapStatus] =
     useState<ApiBootstrapStatus | null>(null);
@@ -701,6 +713,7 @@ export default function App() {
         warningText && warningText.length > 0
           ? warningText
           : progressDescription;
+      logActivity({ action: "update", modId, modName: displayName, detail: message });
       toast.success(message, {
         description,
         id: options.toastId,
@@ -1005,6 +1018,10 @@ export default function App() {
     try {
       if (includeConflicts) {
         await refreshConflicts();
+        try {
+          const c = await listConflicts(1000, true);
+          setConflictsCount(c.length);
+        } catch { /* non-critical */ }
       }
       const deduped = await fetchServerMods();
       setMods(deduped);
@@ -1168,8 +1185,10 @@ export default function App() {
     void refreshMods({ includeConflicts: true });
   };
 
-  const handleModAdded = () =>
-    refreshMods({ quiet: true, includeConflicts: true });
+  const handleModAdded = () => {
+    logActivity({ action: "install", detail: "New mod added" });
+    return refreshMods({ quiet: true, includeConflicts: true });
+  };
 
   // Callback to check if a handoff is being managed by the update flow
   // Checks by (mod_id, file_id) pair since we track updates before handoff appears
@@ -1269,6 +1288,18 @@ export default function App() {
         category: "navigation",
         handler: () => setActiveTab("updates"),
       }),
+      registerShortcut({
+        keys: "Ctrl+6",
+        label: "Go to Conflicts",
+        category: "navigation",
+        handler: () => setActiveTab("conflicts"),
+      }),
+      registerShortcut({
+        keys: "Ctrl+7",
+        label: "Go to Health Monitor",
+        category: "navigation",
+        handler: () => setActiveTab("health"),
+      }),
     ];
 
     const keyHandler = (e: KeyboardEvent) => handleGlobalKeyDown(e);
@@ -1307,7 +1338,7 @@ export default function App() {
 
   // Mod view handler for new views
   const handleViewModFromBrowser = useCallback(
-    (mod: any) => {
+    (_mod: any) => {
       // Navigate to downloads tab and open the mod
       setActiveTab("downloads");
     },
@@ -1782,29 +1813,35 @@ export default function App() {
             {/* Sub-navigation for new views */}
             <div className="flex items-center gap-1 px-4 py-2 bg-card/50 border-b border-border/50 overflow-x-auto">
               {[
-                { id: "downloads" as const, label: "Browse" },
-                { id: "active" as const, label: "Active" },
-                { id: "characters" as const, label: "Characters" },
-                { id: "loadouts" as const, label: "Loadouts" },
-                { id: "updates" as const, label: "Updates" },
-                { id: "conflicts" as const, label: "Conflicts" },
-                { id: "health" as const, label: "Health" },
-                { id: "storage" as const, label: "Storage" },
+                { id: "downloads" as const, label: "Browse", icon: <Download className="w-3.5 h-3.5" /> },
+                { id: "active" as const, label: "Active", icon: <CheckCircle className="w-3.5 h-3.5" /> },
+                { id: "characters" as const, label: "Characters", icon: <Users className="w-3.5 h-3.5" /> },
+                { id: "loadouts" as const, label: "Loadouts", icon: <Layers className="w-3.5 h-3.5" /> },
+                { id: "updates" as const, label: "Updates", icon: <RefreshCw className="w-3.5 h-3.5" /> },
+                { id: "conflicts" as const, label: "Conflicts", icon: <AlertTriangle className="w-3.5 h-3.5" /> },
+                { id: "health" as const, label: "Health", icon: <HeartPulse className="w-3.5 h-3.5" /> },
+                { id: "storage" as const, label: "Storage", icon: <HardDrive className="w-3.5 h-3.5" /> },
               ].map((tab) => (
                 <button
                   key={tab.id}
                   type="button"
                   onClick={() => setActiveTab(tab.id)}
-                  className={`px-3 py-1 text-xs font-medium rounded-full transition-colors whitespace-nowrap ${
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full transition-all whitespace-nowrap ${
                     activeTab === tab.id
-                      ? "bg-primary/15 text-primary"
+                      ? "bg-primary/15 text-primary shadow-sm ring-1 ring-primary/20"
                       : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
                   }`}
                 >
+                  {tab.icon}
                   {tab.label}
                   {tab.id === "updates" && updatesCount > 0 && (
-                    <span className="ml-1.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-warning text-warning-foreground text-[10px] font-bold">
+                    <span className="ml-0.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-warning text-warning-foreground text-[10px] font-bold">
                       {updatesCount}
+                    </span>
+                  )}
+                  {tab.id === "conflicts" && conflictsCount > 0 && (
+                    <span className="ml-0.5 inline-flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold">
+                      {conflictsCount}
                     </span>
                   )}
                 </button>
@@ -1977,7 +2014,7 @@ export default function App() {
           open={commandPaletteOpen}
           onOpenChange={setCommandPaletteOpen}
           mods={mods}
-          onViewMod={(mod) => {
+          onViewMod={(_mod) => {
             setActiveTab("downloads");
           }}
           actions={buildDefaultActions({
