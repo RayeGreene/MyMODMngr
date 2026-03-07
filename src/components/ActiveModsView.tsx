@@ -3,6 +3,9 @@ import type { Mod } from "./ModCard";
 import { InstalledModCard } from "./InstalledModCard";
 import { SearchHeader } from "./SearchHeader";
 import { ModModal } from "./ModModal";
+import { BulkOperationsToolbar } from "./BulkOperationsToolbar";
+import { Button } from "./ui/button";
+import { toast } from "sonner";
 import {
   categoriesMatchTag,
   extractNonCategoryTags,
@@ -44,6 +47,10 @@ export function ActiveModsView({
   const [selectedMod, setSelectedMod] = useState<Mod | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
 
+  // Bulk selection state
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
   useEffect(() => {
     if (!selectedMod) return;
     const updated = mods.find((mod) => {
@@ -80,35 +87,25 @@ export function ActiveModsView({
   }
 
   // Smart hierarchical filtering: separate character tags from skin tags
-  // Tags structure: [character, skin1, skin2, ...]
   if (selectedCharacters && selectedCharacters.length > 0) {
     filteredMods = filteredMods.filter((mod) => {
       const nonCategoryTags = extractNonCategoryTags(mod.tags);
       if (nonCategoryTags.length === 0) return false;
-
-      // Extract character (first tag) and skins (remaining tags)
       const modCharacter = nonCategoryTags[0];
       const modSkins = nonCategoryTags.slice(1);
-
-      // Check which selected tags match this mod's character vs skins
       const matchesCharacter = selectedCharacters.includes(modCharacter);
       const matchingSkins = selectedCharacters.filter((tag) =>
         modSkins.includes(tag),
       );
 
-      // Logic: If character is selected, show all its mods (or filter by skins)
-      // If only skins selected (no character), don't show anything
       if (matchesCharacter) {
-        // Character selected - show if no specific skins selected, OR any skin matches
         if (matchingSkins.length > 0) {
-          return true; // Character matches and at least one skin matches
+          return true;
         }
-        // Check if we have ANY skin tags selected at all
         const hasAnySkinSelection = selectedCharacters.some(
           (tag) =>
             !nonCategoryTags.includes(tag) || nonCategoryTags.indexOf(tag) > 0,
         );
-        // If no skin-specific filtering, show all character mods
         return !hasAnySkinSelection || matchingSkins.length > 0;
       }
 
@@ -129,44 +126,10 @@ export function ActiveModsView({
   }
 
   // Sort
-  const MISSING_TIME = Number.MIN_SAFE_INTEGER;
-  const toTimestamp = (value?: string | null) => {
-    if (!value) return MISSING_TIME;
-    const time = Date.parse(value);
-    return Number.isNaN(time) ? MISSING_TIME : time;
-  };
   const toNullableTimestamp = (value?: string | null): number | null => {
     if (!value) return null;
     const time = Date.parse(value);
     return Number.isNaN(time) ? null : time;
-  };
-  const hasApiSource = (mod: Mod) => mod.backendModId != null;
-  const releaseSortKey = (mod: Mod) => {
-    const release = toTimestamp(mod.releaseDate);
-    const install = toTimestamp(mod.installDate);
-    const hasInstall = mod.hasInstallDate ?? install !== MISSING_TIME;
-    const hasUpdate = mod.hasUpdateTimestamp ?? Boolean(mod.lastUpdatedRaw);
-    const timestamp =
-      release !== MISSING_TIME ? release : hasInstall ? install : MISSING_TIME;
-    const hasData = hasApiSource(mod) && hasInstall && hasUpdate;
-    return { priority: hasData ? 1 : 0, timestamp };
-  };
-  const updatedSortKey = (mod: Mod) => {
-    const updated = toTimestamp(mod.lastUpdatedRaw);
-    const install = toTimestamp(mod.installDate);
-    const hasInstall = mod.hasInstallDate ?? install !== MISSING_TIME;
-    const hasUpdate = mod.hasUpdateTimestamp ?? updated !== MISSING_TIME;
-    const timestamp = hasUpdate ? updated : hasInstall ? install : MISSING_TIME;
-    const hasData = hasApiSource(mod) && hasUpdate && hasInstall;
-    return { priority: hasData ? 1 : 0, timestamp };
-  };
-  const compareSortKey = (
-    a: { priority: number; timestamp: number },
-    b: { priority: number; timestamp: number },
-  ) => {
-    if (b.priority !== a.priority) return b.priority - a.priority;
-    if (b.timestamp !== a.timestamp) return b.timestamp - a.timestamp;
-    return 0;
   };
   const applyOrder = (val: number) => (sortOrder === "asc" ? -val : val);
 
@@ -189,16 +152,12 @@ export function ActiveModsView({
       );
       break;
     case "Recent":
-      // Recent: sort by backendModId (numeric), then by installDate for missing ids
       filteredMods.sort((a, b) => {
         const aId = a.backendModId;
         const bId = b.backendModId;
-
-        // If both have mod ids, sort by mod id
         if (aId != null && bId != null) {
           const idDiff = sortOrder === "asc" ? aId - bId : bId - aId;
           if (idDiff !== 0) return idDiff;
-          // If mod ids are equal, fallback to install date
           const aDate = toNullableTimestamp(a.installDate);
           const bDate = toNullableTimestamp(b.installDate);
           if (aDate == null && bDate == null) return 0;
@@ -206,12 +165,8 @@ export function ActiveModsView({
           if (bDate == null) return -1;
           return sortOrder === "asc" ? aDate - bDate : bDate - aDate;
         }
-
-        // If only one has mod id, that one comes first (regardless of sort order)
         if (aId != null && bId == null) return -1;
         if (aId == null && bId != null) return 1;
-
-        // If neither has mod id, sort by install date
         const aDate = toNullableTimestamp(a.installDate);
         const bDate = toNullableTimestamp(b.installDate);
         if (aDate == null && bDate == null) return 0;
@@ -221,7 +176,6 @@ export function ActiveModsView({
       });
       break;
     case "Updated":
-      // Updated: sort by mods.updated_at (lastUpdatedRaw/lastUpdated), NULLs last
       filteredMods.sort(
         makeTimestampComparator((m) =>
           toNullableTimestamp(m.lastUpdatedRaw ?? m.lastUpdated ?? null),
@@ -273,20 +227,77 @@ export function ActiveModsView({
     (mod) => mod.isActive === false,
   );
 
+  // Selection handlers
+  const handleSelect = (modId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(modId)) next.delete(modId);
+      else next.add(modId);
+      return next;
+    });
+  };
+
+  const handleSelectAll = () => {
+    setSelectedIds(new Set(filteredMods.map((m) => m.id)));
+  };
+
+  const handleDeselectAll = () => {
+    setSelectedIds(new Set());
+  };
+
+  const handleCancelSelection = () => {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+  };
+
+  const handleBatchUpdate = () => {
+    selectedIds.forEach((id) => onUpdate(id));
+    toast.success(`${selectedIds.size} mods queued for update`);
+    handleCancelSelection();
+  };
+
+  const handleBatchUninstall = () => {
+    selectedIds.forEach((id) => onUninstall(id));
+    toast.success(`${selectedIds.size} mods queued for removal`);
+    handleCancelSelection();
+  };
+
+  const handleBatchFavorite = () => {
+    selectedIds.forEach((id) => onFavorite(id));
+    toast.success(`${selectedIds.size} mods favorited`);
+    handleCancelSelection();
+  };
+
   return (
     <>
       <div className="flex flex-col h-full">
         {/* Search Header */}
-        <SearchHeader
-          searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
-          viewMode={viewMode}
-          onViewModeChange={onViewModeChange}
-          sortBy={sortBy}
-          onSortChange={setSortBy}
-          sortOrder={sortOrder}
-          onSortOrderChange={setSortOrder}
-        />
+        <div className="flex items-center gap-2">
+          <div className="flex-1">
+            <SearchHeader
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
+              viewMode={viewMode}
+              onViewModeChange={onViewModeChange}
+              sortBy={sortBy}
+              onSortChange={setSortBy}
+              sortOrder={sortOrder}
+              onSortOrderChange={setSortOrder}
+            />
+          </div>
+          <div className="pr-4 pt-2">
+            <Button
+              variant={selectionMode ? "default" : "outline"}
+              size="sm"
+              onClick={() => {
+                if (selectionMode) handleCancelSelection();
+                else setSelectionMode(true);
+              }}
+            >
+              {selectionMode ? "Exit Select" : "Select"}
+            </Button>
+          </div>
+        </div>
 
         {/* Content */}
         <style>{`.custom-scrollbar::-webkit-scrollbar {
@@ -359,6 +370,10 @@ export function ActiveModsView({
                       onUpdate={onUpdate}
                       onCheckUpdate={onCheckUpdate}
                       onView={(m) => {
+                        if (selectionMode) {
+                          handleSelect(m.id);
+                          return;
+                        }
                         setSelectedMod(m);
                         setIsModalOpen(true);
                       }}
@@ -391,6 +406,10 @@ export function ActiveModsView({
                       onUpdate={onUpdate}
                       onCheckUpdate={onCheckUpdate}
                       onView={(m) => {
+                        if (selectionMode) {
+                          handleSelect(m.id);
+                          return;
+                        }
                         setSelectedMod(m);
                         setIsModalOpen(true);
                       }}
@@ -414,6 +433,22 @@ export function ActiveModsView({
             )}
           </div>
         </div>
+
+        {/* Bulk Operations Toolbar */}
+        {selectionMode && selectedIds.size > 0 && (
+          <div className="sticky bottom-0 p-4 z-20">
+            <BulkOperationsToolbar
+              selectedCount={selectedIds.size}
+              totalCount={filteredMods.length}
+              onSelectAll={handleSelectAll}
+              onDeselectAll={handleDeselectAll}
+              onBatchUpdate={handleBatchUpdate}
+              onBatchUninstall={handleBatchUninstall}
+              onBatchFavorite={handleBatchFavorite}
+              onCancel={handleCancelSelection}
+            />
+          </div>
+        )}
       </div>
       {selectedMod && (
         <ModModal

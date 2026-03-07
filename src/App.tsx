@@ -25,6 +25,10 @@ import { CharacterBrowser } from "./components/CharacterBrowser";
 import { UpdateCenter } from "./components/UpdateCenter";
 import { StorageDashboard } from "./components/StorageDashboard";
 // ActivityFeed is available but rendered within StorageDashboard or other views as needed
+import { ConflictDashboard } from "./components/ConflictDashboard";
+import { ModHealthMonitor } from "./components/ModHealthMonitor";
+import { ModCompare } from "./components/ModCompare";
+import { OnboardingTour } from "./components/OnboardingTour";
 import { ShortcutsHelpDialog } from "./components/ShortcutsHelpDialog";
 import { PageTransition } from "./components/PageTransition";
 import { unreadCount as getUnreadCount, subscribe as subscribeNotifications } from "./lib/notifications";
@@ -137,13 +141,14 @@ type BackendStatusState = {
 export default function App() {
   // State management
   const [mods, setMods] = useState<any[]>([]);
-  const [activeTab, setActiveTab] = useState<"downloads" | "active" | "characters" | "loadouts" | "updates" | "storage">(
+  const [activeTab, setActiveTab] = useState<"downloads" | "active" | "characters" | "loadouts" | "updates" | "storage" | "conflicts" | "health">(
     "downloads"
   );
   // New feature state
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [compareOpen, setCompareOpen] = useState(false);
   const [notificationCount, setNotificationCount] = useState(0);
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [selectedCharacters, setSelectedCharacters] = useState<string[]>([]);
@@ -615,6 +620,7 @@ export default function App() {
       await deleteLocalDownloads(downloadIds, backendModId);
       const deduped = await fetchServerMods();
       setMods(deduped);
+      logActivity({ action: "uninstall", modId: mod.id, modName: mod.name, detail: `Removed ${mod.name}` });
       toast.success(`${mod.name} removed from local downloads`);
       // Auto-refresh after mod deletion
       void refreshMods({ includeConflicts: true });
@@ -921,8 +927,15 @@ export default function App() {
 
     const mod = mods.find((m) => m.id === modId);
     if (mod) {
+      const wasFavorited = mod.isFavorited;
+      logActivity({
+        action: wasFavorited ? "unfavorite" : "favorite",
+        modId: mod.id,
+        modName: mod.name,
+        detail: wasFavorited ? `Unfavorited ${mod.name}` : `Favorited ${mod.name}`,
+      });
       toast.success(
-        mod.isFavorited
+        wasFavorited
           ? `${mod.name} removed from favorites`
           : `${mod.name} added to favorites!`
       );
@@ -940,8 +953,15 @@ export default function App() {
 
     const mod = mods.find((m) => m.id === modId);
     if (mod) {
+      const wasActive = mod.isActive;
+      logActivity({
+        action: wasActive ? "deactivate" : "activate",
+        modId: mod.id,
+        modName: mod.name,
+        detail: wasActive ? `Deactivated ${mod.name}` : `Activated ${mod.name}`,
+      });
       toast.success(
-        mod.isActive
+        wasActive
           ? `${mod.name} has been disabled`
           : `${mod.name} has been enabled!`
       );
@@ -1767,6 +1787,8 @@ export default function App() {
                 { id: "characters" as const, label: "Characters" },
                 { id: "loadouts" as const, label: "Loadouts" },
                 { id: "updates" as const, label: "Updates" },
+                { id: "conflicts" as const, label: "Conflicts" },
+                { id: "health" as const, label: "Health" },
                 { id: "storage" as const, label: "Storage" },
               ].map((tab) => (
                 <button
@@ -1853,6 +1875,23 @@ export default function App() {
                       onUpdate={handleUpdate}
                       onUpdateAll={handleUpdateAll}
                       onCheckUpdate={handleUpdate}
+                      onView={handleViewModFromBrowser}
+                    />
+                  </div>
+                )}
+                {activeTab === "conflicts" && (
+                  <div className="h-full overflow-auto custom-scrollbar">
+                    <ConflictDashboard
+                      mods={mods}
+                      onView={handleViewModFromBrowser}
+                    />
+                  </div>
+                )}
+                {activeTab === "health" && (
+                  <div className="h-full overflow-auto custom-scrollbar">
+                    <ModHealthMonitor
+                      mods={mods}
+                      onUpdate={handleUpdate}
                       onView={handleViewModFromBrowser}
                     />
                   </div>
@@ -1948,15 +1987,24 @@ export default function App() {
             onNavigateLoadouts: () => setActiveTab("loadouts"),
             onNavigateUpdates: () => setActiveTab("updates"),
             onNavigateStorage: () => setActiveTab("storage"),
+            onNavigateConflicts: () => setActiveTab("conflicts"),
+            onNavigateHealth: () => setActiveTab("health"),
             onOpenSettings: handleOpenSettings,
             onRefresh: handleRefresh,
             onShowShortcuts: () => setShortcutsOpen(true),
+            onOpenCompare: () => setCompareOpen(true),
           })}
         />
         <ShortcutsHelpDialog
           open={shortcutsOpen}
           onOpenChange={setShortcutsOpen}
         />
+        <ModCompare
+          mods={mods}
+          open={compareOpen}
+          onOpenChange={setCompareOpen}
+        />
+        <OnboardingTour />
       </div>
       </NSFWFilterProvider>
     </ThemeProvider>

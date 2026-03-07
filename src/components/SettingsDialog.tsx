@@ -36,6 +36,7 @@ import {
 } from "../lib/api";
 import { NxmProtocolSettings } from "./NxmProtocolSettings";
 import { TaskOutputSummary } from "./TaskOutputSummary";
+import { AccentColorPicker } from "./AccentColorPicker";
 export type SettingsFormValues = {
   data_dir: string;
   marvel_rivals_root: string;
@@ -780,6 +781,26 @@ export function SettingsDialog({
                   {/* NXM Protocol Registration */}
                   <section>
                     <NxmProtocolSettings />
+                  </section>
+
+                  {/* Appearance */}
+                  <section
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "24px",
+                    }}
+                  >
+                    <div style={{ marginBottom: "8px" }}>
+                      <h3 className="text-lg font-semibold">
+                        Appearance
+                      </h3>
+                      <p className="text-sm text-muted-foreground">
+                        Customize the accent color used throughout the
+                        application.
+                      </p>
+                    </div>
+                    <AccentColorPicker />
                   </section>
                 </div>
 

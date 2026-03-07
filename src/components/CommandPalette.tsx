@@ -17,6 +17,8 @@ import {
   AlertTriangle,
   HardDrive,
   Keyboard,
+  HeartPulse,
+  ArrowLeftRight,
 } from "lucide-react";
 import type { Mod } from "./ModCard";
 
@@ -276,11 +278,13 @@ export function buildDefaultActions(callbacks: {
   onNavigateLoadouts?: () => void;
   onNavigateUpdates?: () => void;
   onNavigateConflicts?: () => void;
+  onNavigateHealth?: () => void;
   onNavigateStorage?: () => void;
   onOpenSettings?: () => void;
   onRefresh?: () => void;
   onToggleTheme?: () => void;
   onShowShortcuts?: () => void;
+  onOpenCompare?: () => void;
 }): CommandAction[] {
   const actions: CommandAction[] = [];
 
@@ -341,6 +345,16 @@ export function buildDefaultActions(callbacks: {
       handler: callbacks.onNavigateConflicts,
     });
   }
+  if (callbacks.onNavigateHealth) {
+    actions.push({
+      id: "nav-health",
+      label: "Mod Health Monitor",
+      icon: HeartPulse,
+      category: "navigation",
+      handler: callbacks.onNavigateHealth,
+      keywords: ["health", "status", "issues"],
+    });
+  }
   if (callbacks.onNavigateStorage) {
     actions.push({
       id: "nav-storage",
@@ -385,6 +399,17 @@ export function buildDefaultActions(callbacks: {
       icon: Keyboard,
       category: "settings",
       handler: callbacks.onShowShortcuts,
+    });
+  }
+  if (callbacks.onOpenCompare) {
+    actions.push({
+      id: "action-compare",
+      label: "Compare Mods",
+      description: "Side-by-side mod comparison",
+      icon: ArrowLeftRight,
+      category: "actions",
+      handler: callbacks.onOpenCompare,
+      keywords: ["compare", "diff", "versus"],
     });
   }
 

@@ -1,8 +1,16 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { SearchHeader } from "./SearchHeader";
 import { ModCard } from "./ModCard";
 import { ModModal } from "./ModModal";
+import { AdvancedFilterPanel } from "./AdvancedFilterPanel";
+import { BulkOperationsToolbar } from "./BulkOperationsToolbar";
 import type { Mod } from "./ModCard";
+import type { FilterConfig } from "../lib/filterPresets";
+import { extractNonCategoryTags } from "../lib/categoryUtils";
+import { SlidersHorizontal } from "lucide-react";
+import { Button } from "./ui/button";
+import { Badge } from "./ui/badge";
+import { toast } from "sonner";
 
 interface BrowsePageProps {
   mods: Mod[];
@@ -17,12 +25,73 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [selectedMod, setSelectedMod] = useState<Mod | null>(null);
 
-  // Build filtered mods from live data (no mock helpers)
+  // Advanced filter state
+  const [filterPanelOpen, setFilterPanelOpen] = useState(false);
+  const [filters, setFilters] = useState<FilterConfig>({});
+
+  // Bulk selection state
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // Derive available characters and categories from mods
+  const availableCharacters = useMemo(() => {
+    const chars = new Set<string>();
+    mods.forEach((mod) => {
+      const tags = extractNonCategoryTags(mod.tags);
+      if (tags.length > 0) chars.add(tags[0]);
+    });
+    return Array.from(chars).sort();
+  }, [mods]);
+
+  const availableCategories = useMemo(() => {
+    const cats = new Set<string>();
+    mods.forEach((mod) => {
+      if (mod.categoryTags) mod.categoryTags.forEach((c) => cats.add(c));
+      if (mod.category) cats.add(mod.category);
+    });
+    return Array.from(cats).sort();
+  }, [mods]);
+
+  // Count active filters
+  const activeFilterCount = [
+    filters.characters?.length || 0,
+    filters.categories?.length || 0,
+    filters.tags?.length || 0,
+    filters.hasUpdate ? 1 : 0,
+    filters.isActive !== undefined ? 1 : 0,
+    filters.isFavorited ? 1 : 0,
+  ].reduce((a, b) => a + b, 0);
+
+  // Build filtered mods from live data
   let filteredMods = [...mods];
 
-  // No category or character filters - BrowsePage shows all mods
+  // Advanced filter: characters
+  if (filters.characters && filters.characters.length > 0) {
+    filteredMods = filteredMods.filter((mod) => {
+      const tags = extractNonCategoryTags(mod.tags);
+      if (tags.length === 0) return false;
+      return filters.characters!.includes(tags[0]);
+    });
+  }
 
-  // No tag filters
+  // Advanced filter: categories
+  if (filters.categories && filters.categories.length > 0) {
+    filteredMods = filteredMods.filter((mod) => {
+      const modCats = mod.categoryTags || (mod.category ? [mod.category] : []);
+      return modCats.some((c) => filters.categories!.includes(c));
+    });
+  }
+
+  // Advanced filter: status
+  if (filters.hasUpdate) {
+    filteredMods = filteredMods.filter((mod) => mod.hasUpdate);
+  }
+  if (filters.isActive !== undefined) {
+    filteredMods = filteredMods.filter((mod) => mod.isActive === filters.isActive);
+  }
+  if (filters.isFavorited) {
+    filteredMods = filteredMods.filter((mod) => mod.isFavorited);
+  }
 
   // Search filter
   if (searchQuery) {
@@ -37,44 +106,10 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
   }
 
   // Sorting
-  const MISSING_TIME = Number.MIN_SAFE_INTEGER;
-  const toTimestamp = (value?: string | null) => {
-    if (!value) return MISSING_TIME;
-    const time = Date.parse(value);
-    return Number.isNaN(time) ? MISSING_TIME : time;
-  };
   const toNullableTimestamp = (value?: string | null): number | null => {
     if (!value) return null;
     const time = Date.parse(value);
     return Number.isNaN(time) ? null : time;
-  };
-  const hasApiSource = (mod: Mod) => mod.backendModId != null;
-  const releaseSortKey = (mod: Mod) => {
-    const release = toTimestamp(mod.releaseDate);
-    const install = toTimestamp(mod.installDate);
-    const hasInstall = mod.hasInstallDate ?? install !== MISSING_TIME;
-    const hasUpdate = mod.hasUpdateTimestamp ?? Boolean(mod.lastUpdatedRaw);
-    const timestamp =
-      release !== MISSING_TIME ? release : hasInstall ? install : MISSING_TIME;
-    const hasData = hasApiSource(mod) && hasInstall && hasUpdate;
-    return { priority: hasData ? 1 : 0, timestamp };
-  };
-  const updatedSortKey = (mod: Mod) => {
-    const updated = toTimestamp(mod.lastUpdatedRaw);
-    const install = toTimestamp(mod.installDate);
-    const hasInstall = mod.hasInstallDate ?? install !== MISSING_TIME;
-    const hasUpdate = mod.hasUpdateTimestamp ?? updated !== MISSING_TIME;
-    const timestamp = hasUpdate ? updated : hasInstall ? install : MISSING_TIME;
-    const hasData = hasApiSource(mod) && hasUpdate && hasInstall;
-    return { priority: hasData ? 1 : 0, timestamp };
-  };
-  const compareSortKey = (
-    a: { priority: number; timestamp: number },
-    b: { priority: number; timestamp: number },
-  ) => {
-    if (b.priority !== a.priority) return b.priority - a.priority;
-    if (b.timestamp !== a.timestamp) return b.timestamp - a.timestamp;
-    return 0;
   };
   const applyOrder = (val: number) => (sortOrder === "asc" ? -val : val);
 
@@ -98,16 +133,12 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
       );
       break;
     case "Recent":
-      // Recent: sort by backendModId (numeric), then by installDate for missing ids
       filteredMods.sort((a, b) => {
         const aId = a.backendModId;
         const bId = b.backendModId;
-
-        // If both have mod ids, sort by mod id
         if (aId != null && bId != null) {
           const idDiff = sortOrder === "asc" ? aId - bId : bId - aId;
           if (idDiff !== 0) return idDiff;
-          // If mod ids are equal, fallback to install date
           const aDate = toNullableTimestamp(a.installDate);
           const bDate = toNullableTimestamp(b.installDate);
           if (aDate == null && bDate == null) return 0;
@@ -115,12 +146,8 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
           if (bDate == null) return -1;
           return sortOrder === "asc" ? aDate - bDate : bDate - aDate;
         }
-
-        // If only one has mod id, that one comes first (regardless of sort order)
         if (aId != null && bId == null) return -1;
         if (aId == null && bId != null) return 1;
-
-        // If neither has mod id, sort by install date
         const aDate = toNullableTimestamp(a.installDate);
         const bDate = toNullableTimestamp(b.installDate);
         if (aDate == null && bDate == null) return 0;
@@ -130,7 +157,6 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
       });
       break;
     case "Updated":
-      // Updated: sort by mods.updated_at (lastUpdatedRaw/lastUpdated), NULLs last
       filteredMods.sort(
         makeTimestampComparator((m) =>
           toNullableTimestamp(m.lastUpdatedRaw ?? m.lastUpdated ?? null),
@@ -169,9 +195,47 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
       break;
   }
 
-  // Event handlers
+  // Selection handlers
+  const handleSelect = (modId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(modId)) next.delete(modId);
+      else next.add(modId);
+      return next;
+    });
+  };
 
+  const handleSelectAll = () => {
+    setSelectedIds(new Set(filteredMods.map((m) => m.id)));
+  };
+
+  const handleDeselectAll = () => {
+    setSelectedIds(new Set());
+  };
+
+  const handleCancelSelection = () => {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+  };
+
+  const handleBatchFavorite = () => {
+    selectedIds.forEach((id) => onFavorite(id));
+    toast.success(`${selectedIds.size} mods favorited`);
+    handleCancelSelection();
+  };
+
+  const handleBatchInstall = () => {
+    selectedIds.forEach((id) => onInstall(id));
+    toast.success(`${selectedIds.size} mods queued for install`);
+    handleCancelSelection();
+  };
+
+  // Event handlers
   const handleViewMod = (mod: Mod) => {
+    if (selectionMode) {
+      handleSelect(mod.id);
+      return;
+    }
     setSelectedMod(mod);
   };
 
@@ -180,16 +244,46 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
       {/* Main Content */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Header */}
-        <SearchHeader
-          searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
-          viewMode={viewMode}
-          onViewModeChange={setViewMode}
-          sortBy={sortBy}
-          onSortChange={setSortBy}
-          sortOrder={sortOrder}
-          onSortOrderChange={setSortOrder}
-        />
+        <div className="flex items-center gap-2">
+          <div className="flex-1">
+            <SearchHeader
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
+              viewMode={viewMode}
+              onViewModeChange={setViewMode}
+              sortBy={sortBy}
+              onSortChange={setSortBy}
+              sortOrder={sortOrder}
+              onSortOrderChange={setSortOrder}
+            />
+          </div>
+          <div className="flex items-center gap-1 pr-4 pt-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setFilterPanelOpen(true)}
+              className="gap-1.5 relative"
+            >
+              <SlidersHorizontal className="w-4 h-4" />
+              Filters
+              {activeFilterCount > 0 && (
+                <Badge variant="default" className="ml-1 text-[10px] h-4 min-w-[16px] px-1">
+                  {activeFilterCount}
+                </Badge>
+              )}
+            </Button>
+            <Button
+              variant={selectionMode ? "default" : "outline"}
+              size="sm"
+              onClick={() => {
+                if (selectionMode) handleCancelSelection();
+                else setSelectionMode(true);
+              }}
+            >
+              {selectionMode ? "Exit Select" : "Select"}
+            </Button>
+          </div>
+        </div>
 
         {/* Content Area */}
         <style>{`.mods-grid {
@@ -225,6 +319,7 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
               {filteredMods.length} mod{filteredMods.length !== 1 ? "s" : ""}{" "}
               found
               {searchQuery && ` for "${searchQuery}"`}
+              {activeFilterCount > 0 && ` (${activeFilterCount} filter${activeFilterCount !== 1 ? "s" : ""} active)`}
             </p>
           </div>
 
@@ -257,17 +352,45 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
               {filteredMods.map((mod) => (
                 <ModCard
                   key={mod.id}
-                  mod={mod}
+                  mod={selectionMode ? { ...mod, isSelected: selectedIds.has(mod.id) } : mod}
                   viewMode={viewMode}
                   onInstall={onInstall}
                   onFavorite={onFavorite}
                   onView={handleViewMod}
+                  onSelect={handleSelect}
+                  selectionMode={selectionMode}
                 />
               ))}
             </div>
           )}
         </div>
+
+        {/* Bulk Operations Toolbar */}
+        {selectionMode && selectedIds.size > 0 && (
+          <div className="sticky bottom-0 p-4 z-20">
+            <BulkOperationsToolbar
+              selectedCount={selectedIds.size}
+              totalCount={filteredMods.length}
+              onSelectAll={handleSelectAll}
+              onDeselectAll={handleDeselectAll}
+              onBatchInstall={handleBatchInstall}
+              onBatchFavorite={handleBatchFavorite}
+              onCancel={handleCancelSelection}
+            />
+          </div>
+        )}
       </div>
+
+      {/* Advanced Filter Panel */}
+      <AdvancedFilterPanel
+        open={filterPanelOpen}
+        onOpenChange={setFilterPanelOpen}
+        filters={filters}
+        onFiltersChange={setFilters}
+        availableCharacters={availableCharacters}
+        availableCategories={availableCategories}
+        availableTags={[]}
+      />
 
       {/* Mod Details Modal */}
       <ModModal
