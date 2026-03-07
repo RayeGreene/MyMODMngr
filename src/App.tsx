@@ -1300,6 +1300,12 @@ export default function App() {
         category: "navigation",
         handler: () => setActiveTab("health"),
       }),
+      registerShortcut({
+        keys: "Ctrl+8",
+        label: "Go to Storage",
+        category: "navigation",
+        handler: () => setActiveTab("storage"),
+      }),
     ];
 
     const keyHandler = (e: KeyboardEvent) => handleGlobalKeyDown(e);
@@ -1921,6 +1927,7 @@ export default function App() {
                     <ConflictDashboard
                       mods={mods}
                       onView={handleViewModFromBrowser}
+                      reloadToken={conflictsReloadToken}
                     />
                   </div>
                 )}

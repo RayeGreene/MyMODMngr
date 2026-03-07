@@ -20,9 +20,11 @@ import {
 interface ConflictDashboardProps {
   mods: any[];
   onView?: (mod: any) => void;
+  /** Increment to trigger a re-fetch from the parent */
+  reloadToken?: number;
 }
 
-export function ConflictDashboard({ mods, onView }: ConflictDashboardProps) {
+export function ConflictDashboard({ mods, onView, reloadToken }: ConflictDashboardProps) {
   const [conflicts, setConflicts] = useState<ApiConflict[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -44,6 +46,13 @@ export function ConflictDashboard({ mods, onView }: ConflictDashboardProps) {
     setLoading(true);
     void fetchConflicts();
   }, [fetchConflicts]);
+
+  // Re-fetch when parent triggers a reload (e.g. after refreshConflicts)
+  useEffect(() => {
+    if (reloadToken && reloadToken > 0) {
+      void fetchConflicts();
+    }
+  }, [reloadToken, fetchConflicts]);
 
   const handleRefresh = async () => {
     setRefreshing(true);

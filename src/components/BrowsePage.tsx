@@ -11,6 +11,7 @@ import { SlidersHorizontal } from "lucide-react";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { toast } from "sonner";
+import { logActivity } from "../lib/activityLog";
 
 interface BrowsePageProps {
   mods: Mod[];
@@ -220,12 +221,14 @@ export function BrowsePage({ mods, onInstall, onFavorite }: BrowsePageProps) {
 
   const handleBatchFavorite = () => {
     selectedIds.forEach((id) => onFavorite(id));
+    logActivity({ action: "favorite", detail: `Batch favorited ${selectedIds.size} mods` });
     toast.success(`${selectedIds.size} mods favorited`);
     handleCancelSelection();
   };
 
   const handleBatchInstall = () => {
     selectedIds.forEach((id) => onInstall(id));
+    logActivity({ action: "install", detail: `Batch installed ${selectedIds.size} mods` });
     toast.success(`${selectedIds.size} mods queued for install`);
     handleCancelSelection();
   };

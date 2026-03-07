@@ -6,6 +6,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import type { Mod } from "./ModCard";
+import { ActivityFeed } from "./ActivityFeed";
 
 interface StorageDashboardProps {
   mods: Mod[];
@@ -141,6 +142,13 @@ export function StorageDashboard({ mods, onView }: StorageDashboardProps) {
           </CardContent>
         </Card>
       )}
+
+      {/* Recent Activity */}
+      <Card>
+        <CardContent className="p-4">
+          <ActivityFeed />
+        </CardContent>
+      </Card>
     </div>
   );
 }

@@ -6,6 +6,7 @@ import { ModModal } from "./ModModal";
 import { BulkOperationsToolbar } from "./BulkOperationsToolbar";
 import { Button } from "./ui/button";
 import { toast } from "sonner";
+import { logActivity } from "../lib/activityLog";
 import {
   categoriesMatchTag,
   extractNonCategoryTags,
@@ -252,18 +253,21 @@ export function ActiveModsView({
 
   const handleBatchUpdate = () => {
     selectedIds.forEach((id) => onUpdate(id));
+    logActivity({ action: "update", detail: `Batch updated ${selectedIds.size} mods` });
     toast.success(`${selectedIds.size} mods queued for update`);
     handleCancelSelection();
   };
 
   const handleBatchUninstall = () => {
     selectedIds.forEach((id) => onUninstall(id));
+    logActivity({ action: "uninstall", detail: `Batch uninstalled ${selectedIds.size} mods` });
     toast.success(`${selectedIds.size} mods queued for removal`);
     handleCancelSelection();
   };
 
   const handleBatchFavorite = () => {
     selectedIds.forEach((id) => onFavorite(id));
+    logActivity({ action: "favorite", detail: `Batch favorited ${selectedIds.size} mods` });
     toast.success(`${selectedIds.size} mods favorited`);
     handleCancelSelection();
   };
